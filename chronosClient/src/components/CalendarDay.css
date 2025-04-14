@@ -1,0 +1,100 @@
+.day {
+  height: 100px;
+  padding: 5px;
+  border-right: 1px solid #e0e0e0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.day:last-child {
+  border-right: none;
+}
+
+.day.other-month {
+  background-color: #f9f9f9;
+  color: #aaa;
+}
+
+.month-indicator {
+  position: absolute;
+  top: 0;
+  right: 5px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: #666;
+  padding: 2px 0;
+  z-index: 1;
+}
+
+.day-number {
+  font-size: 0.85rem;
+  font-weight: 400;
+  margin-bottom: 5px;
+  color: #333;
+  text-align: right;
+}
+
+.events-container {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+  flex: 1;
+}
+
+.event {
+  padding: 2px 5px;
+  border-radius: 2px;
+  font-size: 0.75rem;
+  margin-bottom: 2px;
+  color: white;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.event-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.more-events {
+  font-size: 0.7rem;
+  color: #666;
+  text-align: right;
+  margin-top: 2px;
+}
+
+/* Custom colors for events - matching Google Calendar colors */
+.event[style*="backgroundColor: blue"] {
+  background-color: #4285f4 !important;
+}
+
+.event[style*="backgroundColor: teal"] {
+  background-color: #00a9a7 !important;
+}
+
+.event[style*="backgroundColor: green"] {
+  background-color: #34a853 !important;
+}
+
+.event[style*="backgroundColor: purple"] {
+  background-color: #a142f4 !important;
+}
+
+.event[style*="backgroundColor: orange"] {
+  background-color: #fa7b17 !important;
+}
+
+.event[style*="backgroundColor: black"] {
+  background-color: #202124 !important;
+}
+
+.event[style*="backgroundColor: red"] {
+  background-color: #ea4335 !important;
+}

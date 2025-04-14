@@ -1,0 +1,19 @@
+.calendar-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100%;
+  background-color: white;
+  border: 1px solid #e0e0e0;
+}
+
+.calendar-content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.calendar-grid {
+  width: 100%;
+  border-top: 1px solid #e0e0e0;
+}
