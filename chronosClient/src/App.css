@@ -13,17 +13,51 @@ body {
 
 .app-container {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   height: 100vh;
-  width: 100%;
   overflow: hidden;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  background-color: #ffffff;
 }
 
 .app-content {
-  flex: 1;
-  overflow: hidden;
   display: flex;
   justify-content: center;
   padding: 20px;
+  background-color: #ffffff;
+}
+
+@font-face {
+  font-family: 'SF Pro Text';
+  font-style: normal;
+  font-weight: 400;
+  src: local('SF Pro Text'), local('SFProText-Regular'),
+       url('https://applesocial.s3.amazonaws.com/assets/styles/fonts/sanfrancisco/sfprotext-regular.woff') format('woff');
+}
+
+@font-face {
+  font-family: 'SF Pro Text';
+  font-style: normal;
+  font-weight: 500;
+  src: local('SF Pro Text Medium'), local('SFProText-Medium'),
+       url('https://applesocial.s3.amazonaws.com/assets/styles/fonts/sanfrancisco/sfprotext-medium.woff') format('woff');
+}
+
+@font-face {
+  font-family: 'SF Pro Text';
+  font-style: normal;
+  font-weight: 600;
+  src: local('SF Pro Text Semibold'), local('SFProText-Semibold'),
+       url('https://applesocial.s3.amazonaws.com/assets/styles/fonts/sanfrancisco/sfprotext-semibold.woff') format('woff');
+}
+
+:root {
+  font-family: 'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color: #000000;
+  background-color: #ffffff;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }

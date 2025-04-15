@@ -43,7 +43,7 @@
 .today-circle {
   background-color: #a142f4;
   color: white;
-  border-radius: 50%;
+  border-radius: 4px;
   width: 25px;
   height: 25px;
   display: flex;
@@ -57,16 +57,17 @@
 .events-container {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 5px;
   overflow: hidden;
   flex: 1;
+  padding-top: 3px;
 }
 
 .event {
-  padding: 2px 5px;
-  border-radius: 2px;
+  padding: 3px 6px;
+  border-radius: 4px;
   font-size: 0.75rem;
-  margin-bottom: 2px;
+  margin-bottom: 0;
   color: white;
   overflow: hidden;
   text-overflow: ellipsis;

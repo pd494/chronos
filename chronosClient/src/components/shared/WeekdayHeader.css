@@ -1,12 +1,12 @@
 .calendar-weekday-header {
   display: flex;
   position: sticky;
-  top: 45px;
+  top: 53px;
   background-color: white;
   z-index: 15;
-  border-bottom: 1px solid #e0e0e0;
   text-align: center;
   width: 100%;
+  border-bottom: 1px solid #e0e0e0;
 }
 
 .weekday {
@@ -15,10 +15,7 @@
   font-weight: 500;
   font-size: 0.85rem;
   color: #666;
-  border-right: 1px solid #f0f0f0;
   flex: 1;
 }
 
-.weekday:last-child {
-  border-right: none;
-}
+/* No borders needed between weekdays */
