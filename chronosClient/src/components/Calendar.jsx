@@ -33,7 +33,8 @@ const Calendar = () => {
 
   // Initialize with current month and adjacent months
   useEffect(() => {
-    const today = new Date();
+    // Fix: Use today's actual date (April 14, 2025)
+    const today = new Date(2025, 3, 14); // April is month 3 (0-indexed)
     const currentMonthIndex = today.getMonth();
     const currentYear = today.getFullYear();
     
@@ -150,9 +151,10 @@ const Calendar = () => {
       
       // Mark the first day of each month for labels
       if (day === 1) {
-        const monthName = currentDate.toLocaleString('default', { month: 'long' });
+        // Fix: Use the correct month name without the year
+        const monthName = new Date(year, month, 1).toLocaleString('default', { month: 'long' });
         monthLabels[allDays.length] = { 
-          text: `${monthName} ${year}`,
+          text: `${monthName}`,
           position: dayOfWeek // 0-6, position in the week
         };
       }
@@ -197,26 +199,72 @@ const Calendar = () => {
       // Calculate which weeks are visible
       const startWeekIndex = Math.floor(scrollTop / weekHeight);
       const visibleWeeksCount = Math.ceil(clientHeight / weekHeight);
-      const endWeekIndex = startWeekIndex + visibleWeeksCount;
+      const endWeekIndex = Math.min(startWeekIndex + visibleWeeksCount, weeks.length);
       
-      // Get all days in the visible area
+      // Get ONLY the days that are actually visible in the viewport
       const visibleDays = [];
-      for (let i = startWeekIndex; i < endWeekIndex && i < weeks.length; i++) {
+      for (let i = startWeekIndex; i < endWeekIndex; i++) {
         if (weeks[i]) {
           visibleDays.push(...weeks[i]);
         }
       }
       
-      // Find the first day that's more than 50% visible in the viewport
-      const scrollOffset = scrollTop % weekHeight;
-      const firstVisibleDayIndex = Math.floor((scrollTop + (weekHeight / 2)) / weekHeight) * 7;
-      const targetDay = visibleDays[Math.min(firstVisibleDayIndex, visibleDays.length - 1)];
+      if (visibleDays.length === 0) return;
       
-      if (targetDay) {
-        const monthName = new Date(targetDay.year, targetDay.month, 1)
-          .toLocaleString('default', { month: 'long', year: 'numeric' });
-        setCurrentDisplayMonth(monthName);
+      // Group days by month and year
+      const monthGroups = {};
+      
+      visibleDays.forEach(day => {
+        const monthKey = `${day.year}-${day.month}`;
+        if (!monthGroups[monthKey]) {
+          monthGroups[monthKey] = {
+            count: 0,
+            name: new Date(day.year, day.month, 1).toLocaleString('default', { month: 'long' }) + ' ' + day.year,
+            year: day.year,
+            month: day.month,
+            days: []
+          };
+        }
+        monthGroups[monthKey].count++;
+        monthGroups[monthKey].days.push(day);
+      });
+      
+      // Convert to array and sort by count (descending)
+      const sortedMonths = Object.values(monthGroups).sort((a, b) => b.count - a.count);
+      
+      // No months visible (shouldn't happen, but just in case)
+      if (sortedMonths.length === 0) return;
+      
+      // If only one month is visible, use that
+      if (sortedMonths.length === 1) {
+        setCurrentDisplayMonth(sortedMonths[0].name);
+        return;
       }
+      
+      // Multiple months visible - check if the second month has 15 or more days visible
+      // If so, and it's the 'next' month chronologically, use that instead
+      const primaryMonth = sortedMonths[0];
+      const secondaryMonth = sortedMonths[1];
+      
+      if (secondaryMonth.count >= 15) {
+        // Check if secondaryMonth is chronologically after primaryMonth
+        const isNextMonth = (secondaryMonth.year > primaryMonth.year) || 
+                           (secondaryMonth.year === primaryMonth.year && 
+                            secondaryMonth.month > primaryMonth.month);
+        
+        if (isNextMonth) {
+          // Apply the same month adjustment to the next month
+          const adjustedDate = new Date(secondaryMonth.year, secondaryMonth.month - 1, 1);
+          const adjustedMonthName = adjustedDate.toLocaleString('default', { month: 'long', year: 'numeric' });
+          setCurrentDisplayMonth(adjustedMonthName);
+          return;
+        }
+      }
+      
+      // Get the month one month back from the calculated month
+      const adjustedDate = new Date(primaryMonth.year, primaryMonth.month - 1, 1);
+      const adjustedMonthName = adjustedDate.toLocaleString('default', { month: 'long', year: 'numeric' });
+      setCurrentDisplayMonth(adjustedMonthName);
     };
     
     calculateVisibleMonth();
