@@ -1,6 +1,6 @@
 .week {
-  display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  display: flex;
+  width: 100%;
   border-bottom: 1px solid #e0e0e0;
 }
 

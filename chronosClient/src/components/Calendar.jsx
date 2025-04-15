@@ -192,43 +192,31 @@ const Calendar = () => {
       if (!contentRef.current) return;
       
       const { scrollTop, clientHeight } = contentRef.current;
-      const weekHeight = 100; // Approximate height of a week row in pixels
+      const weekHeight = 190;
       
       // Calculate which weeks are visible
       const startWeekIndex = Math.floor(scrollTop / weekHeight);
       const visibleWeeksCount = Math.ceil(clientHeight / weekHeight);
       const endWeekIndex = startWeekIndex + visibleWeeksCount;
       
-      // Count days by month in the visible area
-      const monthDayCounts = {};
-      
+      // Get all days in the visible area
+      const visibleDays = [];
       for (let i = startWeekIndex; i < endWeekIndex && i < weeks.length; i++) {
         if (weeks[i]) {
-          weeks[i].forEach(day => {
-            const monthKey = `${day.year}-${day.month}`;
-            if (!monthDayCounts[monthKey]) {
-              monthDayCounts[monthKey] = {
-                count: 0,
-                name: new Date(day.year, day.month, 1).toLocaleString('default', { month: 'long', year: 'numeric' })
-              };
-            }
-            monthDayCounts[monthKey].count++;
-          });
+          visibleDays.push(...weeks[i]);
         }
       }
       
-      // Find the month with the most visible days
-      let maxCount = 0;
-      let dominantMonth = '';
+      // Find the first day that's more than 50% visible in the viewport
+      const scrollOffset = scrollTop % weekHeight;
+      const firstVisibleDayIndex = Math.floor((scrollTop + (weekHeight / 2)) / weekHeight) * 7;
+      const targetDay = visibleDays[Math.min(firstVisibleDayIndex, visibleDays.length - 1)];
       
-      Object.keys(monthDayCounts).forEach(monthKey => {
-        if (monthDayCounts[monthKey].count > maxCount) {
-          maxCount = monthDayCounts[monthKey].count;
-          dominantMonth = monthDayCounts[monthKey].name;
-        }
-      });
-      
-      setCurrentDisplayMonth(dominantMonth);
+      if (targetDay) {
+        const monthName = new Date(targetDay.year, targetDay.month, 1)
+          .toLocaleString('default', { month: 'long', year: 'numeric' });
+        setCurrentDisplayMonth(monthName);
+      }
     };
     
     calculateVisibleMonth();
