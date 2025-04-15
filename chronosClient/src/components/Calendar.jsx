@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import CalendarHeader from './CalendarHeader';
-import WeekdayHeader from './WeekdayHeader';
-import CalendarWeek from './CalendarWeek';
+import CalendarHeader from './shared/CalendarHeader';
+import WeekdayHeader from './shared/WeekdayHeader';
+import CalendarWeek from './weekly/CalendarWeek';
 import './Calendar.css';
 
 const Calendar = () => {

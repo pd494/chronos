@@ -1,5 +1,5 @@
 import React from 'react';
-import CalendarDay from './CalendarDay';
+import CalendarDay from '../daily/CalendarDay';
 import './CalendarWeek.css';
 
 const CalendarWeek = ({ week, weekIndex, monthLabels }) => {
