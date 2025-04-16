@@ -2,18 +2,20 @@ import React, { useState, useRef, useEffect } from 'react';
 import CategoryTabs from './CategoryTabs';
 import TaskInput from './TaskInput';
 import TaskList from './TaskList';
+import { useTaskContext } from '../../context/TaskContext';
 import './Sidebar.css';
 
 const Sidebar = () => {
   const [activeCategory, setActiveCategory] = useState('All');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const [tasks, setTasks] = useState([
-    { id: 1, text: 'New todo @list @2pm', category: 'All', completed: false },
-    { id: 2, text: 'PAY BOFA', category: 'All', completed: false },
-    { id: 3, text: 'bofa due date', category: 'All', completed: false },
-    { id: 4, text: 'cse 111 section', category: 'All', completed: false },
-    { id: 5, text: 'Valentine\'s Day', category: 'All', completed: false },
-    { id: 6, text: 'Demo Day', category: 'All', completed: false },
+  const { tasks, addTask, toggleTaskComplete } = useTaskContext();
+  
+  const [categories, setCategories] = useState([
+    { id: 'all', name: 'All', count: 398, icon: '★' },
+    { id: 'inbox', name: 'Inbox', count: 5, icon: '📥' },
+    { id: 'today', name: 'Today', count: 1, icon: '1' },
+    { id: 'completed', name: 'Completed', count: 104, icon: '✓' },
+    { id: 'add-category', name: '', icon: '+' }
   ]);
 
   const toggleSidebar = () => {
@@ -24,33 +26,30 @@ const Sidebar = () => {
     // or handle it purely with CSS class toggles.
   };
 
-  // Categories with counts
-  const categories = [
-    { id: 'all', name: 'All', count: 398, icon: '★' },
-    { id: 'inbox', name: 'Inbox', count: 5, icon: '📥' },
-    { id: 'today', name: 'Today', count: 1, icon: '1' },
-    
-    { id: 'completed', name: 'Completed', count: 104, icon: '✓' }
-  ];
+  // Toggle sidebar collapse state
 
   const handleCategoryChange = (category) => {
     setActiveCategory(category);
   };
 
+  const handleAddCategory = (newCategory) => {
+    // Add the new category to the categories list
+    setCategories([
+      ...categories.filter(c => c.id !== 'add-category'), // Remove add button
+      newCategory, // Add the new category
+      { id: 'add-category', name: '', icon: '+' } // Add back the add button at the end
+    ]);
+    
+    // Optionally switch to the new category
+    setActiveCategory(newCategory.name);
+  };
+
   const handleAddTask = (text) => {
-    const newTask = {
-      id: Date.now(),
-      text,
-      category: activeCategory,
-      completed: false
-    };
-    setTasks([newTask, ...tasks]);
+    addTask(text, activeCategory);
   };
 
   const handleToggleComplete = (id) => {
-    setTasks(tasks.map(task => 
-      task.id === id ? { ...task, completed: !task.completed } : task
-    ));
+    toggleTaskComplete(id);
   };
 
   return (
@@ -61,6 +60,7 @@ const Sidebar = () => {
         categories={categories} 
         activeCategory={activeCategory} 
         onCategoryChange={handleCategoryChange}
+        onAddCategory={handleAddCategory}
         isCollapsed={isSidebarCollapsed}
       />
       {!isSidebarCollapsed && (

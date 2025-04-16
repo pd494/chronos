@@ -7,6 +7,7 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  transition: all 0.2s ease;
 }
 
 .day:last-child {
@@ -16,6 +17,34 @@
 .day.other-month {
   background-color: #f9f9f9;
   color: #aaa;
+}
+
+/* Styles for drag and drop */
+.day.can-drop {
+  outline: 1px dashed #ccc;
+}
+
+.day.drag-over {
+  background-color: rgba(161, 66, 244, 0.1);
+  outline: 2px dashed #a142f4;
+  outline-offset: -2px;
+}
+
+.day.duplicate-task {
+  background-color: rgba(234, 67, 53, 0.1); /* Red background */
+  outline: 2px dashed #ea4335; /* Red outline */
+  outline-offset: -2px;
+}
+
+.day.duplicate-task::after {
+  content: '✕';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 24px;
+  color: rgba(234, 67, 53, 0.6);
+  z-index: 1;
 }
 
 .month-indicator {

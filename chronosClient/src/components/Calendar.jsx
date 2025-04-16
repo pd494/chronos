@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import CalendarHeader from './shared/CalendarHeader';
 import WeekdayHeader from './shared/WeekdayHeader';
 import CalendarWeek from './weekly/CalendarWeek';
+import { useTaskContext } from '../context/TaskContext';
 import './Calendar.css';
 
 const Calendar = () => {
@@ -10,26 +11,8 @@ const Calendar = () => {
   const [currentDisplayMonth, setCurrentDisplayMonth] = useState('');
   const contentRef = useRef(null);
   
-  // Sample events data
-  const events = [
-    { id: 1, title: 'PAY BOFA', date: '2025-03-09', color: 'blue' },
-    { id: 2, title: 'bofa due date', date: '2025-03-10', color: 'teal' },
-    { id: 3, title: 'cse 111 section', date: '2025-03-11', color: 'blue' },
-    { id: 4, title: 'Valentine\'s Day', date: '2025-03-13', color: 'green' },
-    { id: 5, title: 'Demo Day', date: '2025-03-13', color: 'purple' },
-    { id: 6, title: 'PAY BILT', date: '2025-03-19', color: 'blue' },
-    { id: 7, title: 'bilt due date', date: '2025-03-20', color: 'teal' },
-    { id: 8, title: 'career fair', date: '2025-03-20', color: 'orange' },
-    { id: 9, title: 'AMEX DUE', date: '2025-03-25', color: 'blue' },
-    { id: 10, title: 'enrollment', date: '2025-03-27', color: 'black' },
-    { id: 11, title: 'codepath assignment', date: '2025-03-16', color: 'blue' },
-    { id: 12, title: 'BILT', date: '2025-03-17', color: 'blue' },
-    { id: 13, title: 'Quiz 7', date: '2025-03-24', color: 'purple' },
-    { id: 14, title: 'Remote Lecture', date: '2025-03-03', color: 'orange' },
-    { id: 15, title: 'Final Quiz', date: '2025-03-13', color: 'red' },
-    { id: 16, title: 'hw 7', date: '2025-03-12', color: 'green' },
-    { id: 17, title: 'start report', date: '2025-03-14', color: 'purple' },
-  ];
+  // Get events from context
+  const { events, addTaskToCalendar } = useTaskContext();
 
   // Initialize with current month and adjacent months
   useEffect(() => {
