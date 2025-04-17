@@ -93,6 +93,17 @@
   z-index: 1;
 }
 
+.month-label {
+  display: inline;
+  font-size: 0.85rem;
+  font-weight: 400;
+  color: #666;
+}
+
+.first-day-number {
+  margin-left: 4px;
+}
+
 .week {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
@@ -124,6 +135,10 @@
   margin-bottom: 5px;
   color: #333;
   text-align: right;
+  white-space: nowrap;
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
 }
 
 .events-container {
@@ -151,6 +166,15 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.event-emoji {
+  font-size: 1em;
+  line-height: 1;
+  display: inline-block;
 }
 
 .more-events {
@@ -209,4 +233,8 @@
   .day-number {
     font-size: 0.8rem;
   }
+}
+
+.month-label {
+  display: block;
 }

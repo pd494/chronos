@@ -1,46 +1,75 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useTaskContext } from '../../context/TaskContext';
+import ContextMenu from '../shared/ContextMenu';
 import './MonthView.css';
 
 const MonthView = () => {
+  const { events, updateCategory, categories } = useTaskContext();
   const [months, setMonths] = useState([]);
   const [visibleMonthsRange, setVisibleMonthsRange] = useState({ start: 0, end: 2 });
   const [currentDisplayMonth, setCurrentDisplayMonth] = useState('');
   const containerRef = useRef(null);
-  
-  // Sample events data
-  const events = [
-    { id: 1, title: 'PAY BOFA', date: '2025-03-09', color: 'blue' },
-    { id: 2, title: 'bofa due date', date: '2025-03-10', color: 'teal' },
-    { id: 3, title: 'cse 111 section', date: '2025-03-11', color: 'blue' },
-    { id: 4, title: 'Valentine\'s Day', date: '2025-03-13', color: 'green' },
-    { id: 5, title: 'Demo Day', date: '2025-03-13', color: 'purple' },
-    { id: 6, title: 'PAY BILT', date: '2025-03-19', color: 'blue' },
-    { id: 7, title: 'bilt due date', date: '2025-03-20', color: 'teal' },
-    { id: 8, title: 'career fair', date: '2025-03-20', color: 'orange' },
-    { id: 9, title: 'AMEX DUE', date: '2025-03-25', color: 'blue' },
-    { id: 10, title: 'enrollment', date: '2025-03-27', color: 'black' },
-    { id: 11, title: 'codepath assignment', date: '2025-03-16', color: 'blue' },
-    { id: 12, title: 'BILT', date: '2025-03-17', color: 'blue' },
-    { id: 13, title: 'Quiz 7', date: '2025-03-24', color: 'purple' },
-    { id: 14, title: 'Remote Lecture', date: '2025-03-03', color: 'orange' },
-    { id: 15, title: 'Final Quiz', date: '2025-03-13', color: 'red' },
-    { id: 16, title: 'hw 7', date: '2025-03-12', color: 'green' },
-    { id: 17, title: 'start report', date: '2025-03-14', color: 'purple' },
-  ];
+
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState(null);
+  const [selectedEvent, setSelectedEvent] = useState(null);
+
+  // Event handlers for context menu
+  const handleContextMenu = (e, event) => {
+    e.preventDefault();
+    setContextMenu({
+      x: e.clientX,
+      y: e.clientY
+    });
+    setSelectedEvent(event);
+  };
+
+  const handleCloseContextMenu = () => {
+    setContextMenu(null);
+    setSelectedEvent(null);
+  };
+
+  const handleSelectColor = (colorId) => {
+    if (selectedEvent && selectedEvent.category) {
+      updateCategory(selectedEvent.category, { color: colorId });
+    }
+    handleCloseContextMenu();
+  };
+
+  const handleSelectEmoji = (emoji) => {
+    if (selectedEvent && selectedEvent.category) {
+      updateCategory(selectedEvent.category, { emoji: emoji });
+    }
+    handleCloseContextMenu();
+  };
+
+  // Close context menu when clicking anywhere else
+  useEffect(() => {
+    const handleClickOutside = () => {
+      if (contextMenu) {
+        handleCloseContextMenu();
+      }
+    };
+
+    document.addEventListener('click', handleClickOutside);
+    return () => {
+      document.removeEventListener('click', handleClickOutside);
+    };
+  }, [contextMenu]);
 
   // Initialize with current month and adjacent months
   useEffect(() => {
     const today = new Date();
     const currentMonthIndex = today.getMonth();
     const currentYear = today.getFullYear();
-    
+
     // Generate initial months (previous, current, next)
     const initialMonths = [];
     for (let i = -1; i <= 3; i++) {
       const monthDate = new Date(currentYear, currentMonthIndex + i, 1);
       initialMonths.push(generateMonthData(monthDate));
     }
-    
+
     setMonths(initialMonths);
   }, []);
 
@@ -48,30 +77,34 @@ const MonthView = () => {
   useEffect(() => {
     const handleScroll = () => {
       if (!containerRef.current) return;
-      
+
       const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
-      
+
       // Add months at the top when scrolling up
       if (scrollTop < 200 && visibleMonthsRange.start > 0) {
         const firstVisibleMonth = months[0];
-        const prevMonthDate = new Date(firstVisibleMonth.year, firstVisibleMonth.month - 1, 1);
+        const prevMonthDate = new Date(
+          firstVisibleMonth.year,
+          firstVisibleMonth.month - 1,
+          1
+        );
         const newMonthData = generateMonthData(prevMonthDate);
-        
-        setMonths(prevMonths => [newMonthData, ...prevMonths]);
-        setVisibleMonthsRange(prev => ({ start: prev.start - 1, end: prev.end }));
-        
+
+        setMonths((prevMonths) => [newMonthData, ...prevMonths]);
+        setVisibleMonthsRange((prev) => ({ start: prev.start - 1, end: prev.end }));
+
         // Maintain scroll position
         containerRef.current.scrollTop = scrollTop + 200;
       }
-      
+
       // Add months at the bottom when scrolling down
       if (scrollHeight - scrollTop - clientHeight < 200 && visibleMonthsRange.end < 24) {
         const lastVisibleMonth = months[months.length - 1];
         const nextMonthDate = new Date(lastVisibleMonth.year, lastVisibleMonth.month + 1, 1);
         const newMonthData = generateMonthData(nextMonthDate);
-        
-        setMonths(prevMonths => [...prevMonths, newMonthData]);
-        setVisibleMonthsRange(prev => ({ start: prev.start, end: prev.end + 1 }));
+
+        setMonths((prevMonths) => [...prevMonths, newMonthData]);
+        setVisibleMonthsRange((prev) => ({ start: prev.start, end: prev.end + 1 }));
       }
     };
 
@@ -85,38 +118,38 @@ const MonthView = () => {
   // Generate continuous calendar data across all months
   const generateContinuousCalendar = () => {
     if (months.length === 0) return { weeks: [], monthLabels: {} };
-    
+
     // Sort months chronologically
     const sortedMonths = [...months].sort((a, b) => {
       if (a.year !== b.year) return a.year - b.year;
       return a.month - b.month;
     });
-    
+
     // Get the earliest and latest dates
     const firstMonth = sortedMonths[0];
     const lastMonth = sortedMonths[sortedMonths.length - 1];
-    
+
     // Calculate start date (first day of the first month's first week)
     const startDate = new Date(firstMonth.year, firstMonth.month, 1);
     startDate.setDate(startDate.getDate() - startDate.getDay()); // Go back to Sunday
-    
+
     // Calculate end date (last day of the last month's last week)
     const endDate = new Date(lastMonth.year, lastMonth.month + 1, 0); // Last day of month
     const daysToAdd = 6 - endDate.getDay(); // Days to Saturday
     endDate.setDate(endDate.getDate() + daysToAdd);
-    
+
     // Generate all days between start and end date
     const allDays = [];
     const currentDate = new Date(startDate);
     const monthLabels = {};
-    
+
     while (currentDate <= endDate) {
       const year = currentDate.getFullYear();
       const month = currentDate.getMonth();
       const day = currentDate.getDate();
       const dayOfWeek = currentDate.getDay();
       const dateString = currentDate.toISOString().split('T')[0];
-      
+
       // Mark the first day of each month for labels
       if (day === 1) {
         const monthName = currentDate.toLocaleString('default', { month: 'long' });
@@ -125,7 +158,7 @@ const MonthView = () => {
           position: dayOfWeek // 0-6, position in the week
         };
       }
-      
+
       // Add this day to our array
       allDays.push({
         day,
@@ -135,20 +168,20 @@ const MonthView = () => {
         isCurrentMonth: sortedMonths.some(m => m.month === month && m.year === year),
         events: events.filter(event => event.date === dateString)
       });
-      
+
       // Move to next day
       currentDate.setDate(currentDate.getDate() + 1);
     }
-    
+
     // Organize days into weeks
     const weeks = [];
     for (let i = 0; i < allDays.length; i += 7) {
       weeks.push(allDays.slice(i, i + 7));
     }
-    
+
     return { weeks, monthLabels };
   };
-  
+
   // Generate month data including days and calendar structure (for reference)
   const generateMonthData = (date) => {
     const year = date.getFullYear();
@@ -195,7 +228,10 @@ const MonthView = () => {
             if (!monthDayCounts[monthKey]) {
               monthDayCounts[monthKey] = {
                 count: 0,
-                name: new Date(day.year, day.month, 1).toLocaleString('default', { month: 'long', year: 'numeric' })
+                name: new Date(day.year, day.month, 1).toLocaleString('default', { 
+                  month: 'long', 
+                  year: 'numeric' 
+                })
               };
             }
             monthDayCounts[monthKey].count++;
@@ -255,28 +291,52 @@ const MonthView = () => {
               // Check if this day is the first of a month
               const monthLabel = monthLabels[weekIndex * 7 + dayIndex];
               const isFirstOfMonth = day.day === 1;
-              
               return (
                 <div 
-                  key={`day-${weekIndex}-${dayIndex}`} 
+                  key={`day-${weekIndex}-${dayIndex}`}
                   className={`day ${!day.isCurrentMonth ? 'other-month' : ''}`}
                 >
                   {/* Month label for the first day of month */}
                   {monthLabel && (
-                    <div className="month-indicator">{monthLabel.text}</div>
+                    <div className="month-indicator" style={{ display: 'block' }}>
+                      {monthLabel.text}
+                    </div>
                   )}
-                  
-                  <div className="day-number">{day.day}</div>
+                  <div className="day-number">
+                    {isFirstOfMonth ? (
+                      <span>
+                        {/* Force the month name to be on its own line */}
+                        <span
+                          className="month-label"
+                          style={{ display: 'block' }}
+                        >
+                          {new Date(day.year, day.month, 1).toLocaleString('default', {
+                            month: 'long'
+                          })}
+                        </span>
+                        <span className="first-day-number">
+                          {day.day}
+                        </span>
+                      </span>
+                    ) : (
+                      day.day
+                    )}
+                  </div>
                   <div className="events-container">
-                    {day.events && day.events.slice(0, 4).map(event => (
-                      <div 
-                        key={`${event.id}-${day.date}`} 
-                        className="event" 
-                        style={{ backgroundColor: event.color }}
-                      >
-                        <div className="event-title">{event.title}</div>
-                      </div>
-                    ))}
+                    {day.events &&
+                      day.events.slice(0, 4).map(event => (
+                        <div 
+                          key={`${event.id}-${day.date}`} 
+                          className="event" 
+                          style={{ backgroundColor: event.color }}
+                          onContextMenu={(e) => handleContextMenu(e, event)}
+                        >
+                          <div className="event-title">
+                            {event.emoji && <span className="event-emoji">{event.emoji}</span>}
+                            {event.title}
+                          </div>
+                        </div>
+                      ))}
                     {day.events && day.events.length > 4 && (
                       <div className="more-events">{day.events.length - 4} more</div>
                     )}
@@ -287,6 +347,16 @@ const MonthView = () => {
           </div>
         ))}
       </div>
+      {contextMenu && selectedEvent && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onClose={handleCloseContextMenu}
+          onSelectColor={handleSelectColor}
+          onSelectEmoji={handleSelectEmoji}
+          selectedColor={selectedEvent.color}
+        />
+      )}
     </div>
   );
 };
