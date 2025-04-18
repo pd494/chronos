@@ -1,6 +1,15 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { resolve } from 'path'
+import fs from 'fs'
+import dotenv from 'dotenv'
+
+// Load env file from project root
+const rootEnvPath = resolve(__dirname, '../.env')
+if (fs.existsSync(rootEnvPath)) {
+  console.log('Loading env from project root:', rootEnvPath)
+  dotenv.config({ path: rootEnvPath })
+}
 
 // https://vite.dev/config/
 export default defineConfig({

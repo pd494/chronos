@@ -17,6 +17,9 @@
   "dependencies": {
     "@emoji-mart/data": "^1.2.1",
     "@emoji-mart/react": "^1.1.1",
+    "@supabase/auth-ui-react": "^0.4.7",
+    "@supabase/auth-ui-shared": "^0.1.8",
+    "@supabase/supabase-js": "^2.49.4",
     "allotment": "^1.20.3",
     "electron-squirrel-startup": "^1.0.1",
     "emoji-mart": "^5.6.0",
@@ -39,6 +42,7 @@
     "@types/react": "^19.0.10",
     "@types/react-dom": "^19.0.4",
     "@vitejs/plugin-react": "^4.3.4",
+    "dotenv": "^16.5.0",
     "electron": "^35.1.4",
     "eslint": "^9.21.0",
     "eslint-plugin-react-hooks": "^5.1.0",

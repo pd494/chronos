@@ -1,14 +1,22 @@
 import React from 'react';
 import Sidebar from './components/sidebar/Sidebar';
 import Calendar from './components/Calendar';
+import AuthComponent from './components/Auth';
 import './App.css';
 import "allotment/dist/style.css";
 import { Allotment } from "allotment";
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { TaskProvider } from './context/TaskContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
 
-function App() {
+function AppContent() {
+  const { user } = useAuth();
+  
+  if (!user) {
+    return <AuthComponent />;
+  }
+  
   return (
     <DndProvider backend={HTML5Backend}>
       <TaskProvider>
@@ -24,6 +32,14 @@ function App() {
         </div>
       </TaskProvider>
     </DndProvider>
+  );
+}
+
+function App() {
+  return (
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
   );
 }
 
