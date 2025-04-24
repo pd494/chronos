@@ -3,6 +3,7 @@ import CalendarHeader from './shared/CalendarHeader';
 import WeekdayHeader from './shared/WeekdayHeader';
 import CalendarWeek from './weekly/CalendarWeek';
 import { useTaskContext } from '../context/TaskContext';
+import { WeekView } from '../../ui-experiments/apps/experiment-06/components/event-calendar/week-view';
 import './Calendar.css';
 
 const Calendar = () => {
@@ -287,17 +288,29 @@ const Calendar = () => {
         onNextMonth={handleNextMonth}
         onMonthSelect={handleMonthSelect}
       />
-      <WeekdayHeader />
-      <div className="calendar-content" ref={contentRef}>
-        <div className="calendar-grid">
-          {weeks.map((week, weekIndex) => (
-            <CalendarWeek 
-              key={`week-${weekIndex}`} 
-              week={week} 
-              weekIndex={weekIndex} 
-              monthLabels={monthLabels} 
-            />
-          ))}
+      <div style={{ display: 'flex', height: 'calc(100vh - 100px)' }}>
+        <div style={{ width: '50%', borderRight: '1px solid #e5e7eb' }}>
+          <WeekdayHeader />
+          <div className="calendar-content" ref={contentRef}>
+            <div className="calendar-grid">
+              {weeks.map((week, weekIndex) => (
+                <CalendarWeek 
+                  key={`week-${weekIndex}`} 
+                  week={week} 
+                  weekIndex={weekIndex} 
+                  monthLabels={monthLabels} 
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+        <div style={{ width: '50%' }}>
+          <WeekView 
+            currentDate={new Date(2025, 3, 14)}
+            events={events}
+            onEventSelect={(event) => console.log('Event selected:', event)}
+            onEventCreate={(startTime) => console.log('Create event at:', startTime)}
+          />
         </div>
       </div>
     </div>

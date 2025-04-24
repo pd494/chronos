@@ -1,46 +1,81 @@
-import React from 'react';
-import Sidebar from './components/sidebar/Sidebar';
-import Calendar from './components/Calendar';
-import AuthComponent from './components/Auth';
-import './App.css';
-import "allotment/dist/style.css";
-import { Allotment } from "allotment";
-import { DndProvider } from 'react-dnd';
-import { HTML5Backend } from 'react-dnd-html5-backend';
-import { TaskProvider } from './context/TaskContext';
-import { AuthProvider, useAuth } from './context/AuthContext';
-
-function AppContent() {
-  const { user } = useAuth();
-  
-  if (!user) {
-    return <AuthComponent />;
-  }
-  
-  return (
-    <DndProvider backend={HTML5Backend}>
-      <TaskProvider>
-        <div className="app-container">
-          <Allotment defaultSizes={[272, 700]}> {/* Initial width for Sidebar, rest for Calendar */}
-            <Allotment.Pane minSize={0} maxSize={1000}> {/* Allow sidebar resizing with increased maximum width */} 
-              <Sidebar />
-            </Allotment.Pane>
-            <Allotment.Pane minSize={0}>
-              <Calendar />
-            </Allotment.Pane>
-          </Allotment>
-        </div>
-      </TaskProvider>
-    </DndProvider>
-  );
-}
+import { useEffect, useState } from 'react'
+import Header from './components/Header'
+import SplitView from './components/SplitView'
+import MonthlyView from './components/calendar/MonthlyView'
+import WeeklyView from './components/calendar/WeeklyView'
+import DailyView from './components/calendar/DailyView'
+import TodoSidebar from './components/todo/TodoSidebar'
+import EventModal from './components/events/EventModal'
+import { useCalendar } from './context/CalendarContext'
+import { FiSun, FiMoon } from 'react-icons/fi'
 
 function App() {
+  const { view, showEventModal } = useCalendar()
+  const [isDarkMode, setIsDarkMode] = useState(false)
+
+  useEffect(() => {
+    // Check user's preference from localStorage or system preference
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+    const savedMode = localStorage.getItem('darkMode')
+    
+    if (savedMode !== null) {
+      setIsDarkMode(savedMode === 'true')
+    } else {
+      setIsDarkMode(prefersDark)
+    }
+  }, [])
+
+  useEffect(() => {
+    // Apply dark mode class to document
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark')
+    } else {
+      document.documentElement.classList.remove('dark')
+    }
+    
+    // Save preference to localStorage
+    localStorage.setItem('darkMode', isDarkMode)
+  }, [isDarkMode])
+
+  const toggleDarkMode = () => {
+    setIsDarkMode(!isDarkMode)
+  }
+  
+  const renderCalendarView = () => {
+    switch (view) {
+      case 'month':
+        return <MonthlyView />
+      case 'week':
+        return <WeeklyView />
+      case 'day':
+        return <DailyView />
+      default:
+        return <MonthlyView />
+    }
+  }
+
   return (
-    <AuthProvider>
-      <AppContent />
-    </AuthProvider>
-  );
+    <div className="h-full flex flex-col">
+      <div className="absolute right-4 top-4 z-20">
+        <button
+          onClick={toggleDarkMode}
+          className="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+          aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+        >
+          {isDarkMode ? <FiSun className="text-xl" /> : <FiMoon className="text-xl" />}
+        </button>
+      </div>
+      
+      <Header />
+      
+      <SplitView
+        sidebar={<TodoSidebar />}
+        main={renderCalendarView()}
+      />
+      
+      {showEventModal && <EventModal />}
+    </div>
+  )
 }
 
-export default App;
+export default App
