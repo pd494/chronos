@@ -9,17 +9,29 @@ const EventIndicator = ({ event, isMonthView }) => {
     openEventModal(event)
   }
   
+  // Format time with fixed length
+  const formattedTime = format(new Date(event.start), 'h:mma').toLowerCase();
+  
   return (
     <div
-      className={`text-xs mb-1 truncate rounded px-1 py-0.5 event-${event.color} cursor-pointer`}
+      className={`text-xs mb-1 flex items-center space-x-1 px-1 py-0.5 cursor-pointer`}
       onClick={handleClick}
+      style={{ maxWidth: '100%' }}
     >
       {isMonthView ? (
         <>
-          <span className={`font-medium text-${event.color}`}>
-            {format(new Date(event.start), 'h:mma').toLowerCase()}
-          </span>{' '}
-          {event.title}
+          {/* Colored line indicator */}
+          <div className={`w-1.5 h-3 flex-shrink-0 bg-${event.color}-500 rounded-sm`}></div>
+          
+          {/* Event title with ellipsis */}
+          <div className="flex-grow truncate">
+            {event.title}
+          </div>
+          
+          {/* Fixed-width time */}
+          <div className="text-gray-500 flex-shrink-0 w-12 text-right">
+            {formattedTime}
+          </div>
         </>
       ) : (
         <span>{event.title}</span>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import CalendarHeader from './shared/CalendarHeader';
 import WeekdayHeader from './shared/WeekdayHeader';
 import CalendarWeek from './weekly/CalendarWeek';
@@ -6,142 +6,203 @@ import { useTaskContext } from '../context/TaskContext';
 import { WeekView } from '../../ui-experiments/apps/experiment-06/components/event-calendar/week-view';
 import './Calendar.css';
 
+// Constants for the calendar
+const BUFFER_WEEKS = 10; // Number of weeks to render above/below visible area
+const WEEK_HEIGHT = 100; // Height of each week row in pixels
+
+// Helper to get the start of the week (Sunday)
+const getStartOfWeek = (date) => {
+  const result = new Date(date);
+  const dayOfWeek = result.getDay(); // 0 = Sunday, 1 = Monday, ...
+  const diff = result.getDate() - dayOfWeek;
+  return new Date(result.setDate(diff));
+};
+
+// Helper to add days to a date
+const addDays = (date, days) => {
+  const result = new Date(date);
+  result.setDate(result.getDate() + days);
+  return result;
+};
+
+// Helper to add weeks to a date
+const addWeeks = (date, weeks) => {
+  return addDays(date, weeks * 7);
+};
+
+// Helper to format date as ISO string for keys
+const formatDateKey = (date) => {
+  return date.toISOString().split('T')[0];
+};
+
 const Calendar = () => {
-  const [months, setMonths] = useState([]);
-  const [visibleMonthsRange, setVisibleMonthsRange] = useState({ start: 0, end: 2 });
+  // Current reference date (center of our calendar)
+  const [referenceDate, setReferenceDate] = useState(new Date(2025, 3, 14)); // April 14, 2025
+  
+  // Track visible weeks range
+  const [visibleWeekRange, setVisibleWeekRange] = useState({
+    startDate: addWeeks(getStartOfWeek(referenceDate), -BUFFER_WEEKS),
+    endDate: addWeeks(getStartOfWeek(referenceDate), BUFFER_WEEKS)
+  });
+  
+  // Current month to display in header
   const [currentDisplayMonth, setCurrentDisplayMonth] = useState('');
+  
+  // Ref for the scrollable container
   const contentRef = useRef(null);
+  
+  // Track scroll position to detect direction
+  const lastScrollTopRef = useRef(0);
+  
+  // Track if we're currently updating the DOM to prevent scroll jumps
+  const isUpdatingRef = useRef(false);
   
   // Get events from context
   const { events, addTaskToCalendar } = useTaskContext();
-
-  // Initialize with current month and adjacent months
+  
+  // Initialize calendar with current date centered
   useEffect(() => {
-    // Fix: Use today's actual date (April 14, 2025)
-    const today = new Date(2025, 3, 14); // April is month 3 (0-indexed)
-    const currentMonthIndex = today.getMonth();
-    const currentYear = today.getFullYear();
+    // Set initial month display
+    setCurrentDisplayMonth(referenceDate.toLocaleString('default', { month: 'long', year: 'numeric' }));
     
-    // Generate initial months (previous, current, next)
-    const initialMonths = [];
-    for (let i = -12; i <= 12; i++) {
-      const monthDate = new Date(currentYear, currentMonthIndex + i, 1);
-      initialMonths.push(generateMonthData(monthDate));
-    }
-    
-    setMonths(initialMonths);
-    
-    // Set initial visible range
-    setVisibleMonthsRange({ start: 12, end: 12 + 3 });
-    
-    // After initial render, scroll to current month
+    // After initial render, scroll to current week
     setTimeout(() => {
       if (contentRef.current) {
-        // Calculate position to scroll to (approximately 12 months * 4 weeks * 100px height)
-        contentRef.current.scrollTop = 12 * 4 * 100;
+        // Position the current week in the middle of the viewport
+        const initialScrollPosition = BUFFER_WEEKS * WEEK_HEIGHT;
+        contentRef.current.scrollTop = initialScrollPosition;
+        lastScrollTopRef.current = initialScrollPosition;
       }
     }, 100);
-  }, []);
+  }, [referenceDate]);
 
-  // Handle scroll to implement infinite scroll
+  // Handle scroll to implement truly fluid infinite scroll
   useEffect(() => {
     const handleScroll = () => {
-      if (!contentRef.current) return;
+      if (!contentRef.current || isUpdatingRef.current) return;
       
       const { scrollTop, scrollHeight, clientHeight } = contentRef.current;
+      const scrollDirection = scrollTop > lastScrollTopRef.current ? 'down' : 'up';
+      lastScrollTopRef.current = scrollTop;
       
-      // Add months at the top when scrolling up
-      if (scrollTop < 200) {
-        const firstVisibleMonth = months[0];
-        const prevMonthDate = new Date(firstVisibleMonth.year, firstVisibleMonth.month - 1, 1);
-        const newMonthData = generateMonthData(prevMonthDate);
+      // Calculate which week is at the top of the viewport
+      const topWeekIndex = Math.floor(scrollTop / WEEK_HEIGHT);
+      const visibleWeeksCount = Math.ceil(clientHeight / WEEK_HEIGHT);
+      
+      // Update current month display based on visible weeks
+      updateCurrentMonthDisplay(topWeekIndex, visibleWeeksCount);
+      
+      // Check if we need to add more weeks at the top or bottom
+      const bufferThreshold = 3 * WEEK_HEIGHT; // Start loading when within 3 weeks of edge
+      
+      // When scrolling up and approaching the top
+      if (scrollDirection === 'up' && scrollTop < bufferThreshold) {
+        // Add more weeks at the top
+        isUpdatingRef.current = true;
         
-        setMonths(prevMonths => [newMonthData, ...prevMonths]);
-        setVisibleMonthsRange(prev => ({ start: prev.start - 1, end: prev.end }));
+        setVisibleWeekRange(prev => {
+          const newStartDate = addWeeks(prev.startDate, -BUFFER_WEEKS);
+          return {
+            startDate: newStartDate,
+            endDate: prev.endDate
+          };
+        });
         
-        // Maintain scroll position
-        contentRef.current.scrollTop = scrollTop + 400; // Increased to handle larger jumps
+        // Maintain scroll position after adding content
+        setTimeout(() => {
+          if (contentRef.current) {
+            contentRef.current.scrollTop = scrollTop + (BUFFER_WEEKS * WEEK_HEIGHT);
+            isUpdatingRef.current = false;
+          }
+        }, 0);
       }
       
-      // Add months at the bottom when scrolling down
-      if (scrollHeight - scrollTop - clientHeight < 200) {
-        const lastVisibleMonth = months[months.length - 1];
-        const nextMonthDate = new Date(lastVisibleMonth.year, lastVisibleMonth.month + 1, 1);
-        const newMonthData = generateMonthData(nextMonthDate);
+      // When scrolling down and approaching the bottom
+      if (scrollDirection === 'down' && scrollHeight - scrollTop - clientHeight < bufferThreshold) {
+        // Add more weeks at the bottom
+        isUpdatingRef.current = true;
         
-        setMonths(prevMonths => [...prevMonths, newMonthData]);
-        setVisibleMonthsRange(prev => ({ start: prev.start, end: prev.end + 1 }));
+        setVisibleWeekRange(prev => {
+          const newEndDate = addWeeks(prev.endDate, BUFFER_WEEKS);
+          return {
+            startDate: prev.startDate,
+            endDate: newEndDate
+          };
+        });
+        
+        isUpdatingRef.current = false;
       }
     };
+    
+    // Throttle the scroll handler for better performance
+    const throttledHandleScroll = throttle(handleScroll, 100);
 
     const container = contentRef.current;
     if (container) {
-      container.addEventListener('scroll', handleScroll);
-      return () => container.removeEventListener('scroll', handleScroll);
+      container.addEventListener('scroll', throttledHandleScroll);
+      return () => container.removeEventListener('scroll', throttledHandleScroll);
     }
-  }, [months, visibleMonthsRange]);
-
-  // Generate month data including days and calendar structure (for reference)
-  const generateMonthData = (date) => {
-    const year = date.getFullYear();
-    const month = date.getMonth();
-    const firstDay = new Date(year, month, 1).getDay(); // 0 = Sunday
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-    
-    // Get month name
-    const monthName = date.toLocaleString('default', { month: 'long' });
-    
-    return {
-      year,
-      month,
-      monthName
+  }, [visibleWeekRange]);
+  
+  // Simple throttle function to limit scroll event handling
+  const throttle = (func, limit) => {
+    let inThrottle;
+    return function() {
+      const args = arguments;
+      const context = this;
+      if (!inThrottle) {
+        func.apply(context, args);
+        inThrottle = true;
+        setTimeout(() => inThrottle = false, limit);
+      }
     };
   };
+  
+  // Update the month displayed in the header based on visible weeks
+  const updateCurrentMonthDisplay = (topWeekIndex, visibleWeeksCount) => {
+    if (!contentRef.current) return;
+    
+    // Calculate the date at the center of the viewport
+    const centralWeekIndex = topWeekIndex + Math.floor(visibleWeeksCount / 2);
+    const weeksFromStart = centralWeekIndex;
+    const centralDate = addWeeks(visibleWeekRange.startDate, weeksFromStart);
+    
+    // Set the month display based on the central date
+    const monthYearString = centralDate.toLocaleString('default', { month: 'long', year: 'numeric' });
+    setCurrentDisplayMonth(monthYearString);
+  };
 
-  // Generate continuous calendar data across all months
-  const generateContinuousCalendar = () => {
-    if (months.length === 0) return { weeks: [], monthLabels: {} };
-    
-    // Sort months chronologically
-    const sortedMonths = [...months].sort((a, b) => {
-      if (a.year !== b.year) return a.year - b.year;
-      return a.month - b.month;
-    });
-    
-    // Get the earliest and latest dates
-    const firstMonth = sortedMonths[0];
-    const lastMonth = sortedMonths[sortedMonths.length - 1];
-    
-    // Calculate start date (first day of the first month's first week)
-    const startDate = new Date(firstMonth.year, firstMonth.month, 1);
-    startDate.setDate(startDate.getDate() - startDate.getDay()); // Go back to Sunday
-    
-    // Calculate end date (last day of the last month's last week)
-    const endDate = new Date(lastMonth.year, lastMonth.month + 1, 0); // Last day of month
-    const daysToAdd = 6 - endDate.getDay(); // Days to Saturday
-    endDate.setDate(endDate.getDate() + daysToAdd);
+  // Generate weeks for the visible range
+  const generateWeeks = useCallback(() => {
+    if (!visibleWeekRange.startDate || !visibleWeekRange.endDate) return { weeks: [], monthLabels: {} };
     
     // Generate all days between start and end date
     const allDays = [];
-    const currentDate = new Date(startDate);
+    const currentDate = new Date(visibleWeekRange.startDate);
     const monthLabels = {};
     
-    while (currentDate <= endDate) {
+    // Continue until we reach the end date
+    while (currentDate <= visibleWeekRange.endDate) {
       const year = currentDate.getFullYear();
       const month = currentDate.getMonth();
       const day = currentDate.getDate();
       const dayOfWeek = currentDate.getDay();
-      const dateString = currentDate.toISOString().split('T')[0];
+      const dateString = formatDateKey(currentDate);
       
       // Mark the first day of each month for labels
       if (day === 1) {
-        // Fix: Use the correct month name without the year
         const monthName = new Date(year, month, 1).toLocaleString('default', { month: 'long' });
-        monthLabels[allDays.length] = { 
-          text: `${monthName}`,
+        monthLabels[dateString] = { 
+          text: monthName,
           position: dayOfWeek // 0-6, position in the week
         };
       }
+      
+      // Determine if this is the current month
+      const isCurrentMonth = month === referenceDate.getMonth() && year === referenceDate.getFullYear();
+      
+      // Determine if this is today
+      const isToday = dateString === formatDateKey(new Date(2025, 3, 14)); // Using our fixed reference date
       
       // Add this day to our array
       allDays.push({
@@ -149,8 +210,14 @@ const Calendar = () => {
         date: dateString,
         month,
         year,
-        isCurrentMonth: sortedMonths.some(m => m.month === month && m.year === year),
-        events: events.filter(event => event.date === dateString)
+        isCurrentMonth,
+        isToday,
+        events: events.filter(event => {
+          const eventDate = new Date(event.startTime);
+          return eventDate.getDate() === day && 
+                 eventDate.getMonth() === month && 
+                 eventDate.getFullYear() === year;
+        })
       });
       
       // Move to next day
@@ -164,147 +231,89 @@ const Calendar = () => {
     }
     
     return { weeks, monthLabels };
-  };
-
+  }, [visibleWeekRange, events, referenceDate]);
+  
   // Get the continuous calendar data
-  const { weeks, monthLabels } = generateContinuousCalendar();
+  const { weeks, monthLabels } = useMemo(() => generateWeeks(), [generateWeeks]);
 
-  // Calculate which month name to display in the header
-  useEffect(() => {
-    if (weeks.length === 0) return;
-    
-    // Get the visible weeks based on scroll position
-    const calculateVisibleMonth = () => {
-      if (!contentRef.current) return;
-      
-      const { scrollTop, clientHeight } = contentRef.current;
-      const weekHeight = 190;
-      
-      // Calculate which weeks are visible
-      const startWeekIndex = Math.floor(scrollTop / weekHeight);
-      const visibleWeeksCount = Math.ceil(clientHeight / weekHeight);
-      const endWeekIndex = Math.min(startWeekIndex + visibleWeeksCount, weeks.length);
-      
-      // Get ONLY the days that are actually visible in the viewport
-      const visibleDays = [];
-      for (let i = startWeekIndex; i < endWeekIndex; i++) {
-        if (weeks[i]) {
-          visibleDays.push(...weeks[i]);
-        }
-      }
-      
-      if (visibleDays.length === 0) return;
-      
-      // Group days by month and year
-      const monthGroups = {};
-      
-      visibleDays.forEach(day => {
-        const monthKey = `${day.year}-${day.month}`;
-        if (!monthGroups[monthKey]) {
-          monthGroups[monthKey] = {
-            count: 0,
-            name: new Date(day.year, day.month, 1).toLocaleString('default', { month: 'long' }) + ' ' + day.year,
-            year: day.year,
-            month: day.month,
-            days: []
-          };
-        }
-        monthGroups[monthKey].count++;
-        monthGroups[monthKey].days.push(day);
-      });
-      
-      // Convert to array and sort by count (descending)
-      const sortedMonths = Object.values(monthGroups).sort((a, b) => b.count - a.count);
-      
-      // No months visible (shouldn't happen, but just in case)
-      if (sortedMonths.length === 0) return;
-      
-      // If only one month is visible, use that
-      if (sortedMonths.length === 1) {
-        setCurrentDisplayMonth(sortedMonths[0].name);
-        return;
-      }
-      
-      // Multiple months visible - check if the second month has 15 or more days visible
-      // If so, and it's the 'next' month chronologically, use that instead
-      const primaryMonth = sortedMonths[0];
-      const secondaryMonth = sortedMonths[1];
-      
-      if (secondaryMonth.count >= 15) {
-        // Check if secondaryMonth is chronologically after primaryMonth
-        const isNextMonth = (secondaryMonth.year > primaryMonth.year) || 
-                           (secondaryMonth.year === primaryMonth.year && 
-                            secondaryMonth.month > primaryMonth.month);
-        
-        if (isNextMonth) {
-          // Apply the same month adjustment to the next month
-          const adjustedDate = new Date(secondaryMonth.year, secondaryMonth.month - 1, 1);
-          const adjustedMonthName = adjustedDate.toLocaleString('default', { month: 'long', year: 'numeric' });
-          setCurrentDisplayMonth(adjustedMonthName);
-          return;
-        }
-      }
-      
-      // Get the month one month back from the calculated month
-      const adjustedDate = new Date(primaryMonth.year, primaryMonth.month - 1, 1);
-      const adjustedMonthName = adjustedDate.toLocaleString('default', { month: 'long', year: 'numeric' });
-      setCurrentDisplayMonth(adjustedMonthName);
-    };
-    
-    calculateVisibleMonth();
-    
-    const container = contentRef.current;
-    if (container) {
-      container.addEventListener('scroll', calculateVisibleMonth);
-      return () => container.removeEventListener('scroll', calculateVisibleMonth);
-    }
-  }, [weeks]);
 
-  // Navigation handlers
+
+  // Navigation handlers - smoother scrolling
   const handlePrevMonth = () => {
-    // Logic to navigate to previous month
     if (contentRef.current) {
-      contentRef.current.scrollTop -= 400; // Approximate scroll amount
+      // Scroll smoothly to previous month (approximately 4 weeks up)
+      contentRef.current.scrollBy({ 
+        top: -4 * WEEK_HEIGHT, 
+        behavior: 'smooth' 
+      });
     }
   };
 
   const handleNextMonth = () => {
-    // Logic to navigate to next month
     if (contentRef.current) {
-      contentRef.current.scrollTop += 400; // Approximate scroll amount
+      // Scroll smoothly to next month (approximately 4 weeks down)
+      contentRef.current.scrollBy({ 
+        top: 4 * WEEK_HEIGHT, 
+        behavior: 'smooth' 
+      });
     }
   };
 
-  const handleMonthSelect = () => {
+  const handleMonthSelect = (date) => {
     // Logic for month selection dropdown
-    console.log('Month selection clicked');
+    if (contentRef.current && date) {
+      // Calculate weeks between reference date and selected date
+      const refWeekStart = getStartOfWeek(referenceDate);
+      const targetWeekStart = getStartOfWeek(date);
+      const weeksDiff = Math.round((targetWeekStart - refWeekStart) / (7 * 24 * 60 * 60 * 1000));
+      
+      // Scroll to the selected month
+      const targetPosition = (BUFFER_WEEKS + weeksDiff) * WEEK_HEIGHT;
+      contentRef.current.scrollTo({
+        top: targetPosition,
+        behavior: 'smooth'
+      });
+    }
   };
 
   return (
-    <div className="calendar-container">
+    <div className="calendar-container" style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
       <CalendarHeader 
         currentMonth={currentDisplayMonth} 
         onPrevMonth={handlePrevMonth}
         onNextMonth={handleNextMonth}
         onMonthSelect={handleMonthSelect}
       />
-      <div style={{ display: 'flex', height: 'calc(100vh - 100px)' }}>
-        <div style={{ width: '50%', borderRight: '1px solid #e5e7eb' }}>
+      <div style={{ display: 'flex', flexGrow: 1, overflow: 'hidden' }}>
+        <div style={{ width: '50%', borderRight: '1px solid #e5e7eb', display: 'flex', flexDirection: 'column' }}>
           <WeekdayHeader />
-          <div className="calendar-content" ref={contentRef}>
+          <div 
+            className="calendar-content" 
+            ref={contentRef} 
+            style={{ 
+              overflowY: 'auto', 
+              overflowX: 'hidden',
+              flexGrow: 1,
+              WebkitOverflowScrolling: 'touch', // For smoother scrolling on iOS
+            }}
+          >
             <div className="calendar-grid">
               {weeks.map((week, weekIndex) => (
-                <CalendarWeek 
+                <div 
                   key={`week-${weekIndex}`} 
-                  week={week} 
-                  weekIndex={weekIndex} 
-                  monthLabels={monthLabels} 
-                />
+                  style={{ height: `${WEEK_HEIGHT}px` }}
+                >
+                  <CalendarWeek 
+                    week={week} 
+                    weekIndex={weekIndex} 
+                    monthLabels={monthLabels} 
+                  />
+                </div>
               ))}
             </div>
           </div>
         </div>
-        <div style={{ width: '50%' }}>
+        <div style={{ width: '50%', overflowY: 'auto' }}>
           <WeekView 
             currentDate={new Date(2025, 3, 14)}
             events={events}

@@ -111,8 +111,9 @@ const initialEvents = [
 ]
 
 export const CalendarProvider = ({ children }) => {
-  const [currentDate, setCurrentDate] = useState(new Date(2025, 3, 24))
+  const [currentDate, setCurrentDate] = useState(new Date()) // Always use today's date on refresh
   const [view, setView] = useState('month')
+  const [headerDisplayDate, setHeaderDisplayDate] = useState(currentDate); // Date for header display, especially for month view scrolling
   const [events, setEvents] = useState(() => {
     const savedEvents = localStorage.getItem('calendarEvents')
     return savedEvents ? JSON.parse(savedEvents).map(event => ({
@@ -205,7 +206,8 @@ export const CalendarProvider = ({ children }) => {
 
   const formatDateHeader = useCallback(() => {
     if (view === 'month') {
-      return format(currentDate, 'MMMM yyyy')
+      // Use headerDisplayDate for month view header
+      return format(headerDisplayDate, 'MMMM yyyy')
     }
     if (view === 'week') {
       const weekStart = startOfWeek(currentDate)
@@ -213,7 +215,7 @@ export const CalendarProvider = ({ children }) => {
       return `${format(currentDate, 'MMMM yyyy')}`
     }
     return format(currentDate, 'EEE MMMM d, yyyy')
-  }, [currentDate, view])
+  }, [currentDate, view, headerDisplayDate])
 
   const value = {
     currentDate,
@@ -221,6 +223,7 @@ export const CalendarProvider = ({ children }) => {
     events,
     selectedEvent,
     showEventModal,
+    headerDisplayDate, // Expose the state
     getDaysInMonth,
     getDaysInWeek,
     navigateToToday,
@@ -234,7 +237,8 @@ export const CalendarProvider = ({ children }) => {
     deleteEvent,
     openEventModal,
     closeEventModal,
-    formatDateHeader
+    formatDateHeader,
+    setHeaderDisplayDate // Expose the setter
   }
 
   return (
