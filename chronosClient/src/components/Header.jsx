@@ -14,7 +14,7 @@ const Header = () => {
   } = useCalendar()
 
   return (
-    <header className="flex flex-col sm:flex-row sm:items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
+    <header className="flex flex-col sm:flex-row sm:items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700" style={{ WebkitAppRegion: 'drag' }}>
       <div className="flex items-center mb-4 sm:mb-0">
         <h1 className="text-2xl font-semibold mr-4">{formatDateHeader()}</h1>
         <div className="flex space-x-2">
@@ -22,6 +22,7 @@ const Header = () => {
             onClick={navigateToPrevious}
             className="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
             aria-label="Previous"
+            style={{ WebkitAppRegion: 'no-drag' }}
           >
             <FiChevronLeft className="text-lg" />
           </button>
@@ -29,13 +30,14 @@ const Header = () => {
             onClick={navigateToNext}
             className="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
             aria-label="Next"
+            style={{ WebkitAppRegion: 'no-drag' }}
           >
             <FiChevronRight className="text-lg" />
           </button>
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2" style={{ WebkitAppRegion: 'no-drag' }}>
         <button
           onClick={navigateToToday}
           className="px-4 py-2 bg-gray-900 text-white dark:bg-gray-700 rounded-lg hover:bg-gray-800 dark:hover:bg-gray-600 transition-colors"

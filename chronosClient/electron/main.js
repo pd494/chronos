@@ -1,4 +1,4 @@
-const { app, BrowserWindow, session } = require('electron');
+const { app, BrowserWindow, session, ipcMain } = require('electron');
 const path = require('path');
 const url = require('url');
 
@@ -10,6 +10,8 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
+    frame: false,
+    titleBarStyle: 'hiddenInset', // Changed to hiddenInset for better dragging on macOS
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -62,6 +64,8 @@ function createWindow() {
     // Dereference the window object
     mainWindow = null;
   });
+
+  // We'll use CSS for window dragging instead of IPC
 }
 
 app.whenReady().then(() => {

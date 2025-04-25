@@ -6,10 +6,11 @@ const { contextBridge, ipcRenderer } = require('electron');
 // Expose protected methods that allow the renderer process to use
 // the ipcRenderer without exposing the entire object
 contextBridge.exposeInMainWorld('electronAPI', {
+  // We don't need the startDrag function anymore as we'll use CSS for dragging
   // Example: expose a method to send messages to main process
   send: (channel, data) => {
     // whitelist channels
-    let validChannels = ['toMain'];
+    let validChannels = ['toMain', 'start-drag'];
     if (validChannels.includes(channel)) {
       ipcRenderer.send(channel, data);
     }
