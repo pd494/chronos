@@ -4,8 +4,8 @@ import { useCalendar } from '../../context/CalendarContext'
 import WeekEvent from '../events/WeekEvent'
 
 const HOUR_HEIGHT = 60 // Height of one hour in pixels
-const DAY_START_HOUR = 7 // Start displaying from 7 AM
-const DAY_END_HOUR = 19 // End displaying at 7 PM
+const DAY_START_HOUR = 0 // Start displaying from 12 AM
+const DAY_END_HOUR = 23 // End displaying at 11 PM
 
 const WeeklyView = () => {
   const {
