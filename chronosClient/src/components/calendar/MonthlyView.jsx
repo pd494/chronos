@@ -71,7 +71,8 @@ const MonthlyView = () => {
     const update = () => {
       if (!scrollContainerRef.current) return;
       const w = scrollContainerRef.current.clientWidth;
-      const s = Math.floor(w / 7);
+      // Use exact division - no rounding to prevent gaps
+      const s = w / 7;
       setCellSize(s);
       setRowHeight(s);
       // lock parent height to 5 rows
@@ -114,12 +115,12 @@ const MonthlyView = () => {
         {/* scrollable grid */}
         <div
           ref={scrollContainerRef}
-          className="overflow-y-auto flex-grow relative bg-gray-200 dark:bg-gray-700"
+          className="overflow-y-auto flex-grow relative bg-white dark:bg-gray-800"
           style={{ height: `${rowHeight * WEEKS_PER_VIEW}px`, scrollbarWidth: 'thin' }}
         >
           <div className="relative" style={{ height: `${weeks.length * rowHeight}px` }}>
             {weeks.map(({ weekStart, days }) => (
-              <div key={weekStart} className="grid grid-cols-7" style={{ height: `${rowHeight}px` }}>
+              <div key={weekStart} className="flex w-full h-full" style={{ height: `${rowHeight}px` }}>
                 {days.map((day) => {
                   const events       = getEventsForDate(day) || [];
                   const isSelected   = isSameDay(day, currentDate);
@@ -129,8 +130,8 @@ const MonthlyView = () => {
                     <div
                       key={formatDateKey(day)}
                       onDoubleClick={() => selectDate(day)}
-                      style={{ height: `${cellSize}px`, width: `${cellSize}px` }}
-                      className="calendar-day bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-800 relative p-1 flex flex-col group"
+                      style={{ height: `${rowHeight}px`, width: 'calc(100% / 7)', boxSizing: 'border-box' }}
+                      className="calendar-day bg-white dark:bg-gray-800 border-r border-b border-gray-100 dark:border-gray-800 relative p-1 flex flex-col group"
                     >
                       <div className="flex justify-between items-start text-xs mb-1">
                         {firstOfMonth && (
