@@ -128,9 +128,9 @@ const MonthlyView = () => {
                   return (
                     <div
                       key={formatDateKey(day)}
-                      onClick={() => selectDate(day)}
+                      onDoubleClick={() => selectDate(day)}
                       style={{ height: `${cellSize}px`, width: `${cellSize}px` }}
-                      className="calendar-day bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-800 relative p-1 flex flex-col cursor-pointer group"
+                      className="calendar-day bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-800 relative p-1 flex flex-col group"
                     >
                       <div className="flex justify-between items-start text-xs mb-1">
                         {firstOfMonth && (

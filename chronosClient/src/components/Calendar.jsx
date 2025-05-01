@@ -1,206 +1,357 @@
-import React, {
-  useState,
-  useEffect,
-  useRef,
-  useMemo,
-  useCallback,
-} from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback, useLayoutEffect } from 'react';
 import CalendarHeader from './shared/CalendarHeader';
-import WeekdayHeader  from './shared/WeekdayHeader';
-import CalendarWeek   from './weekly/CalendarWeek';
+import WeekdayHeader from './shared/WeekdayHeader';
+import CalendarWeek from './weekly/CalendarWeek';
 import { useTaskContext } from '../context/TaskContext';
 import { WeekView } from '../../ui-experiments/apps/experiment-06/components/event-calendar/week-view';
 import './Calendar.css';
 
-// ─── constants ────────────────────────────────────────────────────────────
-const BUFFER_WEEKS = 10;
-const WEEK_HEIGHT  = 100;
+// Constants for the calendar
+const BUFFER_WEEKS = 10; // Number of weeks to render above/below visible area
+const WEEK_HEIGHT = 100; // Height of each week row in pixels
 
-// helpers
-const getStartOfWeek = (d) => {
-  const res  = new Date(d);
-  res.setDate(res.getDate() - res.getDay());
-  return res;
+// Helper to get the start of the week (Sunday)
+const getStartOfWeek = (date) => {
+  const result = new Date(date);
+  const dayOfWeek = result.getDay(); // 0 = Sunday, 1 = Monday, ...
+  const diff = result.getDate() - dayOfWeek;
+  return new Date(result.setDate(diff));
 };
-const addDays  = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
-const addWeeks = (d, n) => addDays(d, n * 7);
-const key      = (d) => d.toISOString().split('T')[0];
+
+// Helper to add days to a date
+const addDays = (date, days) => {
+  const result = new Date(date);
+  result.setDate(result.getDate() + days);
+  return result;
+};
+
+// Helper to add weeks to a date
+const addWeeks = (date, weeks) => {
+  return addDays(date, weeks * 7);
+};
+
+// Helper to format date as ISO string for keys
+const formatDateKey = (date) => {
+  return date.toISOString().split('T')[0];
+};
 
 const Calendar = () => {
-  const today            = new Date();
-  const todayWeekStart   = getStartOfWeek(today);
-  const startingWeekIdx  = BUFFER_WEEKS; // today appears immediately
-
+  // Start from today's date as our reference point
+  const today = new Date();
+  
+  // Current reference date (center of our calendar)
+  const [referenceDate] = useState(today);
+  
+  // Calculate week start that contains today
+  const todayWeekStart = getStartOfWeek(today);
+  
+  // Define a starting week index that puts today's week at BUFFER_WEEKS position
+  // This will make our calendar start with today's week visible
+  const startingWeekIndex = BUFFER_WEEKS;
+  
+  // Track visible weeks range - set the visible range to start at a point that puts today in view
   const [visibleWeekRange, setVisibleWeekRange] = useState({
-    startDate: addWeeks(todayWeekStart, -startingWeekIdx),
-    endDate:   addWeeks(todayWeekStart,  BUFFER_WEEKS),
+    startDate: addWeeks(todayWeekStart, -startingWeekIndex),
+    endDate: addWeeks(todayWeekStart, BUFFER_WEEKS)
   });
-
+  
+  // Current month to display in header - initialize with today's month
   const [currentDisplayMonth, setCurrentDisplayMonth] = useState(
     today.toLocaleString('default', { month: 'long', year: 'numeric' })
   );
+  
+  // Ref for the scrollable container
+  const contentRef = useRef(null);
+  
+  // Track scroll position to detect direction
+  const lastScrollTopRef = useRef(0);
+  
+  // Track if we're currently updating the DOM to prevent scroll jumps
+  const isUpdatingRef = useRef(false);
+  
+  // Get events from context
+  const { events, addTaskToCalendar } = useTaskContext();
+  
+  // Initialize calendar with current date centered and scroll directly to today
+  useLayoutEffect(() => {
+    // Set initial month in header
+    setCurrentDisplayMonth(today.toLocaleString('default', { month: 'long', year: 'numeric' }));
+    
+    // Reset the visible weeks range to ensure today's week is at the BUFFER_WEEKS position
+    setVisibleWeekRange({
+      startDate: addWeeks(todayWeekStart, -startingWeekIndex),
+      endDate: addWeeks(todayWeekStart, BUFFER_WEEKS)
+    });
 
-  const contentRef        = useRef(null);
-  const lastScrollTopRef  = useRef(startingWeekIdx * WEEK_HEIGHT);
-  const isUpdatingRef     = useRef(false);
-  const { events }        = useTaskContext();
+    // This function forcibly scrolls the calendar to today
+    const scrollToToday = () => {
+      if (contentRef.current) {
+        // Scroll to the starting position where today's week should be visible
+        contentRef.current.scrollTop = startingWeekIndex * WEEK_HEIGHT;
+        lastScrollTopRef.current = startingWeekIndex * WEEK_HEIGHT;
+        console.log('Calendar forcibly scrolled to today at position:', startingWeekIndex * WEEK_HEIGHT);
+      }
+    };
 
-  // ── initial jump to today ───────────────────────────────────────────────
-  useEffect(() => {
-    if (!contentRef.current) return;
-    contentRef.current.scrollTop = startingWeekIdx * WEEK_HEIGHT;
+    // Schedule multiple scroll attempts with increasing delays
+    // This approach handles race conditions with rendering
+    const timers = [];
+    [0, 100, 300, 500, 1000].forEach(delay => {
+      timers.push(setTimeout(scrollToToday, delay));
+    });
+    
+    // Clean up all timers
+    return () => timers.forEach(timer => clearTimeout(timer));
   }, []);
 
-  // ── scroll handler (unchanged, but no timers) ───────────────────────────
-  const throttle = (fn, limit) => {
-    let busy = false;
-    return (...args) => {
-      if (busy) return;
-      busy = true;
-      fn.apply(null, args);
-      setTimeout(() => (busy = false), limit);
+  // Handle scroll to implement truly fluid infinite scroll
+  useEffect(() => {
+    const handleScroll = () => {
+      if (!contentRef.current || isUpdatingRef.current) return;
+      
+      const { scrollTop, scrollHeight, clientHeight } = contentRef.current;
+      const scrollDirection = scrollTop > lastScrollTopRef.current ? 'down' : 'up';
+      lastScrollTopRef.current = scrollTop;
+      
+      // Calculate which week is at the top of the viewport
+      const topWeekIndex = Math.floor(scrollTop / WEEK_HEIGHT);
+      const visibleWeeksCount = Math.ceil(clientHeight / WEEK_HEIGHT);
+      
+      // Update current month display based on visible weeks
+      updateCurrentMonthDisplay(topWeekIndex, visibleWeeksCount);
+      
+      // Check if we need to add more weeks at the top or bottom
+      const bufferThreshold = 3 * WEEK_HEIGHT; // Start loading when within 3 weeks of edge
+      
+      // When scrolling up and approaching the top
+      if (scrollDirection === 'up' && scrollTop < bufferThreshold) {
+        // Add more weeks at the top
+        isUpdatingRef.current = true;
+        
+        setVisibleWeekRange(prev => {
+          const newStartDate = addWeeks(prev.startDate, -BUFFER_WEEKS);
+          return {
+            startDate: newStartDate,
+            endDate: prev.endDate
+          };
+        });
+        
+        // Maintain scroll position after adding content
+        setTimeout(() => {
+          if (contentRef.current) {
+            contentRef.current.scrollTop = scrollTop + (BUFFER_WEEKS * WEEK_HEIGHT);
+            isUpdatingRef.current = false;
+          }
+        }, 0);
+      }
+      
+      // When scrolling down and approaching the bottom
+      if (scrollDirection === 'down' && scrollHeight - scrollTop - clientHeight < bufferThreshold) {
+        // Add more weeks at the bottom
+        isUpdatingRef.current = true;
+        
+        setVisibleWeekRange(prev => {
+          const newEndDate = addWeeks(prev.endDate, BUFFER_WEEKS);
+          return {
+            startDate: prev.startDate,
+            endDate: newEndDate
+          };
+        });
+        
+        isUpdatingRef.current = false;
+      }
+    };
+    
+    // Throttle the scroll handler for better performance
+    const throttledHandleScroll = throttle(handleScroll, 100);
+
+    const container = contentRef.current;
+    if (container) {
+      container.addEventListener('scroll', throttledHandleScroll);
+      return () => container.removeEventListener('scroll', throttledHandleScroll);
+    }
+  }, [visibleWeekRange]);
+  
+  // Simple throttle function to limit scroll event handling
+  const throttle = (func, limit) => {
+    let inThrottle;
+    return function() {
+      const args = arguments;
+      const context = this;
+      if (!inThrottle) {
+        func.apply(context, args);
+        inThrottle = true;
+        setTimeout(() => inThrottle = false, limit);
+      }
     };
   };
-
-  const updateHeaderMonth = (topIdx, visible) => {
-    const centerIdx   = topIdx + Math.floor(visible / 2);
-    const centerDate  = addWeeks(visibleWeekRange.startDate, centerIdx);
-    setCurrentDisplayMonth(
-      centerDate.toLocaleString('default', { month: 'long', year: 'numeric' })
-    );
+  
+  // Update the month displayed in the header based on visible weeks
+  const updateCurrentMonthDisplay = (topWeekIndex, visibleWeeksCount) => {
+    if (!contentRef.current) return;
+    
+    // Calculate the date at the center of the viewport
+    const centralWeekIndex = topWeekIndex + Math.floor(visibleWeeksCount / 2);
+    const weeksFromStart = centralWeekIndex;
+    const centralDate = addWeeks(visibleWeekRange.startDate, weeksFromStart);
+    
+    // Set the month display based on the central date
+    const monthYearString = centralDate.toLocaleString('default', { month: 'long', year: 'numeric' });
+    setCurrentDisplayMonth(monthYearString);
   };
 
-  const onScroll = throttle(() => {
-    if (!contentRef.current || isUpdatingRef.current) return;
-
-    const { scrollTop, scrollHeight, clientHeight } = contentRef.current;
-    const dir = scrollTop > lastScrollTopRef.current ? 'down' : 'up';
-    lastScrollTopRef.current = scrollTop;
-
-    const topIdx      = Math.floor(scrollTop / WEEK_HEIGHT);
-    const visibleRows = Math.ceil(clientHeight / WEEK_HEIGHT);
-    updateHeaderMonth(topIdx, visibleRows);
-
-    const bufferPx = 3 * WEEK_HEIGHT;
-
-    if (dir === 'up' && scrollTop < bufferPx) {
-      isUpdatingRef.current = true;
-      setVisibleWeekRange((prev) => ({
-        startDate: addWeeks(prev.startDate, -BUFFER_WEEKS),
-        endDate:   prev.endDate,
-      }));
-      requestAnimationFrame(() => {
-        contentRef.current.scrollTop += BUFFER_WEEKS * WEEK_HEIGHT;
-        isUpdatingRef.current = false;
-      });
-    }
-
-    if (
-      dir === 'down' &&
-      scrollHeight - scrollTop - clientHeight < bufferPx
-    ) {
-      isUpdatingRef.current = true;
-      setVisibleWeekRange((prev) => ({
-        startDate: prev.startDate,
-        endDate:   addWeeks(prev.endDate, BUFFER_WEEKS),
-      }));
-      isUpdatingRef.current = false;
-    }
-  }, 100);
-
-  useEffect(() => {
-    const el = contentRef.current;
-    if (!el) return;
-    el.addEventListener('scroll', onScroll);
-    return () => el.removeEventListener('scroll', onScroll);
-  }, [onScroll]);
-
-  // ── generate continuous weeks ───────────────────────────────────────────
-  const { weeks, monthLabels } = useMemo(() => {
-    const days = [];
-    const labels = {};
-    for (
-      let d = new Date(visibleWeekRange.startDate);
-      d <= visibleWeekRange.endDate;
-      d = addDays(d, 1)
-    ) {
-      const isFirst = d.getDate() === 1;
-      if (isFirst) {
-        labels[key(d)] = {
-          text: d.toLocaleString('default', { month: 'long' }),
-          position: d.getDay(),
+  // Generate weeks for the visible range
+  const generateWeeks = useCallback(() => {
+    if (!visibleWeekRange.startDate || !visibleWeekRange.endDate) return { weeks: [], monthLabels: {} };
+    
+    // Generate all days between start and end date
+    const allDays = [];
+    const currentDate = new Date(visibleWeekRange.startDate);
+    const monthLabels = {};
+    
+    // Continue until we reach the end date
+    while (currentDate <= visibleWeekRange.endDate) {
+      const year = currentDate.getFullYear();
+      const month = currentDate.getMonth();
+      const day = currentDate.getDate();
+      const dayOfWeek = currentDate.getDay();
+      const dateString = formatDateKey(currentDate);
+      
+      // Mark the first day of each month for labels
+      if (day === 1) {
+        const monthName = new Date(year, month, 1).toLocaleString('default', { month: 'long' });
+        monthLabels[dateString] = { 
+          text: monthName,
+          position: dayOfWeek // 0-6, position in the week
         };
       }
-      const evts = events.filter((e) => {
-        const t = new Date(e.startTime);
-        return (
-          t.getDate() === d.getDate() &&
-          t.getMonth() === d.getMonth() &&
-          t.getFullYear() === d.getFullYear()
-        );
+      
+      // Determine if this is the current month
+      const isCurrentMonth = month === referenceDate.getMonth() && year === referenceDate.getFullYear();
+      
+      // Determine if this is today
+      const isToday = dateString === formatDateKey(new Date()); // Using current date
+      
+      // Add this day to our array
+      allDays.push({
+        day,
+        date: dateString,
+        month,
+        year,
+        isCurrentMonth,
+        isToday,
+        events: events.filter(event => {
+          const eventDate = new Date(event.startTime);
+          return eventDate.getDate() === day && 
+                 eventDate.getMonth() === month && 
+                 eventDate.getFullYear() === year;
+        })
       });
-      days.push({
-        day: d.getDate(),
-        date: key(d),
-        month: d.getMonth(),
-        year: d.getFullYear(),
-        isToday: key(d) === key(today),
-        events: evts,
+      
+      // Move to next day
+      currentDate.setDate(currentDate.getDate() + 1);
+    }
+    
+    // Organize days into weeks
+    const weeks = [];
+    for (let i = 0; i < allDays.length; i += 7) {
+      weeks.push(allDays.slice(i, i + 7));
+    }
+    
+    return { weeks, monthLabels };
+  }, [visibleWeekRange, events, referenceDate]);
+  
+  // Get the continuous calendar data
+  const { weeks, monthLabels } = useMemo(() => generateWeeks(), [generateWeeks]);
+
+  // After weeks are generated, scroll to today's week
+  useLayoutEffect(() => {
+    if (contentRef.current) {
+      contentRef.current.scrollTop = startingWeekIndex * WEEK_HEIGHT;
+    }
+  }, [weeks]);
+
+  // Navigation handlers - smoother scrolling
+  const handlePrevMonth = () => {
+    if (contentRef.current) {
+      // Scroll smoothly to previous month (approximately 4 weeks up)
+      contentRef.current.scrollBy({ 
+        top: -4 * WEEK_HEIGHT, 
+        behavior: 'smooth' 
       });
     }
-    const out = [];
-    for (let i = 0; i < days.length; i += 7) out.push(days.slice(i, i + 7));
-    return { weeks: out, monthLabels: labels };
-  }, [visibleWeekRange, events]);
-
-  // ── navigation helpers (prev / next month) ─────────────────────────────
-  const scrollByWeeks = (w) => {
-    if (contentRef.current)
-      contentRef.current.scrollBy({ top: w * WEEK_HEIGHT, behavior: 'smooth' });
   };
 
-  // ── render ──────────────────────────────────────────────────────────────
+  const handleNextMonth = () => {
+    if (contentRef.current) {
+      // Scroll smoothly to next month (approximately 4 weeks down)
+      contentRef.current.scrollBy({ 
+        top: 4 * WEEK_HEIGHT, 
+        behavior: 'smooth' 
+      });
+    }
+  };
+
+  const handleMonthSelect = (date) => {
+    // Logic for month selection dropdown
+    if (contentRef.current && date) {
+      // Calculate weeks between reference date and selected date
+      const refWeekStart = getStartOfWeek(referenceDate);
+      const targetWeekStart = getStartOfWeek(date);
+      const weeksDiff = Math.round((targetWeekStart - refWeekStart) / (7 * 24 * 60 * 60 * 1000));
+      
+      // Scroll to the selected month
+      const targetPosition = (BUFFER_WEEKS + weeksDiff) * WEEK_HEIGHT;
+      contentRef.current.scrollTo({
+        top: targetPosition,
+        behavior: 'smooth'
+      });
+    }
+  };
+
   return (
     <div className="calendar-container" style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
-      <CalendarHeader
-        currentMonth={currentDisplayMonth}
-        onPrevMonth={() => scrollByWeeks(-4)}
-        onNextMonth={() => scrollByWeeks(4)}
-        onMonthSelect={(d) => {
-          const diff = Math.round(
-            (getStartOfWeek(d) - getStartOfWeek(today)) / (7 * 864e5)
-          );
-          if (contentRef.current)
-            contentRef.current.scrollTo({
-              top: (BUFFER_WEEKS + diff) * WEEK_HEIGHT,
-              behavior: 'smooth',
-            });
-        }}
+      <CalendarHeader 
+        currentMonth={currentDisplayMonth} 
+        onPrevMonth={handlePrevMonth}
+        onNextMonth={handleNextMonth}
+        onMonthSelect={handleMonthSelect}
       />
       <div style={{ display: 'flex', flexGrow: 1, overflow: 'hidden' }}>
         <div style={{ width: '50%', borderRight: '1px solid #e5e7eb', display: 'flex', flexDirection: 'column' }}>
           <WeekdayHeader />
-          <div
-            ref={contentRef}
-            style={{ overflowY: 'auto', overflowX: 'hidden', flexGrow: 1 }}
+          <div 
+            className="calendar-content" 
+            ref={contentRef} 
+            style={{ 
+              overflowY: 'auto', 
+              overflowX: 'hidden',
+              flexGrow: 1,
+              WebkitOverflowScrolling: 'touch', // For smoother scrolling on iOS
+            }}
           >
-            {weeks.map((week, i) => (
-              <div key={i} style={{ height: WEEK_HEIGHT }}>
-                <CalendarWeek
-                  week={week}
-                  weekIndex={i}
-                  monthLabels={monthLabels}
-                />
-              </div>
-            ))}
+            <div className="calendar-grid">
+              {weeks.map((week, weekIndex) => (
+                <div 
+                  key={`week-${weekIndex}`} 
+                  style={{ height: `${WEEK_HEIGHT}px` }}
+                >
+                  <CalendarWeek 
+                    week={week} 
+                    weekIndex={weekIndex} 
+                    monthLabels={monthLabels} 
+                  />
+                </div>
+              ))}
+            </div>
           </div>
         </div>
         <div style={{ width: '50%', overflowY: 'auto' }}>
-          <WeekView
-            currentDate={today}
+          <WeekView 
+            currentDate={new Date()}
             events={events}
-            onEventSelect={(e) => console.log('select', e)}
-            onEventCreate={(t) => console.log('create', t)}
+            onEventSelect={(event) => console.log('Event selected:', event)}
+            onEventCreate={(startTime) => console.log('Create event at:', startTime)}
           />
         </div>
       </div>

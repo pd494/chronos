@@ -4,9 +4,10 @@ import SplitView from './components/SplitView'
 import MonthlyView from './components/calendar/MonthlyView'
 import WeeklyView from './components/calendar/WeeklyView'
 import DailyView from './components/calendar/DailyView'
-import TodoSidebar from './components/todo/TodoSidebar'
+import Sidebar from './components/todo/sidebar/Sidebar'
 import EventModal from './components/events/EventModal'
 import { useCalendar } from './context/CalendarContext'
+import { TaskProvider } from './context/TaskContext'
 import { FiSun, FiMoon } from 'react-icons/fi'
 
 function App() {
@@ -55,26 +56,28 @@ function App() {
   }
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="absolute right-4 top-4 z-20">
-        <button
-          onClick={toggleDarkMode}
-          className="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-          aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
-        >
-          {isDarkMode ? <FiSun className="text-xl" /> : <FiMoon className="text-xl" />}
-        </button>
+    <TaskProvider>
+      <div className="h-full flex flex-col">
+        <div className="absolute right-4 top-4 z-20">
+          <button
+            onClick={toggleDarkMode}
+            className="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+            aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+          >
+            {isDarkMode ? <FiSun className="text-xl" /> : <FiMoon className="text-xl" />}
+          </button>
+        </div>
+        
+        <Header />
+        
+        <SplitView
+          sidebar={<Sidebar />}
+          main={renderCalendarView()}
+        />
+        
+        {showEventModal && <EventModal />}
       </div>
-      
-      <Header />
-      
-      <SplitView
-        sidebar={<TodoSidebar />}
-        main={renderCalendarView()}
-      />
-      
-      {showEventModal && <EventModal />}
-    </div>
+    </TaskProvider>
   )
 }
 
