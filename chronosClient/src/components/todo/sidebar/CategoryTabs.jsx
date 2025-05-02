@@ -4,7 +4,7 @@ import './CategoryTabs.css';
 import data from '@emoji-mart/data';
 import Picker from '@emoji-mart/react';
 
-const CategoryTabs = ({ categories, activeCategory, onCategoryChange, onAddCategory, isCollapsed = false }) => {
+const CategoryTabs = ({ categories, activeCategory, onCategoryChange, onAddCategory, isCollapsed = false, isCompact = false, inHeader = false }) => {
   const [truncatedTabs, setTruncatedTabs] = useState(new Set());
   const [isAddingCategory, setIsAddingCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
@@ -107,7 +107,7 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, onAddCateg
   }, []);
 
   return (
-    <div className="category-tabs-container" ref={tabsContainerRef}>
+    <div className={`category-tabs-container ${isCompact ? 'compact' : ''} ${inHeader ? 'in-header' : ''}`} ref={tabsContainerRef}>
       <div className="category-tabs-horizontal">
         {/* Regular category tabs */}
         {categories.filter(cat => cat.id !== 'add-category').map(category => (
@@ -121,13 +121,17 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, onAddCateg
             }}
           >
             <span className="category-icon">{category.icon}</span>
-            <span 
-              className="category-name" 
-              ref={el => tabRefs.current[category.id] = el}
-              title={truncatedTabs.has(category.id) ? category.name : ''}
-            >
-              {category.name}
-            </span>
+            {/* Always show name in header, even in collapsed view */}
+            {(inHeader || !isCollapsed) && (
+              <span 
+                className="category-name" 
+                ref={el => tabRefs.current[category.id] = el}
+                title={truncatedTabs.has(category.id) ? category.name : ''}
+              >
+                {category.name}
+              </span>
+            )}
+            {/* Show counts for all items */}
             {category.count !== undefined && (
               <span className="category-count-bubble">{category.count}</span>
             )}

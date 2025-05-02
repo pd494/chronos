@@ -1,12 +1,12 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { FiChevronsLeft, FiChevronsRight } from 'react-icons/fi'
 import { Resizable } from 'react-resizable'
 import 'react-resizable/css/styles.css'
 
-const SplitView = ({ sidebar, main }) => {
+const SplitView = ({ sidebar, main, onSidebarWidthChange }) => {
+  const frameIdRef = useRef(null)
   const [sidebarVisible, setSidebarVisible] = useState(true)
   const [sidebarWidth, setSidebarWidth] = useState(320)
-  const [isResizing, setIsResizing] = useState(false)
   
   // Store sidebar width in localStorage
   useEffect(() => {
@@ -20,19 +20,24 @@ const SplitView = ({ sidebar, main }) => {
   useEffect(() => {
     if (sidebarWidth > 100) {
       localStorage.setItem('sidebarWidth', sidebarWidth.toString())
+      // Notify parent component about the width change
+      if (onSidebarWidthChange) {
+        onSidebarWidthChange(sidebarWidth, sidebarVisible)
+      }
     }
-  }, [sidebarWidth])
+  }, [sidebarWidth, sidebarVisible, onSidebarWidthChange])
   
   const onResizeStop = useCallback((event, { size }) => {
     setSidebarWidth(size.width)
-    setIsResizing(false)
   }, [])
   
   const onResize = useCallback((event, { size }) => {
-    if (size.width >= 100) {
-      setSidebarWidth(size.width)
-    }
-    setIsResizing(true)
+    const newWidth = size.width
+    if (frameIdRef.current) cancelAnimationFrame(frameIdRef.current)
+    frameIdRef.current = requestAnimationFrame(() => {
+      setSidebarWidth(newWidth)
+      frameIdRef.current = null
+    })
   }, [])
   
   return (
@@ -62,7 +67,13 @@ const SplitView = ({ sidebar, main }) => {
       
       {/* Toggle button */}
       <button
-        onClick={() => setSidebarVisible(!sidebarVisible)}
+        onClick={() => {
+          const newVisibility = !sidebarVisible;
+          setSidebarVisible(newVisibility);
+          if (onSidebarWidthChange) {
+            onSidebarWidthChange(sidebarWidth, newVisibility);
+          }
+        }}
         className="absolute left-0 bottom-4 z-10 bg-white dark:bg-gray-800 shadow-md p-2 rounded-r-lg transition-all duration-300"
         style={{ transform: sidebarVisible ? `translateX(${sidebarWidth}px)` : 'translateX(0)' }}
         aria-label={sidebarVisible ? 'Hide sidebar' : 'Show sidebar'}

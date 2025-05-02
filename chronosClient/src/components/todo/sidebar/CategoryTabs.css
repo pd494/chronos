@@ -7,6 +7,72 @@
   border-bottom: 1px solid #e5e5ea;
 }
 
+/* Compact header mode */
+.category-tabs-container.compact .category-tabs-horizontal {
+  height: 100%;
+  padding: 0;
+}
+
+.category-tabs-container.compact .category-tab-horizontal {
+  height: 100%;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.category-tabs-container.compact .category-icon {
+  font-size: 14px;
+  margin-right: 4px;
+}
+
+.category-tabs-container.compact .category-count-bubble {
+  font-size: 10px;
+  min-width: 16px;
+  height: 16px;
+  margin-left: 4px;
+}
+
+.category-tabs-container.in-header {
+  border-right: none;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  background: transparent;
+  padding-left: 8px;
+  width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  margin-left: 2px;
+}
+
+.category-tabs-container.in-header .category-tabs-horizontal {
+  background: transparent;
+  padding: 0;
+  height: 100%;
+  gap: 2px;
+  align-items: center;
+  flex-wrap: nowrap;
+}
+
+.category-tabs-container.in-header .category-tab-horizontal {
+  padding: 0 12px;
+  height: 28px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 400;
+  color: #333;
+  background-color: transparent;
+  border: none;
+  margin-right: 2px;
+}
+
+.category-tabs-container.in-header .category-tab-horizontal.active {
+  background-color: #f0f0f0;
+  color: #000;
+  border-radius: 4px;
+  box-shadow: none;
+  font-weight: 500;
+}
+
 /* Collapsed sidebar styles */
 .sidebar.collapsed .category-tabs-container {
   align-items: center;
@@ -44,7 +110,7 @@
   white-space: nowrap;
   scrollbar-width: none; /* Firefox */
   -ms-overflow-style: none; /* IE and Edge */
-  gap: 16px;
+  gap: 8px;
   border-bottom: none;
   width: 100%;
   max-width: 100%;
@@ -56,6 +122,8 @@
 }
 
 .category-tab-horizontal {
+  background-color: inherit;
+
   scroll-snap-align: start;
 }
 
@@ -82,6 +150,8 @@
 }
 
 .category-tab-horizontal {
+  background-color: inherit;
+
   display: flex;
   align-items: center;
   padding: 0 8px;
@@ -100,12 +170,19 @@
 }
 
 .category-icon {
-  min-width: 18px;
+  min-width: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 16px;
+  font-size: 14px;
   color: #000000;
+  margin-right: 4px;
+}
+
+.category-tabs-container.in-header .category-icon {
+  font-size: 12px;
+  margin-right: 2px;
+  color: #444;
 }
 
 .category-icon.all {
@@ -128,13 +205,19 @@
 }
 .category-count-bubble {
   color: #666666;
-  font-size: 15px;
+  font-size: 12px;
   font-weight: 400;
   flex-shrink: 0;
   background: none;
   padding: 0;
   min-width: 0;
   margin-left: 4px;
+}
+
+.category-tabs-container.in-header .category-count-bubble {
+  font-size: 11px;
+  margin-left: 2px;
+  color: #666;
 }
 
 /* Hide count on very narrow widths */
@@ -155,7 +238,14 @@
   text-overflow: ellipsis;
   min-width: 0;
   transition: font-size 0.2s;
-  max-width: 70px;
+  max-width: none;
+  display: inline-block;
+}
+
+.category-tabs-container.in-header .category-name {
+  font-size: 13px;
+  min-width: 0;
+  display: inline-block;
 }
 
 /* Responsive font sizes based on container width */
@@ -182,6 +272,8 @@
     display: none;
   }
   .category-tab-horizontal {
+  background-color: inherit;
+
     justify-content: center;
     padding: 0 4px;
   }

@@ -18,8 +18,8 @@ import EventIndicator from '../events/EventIndicator';
 
 // ─── Constants ────────────────────────────────────────────────────────────
 const BUFFER_WEEKS     = 156; // 3 y either side
-const WEEKS_PER_VIEW   = 5;   // always render 5 rows
-const ABOVE            = Math.floor(WEEKS_PER_VIEW / 2); // 2 when view = 5
+const WEEKS_PER_VIEW   = 6;   // always render 6 rows (standard month view)
+const ABOVE            = Math.floor(WEEKS_PER_VIEW / 2); // 3 when view = 6
 const BELOW            = WEEKS_PER_VIEW - 1 - ABOVE;     // 2
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -71,13 +71,17 @@ const MonthlyView = () => {
     const update = () => {
       if (!scrollContainerRef.current) return;
       const w = scrollContainerRef.current.clientWidth;
-      // Use exact division - no rounding to prevent gaps
-      const s = w / 7;
-      setCellSize(s);
-      setRowHeight(s);
-      // lock parent height to 5 rows
-      const p = scrollContainerRef.current.parentElement;
-      if (p) p.style.height = `${s * WEEKS_PER_VIEW}px`;
+      // Calculate container height to determine proper row height
+      const containerHeight = scrollContainerRef.current.clientHeight;
+      // Calculate row height based on available height divided by 6 weeks
+      const calculatedRowHeight = containerHeight / WEEKS_PER_VIEW;
+      // Use exact division for width - no rounding to prevent gaps
+      const cellWidth = w / 7;
+      
+      setCellSize(cellWidth);
+      setRowHeight(calculatedRowHeight);
+      
+      // No need to set parent height as we're using a percentage-based height
     };
     update();
     window.addEventListener('resize', update);
@@ -112,11 +116,11 @@ const MonthlyView = () => {
           ))}
         </div>
 
-        {/* scrollable grid */}
+        {/* scrollable grid - fixed to show exactly 6 weeks */}
         <div
           ref={scrollContainerRef}
           className="overflow-y-auto flex-grow relative bg-white dark:bg-gray-800"
-          style={{ height: `${rowHeight * WEEKS_PER_VIEW}px`, scrollbarWidth: 'thin' }}
+          style={{ height: 'calc(100% - 60px)', scrollbarWidth: 'thin' }}
         >
           <div className="relative" style={{ height: `${weeks.length * rowHeight}px` }}>
             {weeks.map(({ weekStart, days }) => (
