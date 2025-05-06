@@ -11,6 +11,18 @@ export const TaskProvider = ({ children }) => {
     { id: 3, text: 'Review quarterly goals', completed: false, category: 'Today' },
     { id: 4, text: 'Update documentation', completed: false, category: 'Inbox' },
   ]);
+  
+  // Get today's date as a number for the Today icon
+  const getTodayDateNumber = () => {
+    return new Date().getDate().toString();
+  };
+  
+  const [categories, setCategories] = useState([
+    { id: 'all', name: 'All', count: 4, icon: '★' },
+    { id: 'inbox', name: 'Inbox', count: 2, icon: '📥' },
+    { id: 'today', name: 'Today', count: 1, icon: getTodayDateNumber() },
+    { id: 'completed', name: 'Completed', count: 1, icon: '✓' },
+  ]);
 
   const addTask = (text, category = 'Inbox') => {
     const newTask = {
@@ -20,6 +32,24 @@ export const TaskProvider = ({ children }) => {
       category
     };
     setTasks([...tasks, newTask]);
+  };
+
+  const addCategory = (newCategory) => {
+    setCategories(prevCategories => {
+      // Make sure we don't add duplicates
+      if (!prevCategories.find(cat => cat.name === newCategory.name)) {
+        return [...prevCategories, newCategory];
+      }
+      return prevCategories;
+    });
+  };
+
+  const updateCategory = (id, updatedCategory) => {
+    setCategories(prevCategories => 
+      prevCategories.map(cat => 
+        cat.id === id ? { ...cat, ...updatedCategory } : cat
+      )
+    );
   };
 
   const toggleTaskComplete = (id) => {
@@ -44,8 +74,24 @@ export const TaskProvider = ({ children }) => {
     setTasks(tasks.map(task => task.id === id ? { ...task, ...updatedTask } : task));
   };
 
+  const addTaskToCalendar = (taskId, date) => {
+    // This function will be implemented to add a task to the calendar
+    console.log(`Adding task ${taskId} to calendar on ${date}`);
+    // For now, just log the action
+  };
+
   return (
-    <TaskContext.Provider value={{ tasks, addTask, toggleTaskComplete, deleteTask, updateTask }}>
+    <TaskContext.Provider value={{ 
+      tasks, 
+      categories, 
+      addTask, 
+      toggleTaskComplete, 
+      deleteTask, 
+      updateTask, 
+      addTaskToCalendar,
+      addCategory,
+      updateCategory
+    }}>
       {children}
     </TaskContext.Provider>
   );

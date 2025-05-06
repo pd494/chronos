@@ -176,27 +176,94 @@ export const CalendarProvider = ({ children }) => {
   }, [events])
 
   const createEvent = useCallback((eventData) => {
+    // Ensure dates are proper Date objects
+    const processedData = {
+      ...eventData,
+      start: eventData.start instanceof Date ? eventData.start : new Date(eventData.start),
+      end: eventData.end instanceof Date ? eventData.end : new Date(eventData.end)
+    };
+    
     const newEvent = {
       id: uuidv4(),
-      ...eventData
+      ...processedData
     }
-    setEvents(prev => [...prev, newEvent])
+    
+    setEvents(prev => {
+      const updatedEvents = [...prev, newEvent];
+      // Update localStorage
+      localStorage.setItem('calendarEvents', JSON.stringify(updatedEvents));
+      return updatedEvents;
+    });
+    
     return newEvent
   }, [])
 
   const updateEvent = useCallback((id, updatedData) => {
-    setEvents(prev => prev.map(event => 
-      event.id === id ? { ...event, ...updatedData } : event
-    ))
+    // Ensure dates are proper Date objects
+    const processedData = {
+      ...updatedData,
+      start: updatedData.start instanceof Date ? updatedData.start : new Date(updatedData.start),
+      end: updatedData.end instanceof Date ? updatedData.end : new Date(updatedData.end)
+    };
+    
+    setEvents(prev => {
+      const updatedEvents = prev.map(event => 
+        event.id === id ? { ...event, ...processedData } : event
+      );
+      // Update localStorage for persistence
+      localStorage.setItem('calendarEvents', JSON.stringify(updatedEvents));
+      return updatedEvents;
+    });
+    
+    // Force a re-render by updating the current date slightly
+    setCurrentDate(current => {
+      // Create a completely new date object that's guaranteed to trigger a re-render
+      const newDate = new Date(current.getTime() + 1);
+      setTimeout(() => {
+        // Reset it back after forcing the re-render
+        setCurrentDate(new Date(current.getTime()));
+      }, 10);
+      return newDate;
+    });
   }, [])
 
   const deleteEvent = useCallback((id) => {
     setEvents(prev => prev.filter(event => event.id !== id))
   }, [])
 
-  const openEventModal = useCallback((event = null) => {
-    setSelectedEvent(event)
-    setShowEventModal(true)
+  const openEventModal = useCallback((event = null, isNewEvent = false) => {
+    // If this is a new drag-created event
+    if (isNewEvent && event) {
+      // Clone the date objects to avoid reference issues
+      const exactStartDate = new Date(event.start.getTime());
+      const exactEndDate = new Date(event.end.getTime());
+      
+      console.log('MODAL OPENING with drag event:', {
+        start: exactStartDate.toLocaleString(),
+        startHour: exactStartDate.getHours(),
+        startMinute: exactStartDate.getMinutes(),
+        end: exactEndDate.toLocaleString(),
+        endHour: exactEndDate.getHours(),
+        endMinute: exactEndDate.getMinutes()
+      });
+      
+      // Set selected event to null since this is a new event
+      setSelectedEvent(null);
+      
+      // Store exact times for the modal to use
+      window.prefilledEventDates = {
+        startDate: exactStartDate,
+        endDate: exactEndDate,
+        title: event.title || 'New Event',
+        color: event.color || 'blue'
+      };
+    } else {
+      // Normal event editing
+      setSelectedEvent(event);
+      window.prefilledEventDates = null;
+    }
+    
+    setShowEventModal(true);
   }, [])
 
   const closeEventModal = useCallback(() => {

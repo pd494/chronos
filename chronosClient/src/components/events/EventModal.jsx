@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { format } from 'date-fns'
 import { FiX, FiTrash2 } from 'react-icons/fi'
 import { useCalendar } from '../../context/CalendarContext'
@@ -14,12 +14,18 @@ const EVENT_COLORS = [
 const EventModal = () => {
   const { 
     selectedEvent, 
-    closeEventModal,
+    closeEventModal: originalCloseEventModal,
     createEvent,
     updateEvent,
     deleteEvent,
     currentDate
   } = useCalendar()
+  
+  const closeEventModal = useCallback(() => {
+    // Clear prefilled dates when closing
+    window.prefilledEventDates = null
+    originalCloseEventModal()
+  }, [originalCloseEventModal])
   
   const [title, setTitle] = useState('')
   const [startDate, setStartDate] = useState('')
@@ -29,38 +35,80 @@ const EventModal = () => {
   const [color, setColor] = useState('blue')
   
   useEffect(() => {
-    if (selectedEvent) {
-      // Editing existing event
-      const start = new Date(selectedEvent.start)
-      const end = new Date(selectedEvent.end)
+    try {
+      if (selectedEvent) {
+        // Editing existing event
+        const start = new Date(selectedEvent.start)
+        const end = new Date(selectedEvent.end)
+        
+        setTitle(selectedEvent.title)
+        setStartDate(format(start, 'yyyy-MM-dd'))
+        setStartTime(format(start, 'HH:mm'))
+        setEndDate(format(end, 'yyyy-MM-dd'))
+        setEndTime(format(end, 'HH:mm'))
+        setColor(selectedEvent.color)
+      } else if (window.prefilledEventDates) {
+        // Creating new event from drag-to-create with prefilled dates
+        const { startDate: dragStartDate, endDate: dragEndDate, title: dragTitle, color: dragColor } = window.prefilledEventDates
+        
+        // Ensure we have valid Date objects
+        const startDate = dragStartDate instanceof Date ? dragStartDate : new Date(dragStartDate)
+        const endDate = dragEndDate instanceof Date ? dragEndDate : new Date(dragEndDate)
+        
+        // Log for debugging
+        console.log('Setting up event modal with:', {
+          startDate: startDate.toString(),
+          endDate: endDate.toString()
+        })
+        
+        // Set form values from drag times
+        setTitle(dragTitle || '')
+        setStartDate(format(startDate, 'yyyy-MM-dd'))
+        setStartTime(format(startDate, 'HH:mm'))
+        setEndDate(format(endDate, 'yyyy-MM-dd'))
+        setEndTime(format(endDate, 'HH:mm'))
+        setColor(dragColor || 'blue')
       
-      setTitle(selectedEvent.title)
-      setStartDate(format(start, 'yyyy-MM-dd'))
-      setStartTime(format(start, 'HH:mm'))
-      setEndDate(format(end, 'yyyy-MM-dd'))
-      setEndTime(format(end, 'HH:mm'))
-      setColor(selectedEvent.color)
-    } else {
-      // Creating new event
-      const now = new Date(currentDate)
-      const later = new Date(now)
-      later.setHours(now.getHours() + 1)
-      
-      setTitle('')
-      setStartDate(format(now, 'yyyy-MM-dd'))
-      setStartTime(format(now, 'HH:mm'))
-      setEndDate(format(now, 'yyyy-MM-dd'))
-      setEndTime(format(later, 'HH:mm'))
-      setColor('blue')
+      } else {
+        // Creating new event
+        const now = new Date(currentDate)
+        const later = new Date(now)
+        later.setHours(now.getHours() + 1)
+        
+        setTitle('')
+        setStartDate(format(now, 'yyyy-MM-dd'))
+        setStartTime(format(now, 'HH:mm'))
+        setEndDate(format(now, 'yyyy-MM-dd'))
+        setEndTime(format(later, 'HH:mm'))
+        setColor('blue')
+      }
+    } catch (error) {
+      console.error('Error setting up event modal:', error)
     }
   }, [selectedEvent, currentDate])
   
   const handleSubmit = (e) => {
     e.preventDefault()
     
-    const start = new Date(`${startDate}T${startTime}`)
-    const end = new Date(`${endDate}T${endTime}`)
+    // Log the input values to debug the issue
+    console.log('Form submission with values:', {
+      startDate, startTime, endDate, endTime
+    });
     
+    // Construct Date objects to preserve local times and avoid timezone offsets
+    const [startHour, startMinute] = startTime.split(':').map(Number)
+    const start = new Date(startDate)
+    start.setHours(startHour, startMinute, 0, 0)
+    
+    const [endHour, endMinute] = endTime.split(':').map(Number)
+    const end = new Date(endDate)
+    end.setHours(endHour, endMinute, 0, 0)
+    
+    console.log('Created date objects:', {
+      start: start.toString(),
+      end: end.toString()
+    });
+
     const eventData = {
       title,
       start,
@@ -68,12 +116,25 @@ const EventModal = () => {
       color
     }
     
+    // Clear prefilled dates
+    window.prefilledEventDates = null
+    
     if (selectedEvent) {
+      // Update the event with the new data
       updateEvent(selectedEvent.id, eventData)
+      
+      // Log the updated event for debugging
+      console.log('Updated event:', {
+        id: selectedEvent.id,
+        ...eventData
+      })
     } else {
-      createEvent(eventData)
+      // Create a new event
+      const newEvent = createEvent(eventData)
+      console.log('Created new event:', newEvent)
     }
     
+    // Close modal immediately to avoid flickering
     closeEventModal()
   }
   

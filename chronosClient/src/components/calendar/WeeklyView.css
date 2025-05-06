@@ -1,0 +1,54 @@
+/* WeeklyView.css */
+
+.time-grid-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background-color: #e5e5ea;
+  z-index: 1;
+}
+
+.current-time-indicator {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background-color: #ff3b30;
+  z-index: 10;
+}
+
+.current-time-indicator::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: -4px;
+  width: 10px;
+  height: 10px;
+  background-color: #ff3b30;
+  border-radius: 50%;
+}
+
+/* Drag-to-create styles */
+.hour-cell {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  cursor: pointer;
+}
+
+.hour-cell:hover {
+  background-color: rgba(0, 122, 255, 0.05);
+}
+
+.drag-selection {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background-color: rgba(0, 122, 255, 0.3);
+  border: 2px solid #007aff;
+  border-radius: 4px;
+  z-index: 5;
+  pointer-events: none;
+}

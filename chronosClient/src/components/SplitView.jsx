@@ -1,10 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { FiChevronsLeft, FiChevronsRight } from 'react-icons/fi'
-import { Resizable } from 'react-resizable'
-import 'react-resizable/css/styles.css'
 
 const SplitView = ({ sidebar, main, onSidebarWidthChange }) => {
-  const frameIdRef = useRef(null)
+  const sidebarRef = useRef(null)
   const [sidebarVisible, setSidebarVisible] = useState(true)
   const [sidebarWidth, setSidebarWidth] = useState(320)
   
@@ -27,42 +25,42 @@ const SplitView = ({ sidebar, main, onSidebarWidthChange }) => {
     }
   }, [sidebarWidth, sidebarVisible, onSidebarWidthChange])
   
-  const onResizeStop = useCallback((event, { size }) => {
-    setSidebarWidth(size.width)
-  }, [])
-  
-  const onResize = useCallback((event, { size }) => {
-    const newWidth = size.width
-    if (frameIdRef.current) cancelAnimationFrame(frameIdRef.current)
-    frameIdRef.current = requestAnimationFrame(() => {
-      setSidebarWidth(newWidth)
-      frameIdRef.current = null
-    })
-  }, [])
+  // Mouse drag handler for smooth resizing without React renders
+  const startDrag = useCallback((e) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = sidebarRef.current.getBoundingClientRect().width;
+    const onMouseMove = (e) => {
+      const newW = Math.max(100, startW + (e.clientX - startX));
+      sidebarRef.current.style.width = `${newW}px`;
+      const hdr = document.getElementById('header-tabs-wrapper');
+      if (hdr) hdr.style.width = `${newW}px`;
+    };
+    const onMouseUp = () => {
+      const finalW = sidebarRef.current.getBoundingClientRect().width;
+      setSidebarWidth(finalW);
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  }, []);
   
   return (
     <div className="flex flex-1 overflow-hidden relative">
       {/* Resizable Sidebar */}
       {sidebarVisible && (
-        <Resizable
-          width={sidebarWidth}
-          height={0} // Height will be determined by the parent
-          onResize={onResize}
-          onResizeStop={onResizeStop}
-          minConstraints={[250, 0]}
-          maxConstraints={[500, 0]}
-          resizeHandles={['e']}
-          handle={
-            <div className="h-full w-2 bg-gray-200 dark:bg-gray-700 absolute right-0 top-0 cursor-col-resize hover:bg-blue-300 dark:hover:bg-blue-600 z-10" />
-          }
+        <div
+          ref={sidebarRef}
+          className="h-full relative overflow-hidden bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col"
+          style={{ width: `${sidebarWidth}px` }}
         >
+          {sidebar}
           <div
-            className="h-full overflow-hidden bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col"
-            style={{ width: `${sidebarWidth}px` }}
-          >
-            {sidebar}
-          </div>
-        </Resizable>
+            onMouseDown={startDrag}
+            className="absolute right-0 top-0 h-full w-2 bg-gray-200 dark:bg-gray-700 cursor-col-resize hover:bg-blue-300 dark:hover:bg-blue-600 z-10"
+          />
+        </div>
       )}
       
       {/* Toggle button */}

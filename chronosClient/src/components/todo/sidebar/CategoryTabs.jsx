@@ -60,6 +60,9 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, onAddCateg
       setNewCategoryName('');
       setSelectedEmoji('●');
       setIsAddingCategory(false);
+      
+      // If we're in the All tab, we want to stay there to see the new category
+      // This is handled by the parent component
     }
   };
   
@@ -109,8 +112,8 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, onAddCateg
   return (
     <div className={`category-tabs-container ${isCompact ? 'compact' : ''} ${inHeader ? 'in-header' : ''}`} ref={tabsContainerRef}>
       <div className="category-tabs-horizontal">
-        {/* Regular category tabs */}
-        {categories.filter(cat => cat.id !== 'add-category').map(category => (
+        {/* Regular category tabs - hide when adding a new category */}
+        {!isAddingCategory && categories.filter(cat => cat.id !== 'add-category').map(category => (
           <div
             key={category.id}
             className={`category-tab-horizontal ${activeCategory === category.name ? 'active' : ''}`}

@@ -4,8 +4,9 @@ import { useCalendar } from '../../context/CalendarContext'
 const WeekEvent = ({ event, hourHeight, dayStartHour }) => {
   const { openEventModal } = useCalendar()
   
-  const startDate = new Date(event.start)
-  const endDate = new Date(event.end)
+  // Ensure we're working with proper Date objects
+  const startDate = event.start instanceof Date ? event.start : new Date(event.start)
+  const endDate = event.end instanceof Date ? event.end : new Date(event.end)
   
   const startHour = startDate.getHours()
   const startMinute = startDate.getMinutes()

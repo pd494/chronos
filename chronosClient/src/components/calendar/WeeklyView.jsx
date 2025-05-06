@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { format, isSameDay, isToday, getHours, getMinutes, getDay, addDays } from 'date-fns'
 import { useCalendar } from '../../context/CalendarContext'
 import WeekEvent from '../events/WeekEvent'
+import './WeeklyView.css'
 
 const HOUR_HEIGHT = 60 // Height of one hour in pixels
 const DAY_START_HOUR = 0 // Start displaying from 12 AM
@@ -14,7 +15,8 @@ const WeeklyView = () => {
     getDaysInWeek,
     navigateToNext,
     navigateToPrevious,
-    selectDate
+    selectDate,
+    openEventModal
   } = useCalendar()
   
   const [days, setDays] = useState(getDaysInWeek(currentDate))
@@ -23,6 +25,12 @@ const WeeklyView = () => {
   const [isScrolling, setIsScrolling] = useState(false)
   const scrollThreshold = 50
   const timelineRef = useRef(null)
+  
+  // State for drag-to-create event functionality
+  const [isDragging, setIsDragging] = useState(false)
+  const [dragStart, setDragStart] = useState(null)
+  const [dragEnd, setDragEnd] = useState(null)
+  const [dragDay, setDragDay] = useState(null)
   
   useEffect(() => {
     setDays(getDaysInWeek(currentDate))
@@ -111,14 +119,87 @@ const WeeklyView = () => {
     touchStartX.current = null
   }
   
-  // Get events for this week
-  const weekEvents = events.filter(event => {
-    const eventDay = getDay(new Date(event.start))
-    const weekStart = getDay(days[0])
-    const dayDiff = (eventDay - weekStart + 7) % 7
+  // Basic drag-to-create functionality
+  const handleMouseDown = (e, day, hour) => {
+    if (e.button !== 0) return // Only handle left mouse button
     
-    return dayDiff < 7 && dayDiff >= 0
-  })
+    // Get minutes from mouse position for more precise time
+    const rect = e.currentTarget.getBoundingClientRect()
+    const relativeY = e.clientY - rect.top
+    const minutePercentage = (relativeY % HOUR_HEIGHT) / HOUR_HEIGHT
+    const minutes = Math.floor(minutePercentage * 60)
+    
+    // Set drag state with hour and minute precision
+    setIsDragging(true)
+    setDragDay(day)
+    setDragStart(hour + (minutes / 60))
+    setDragEnd(hour + (minutes / 60))
+  }
+
+  const handleMouseMove = (e, day, hour) => {
+    if (!isDragging) return
+    
+    // Update the end hour with more precision
+    // Get minutes from mouse position for more precise time
+    const rect = e.currentTarget.getBoundingClientRect()
+    const relativeY = e.clientY - rect.top
+    const minutePercentage = (relativeY % HOUR_HEIGHT) / HOUR_HEIGHT
+    const minutes = Math.floor(minutePercentage * 60)
+    
+    // Store both hour and minutes
+    setDragEnd(hour + (minutes / 60))
+  }
+
+  const handleMouseUp = () => {
+    if (!isDragging) return
+    
+    // Make sure start is before end
+    const startValue = Math.min(dragStart, dragEnd)
+    const endValue = Math.max(dragStart, dragEnd)
+    
+    // If drag is too small, default to 30 minutes
+    const adjustedEndValue = (endValue === startValue) ? startValue + 0.5 : endValue
+    
+    // Extract hours and minutes
+    const startHour = Math.floor(startValue)
+    const startMinute = Math.floor((startValue - startHour) * 60)
+    
+    const endHour = Math.floor(adjustedEndValue)
+    const endMinute = Math.floor((adjustedEndValue - endHour) * 60)
+    
+    // Create dates for the event
+    const startDate = new Date(dragDay)
+    startDate.setHours(startHour, startMinute, 0, 0)
+    
+    const endDate = new Date(dragDay)
+    endDate.setHours(endHour, endMinute, 0, 0)
+    
+    // Create the event object
+    const newEvent = {
+      id: `temp-${Date.now()}`,
+      title: 'New Event',
+      start: startDate,
+      end: endDate,
+      color: 'blue'
+    }
+    
+    // Open the event modal with our event data
+    openEventModal(newEvent, true)
+    
+    // Reset drag state
+    setIsDragging(false)
+    setDragStart(null)
+    setDragEnd(null)
+    setDragDay(null)
+  }
+  
+  // Get events for this week - ensure we're using proper Date objects
+  // Process events to ensure all date objects are properly instantiated
+  const weekEvents = events.map(event => ({
+    ...event,
+    start: event.start instanceof Date ? event.start : new Date(event.start),
+    end: event.end instanceof Date ? event.end : new Date(event.end)
+  }))
   
   // Generate time slots
   const hours = []
@@ -199,10 +280,45 @@ const WeeklyView = () => {
                 key={dayIndex}
                 className="relative border-r border-gray-200 dark:border-gray-700 min-h-full"
                 style={{ height: `${(DAY_END_HOUR - DAY_START_HOUR + 1) * HOUR_HEIGHT}px` }}
+                onMouseUp={handleMouseUp}
               >
+                {/* Hour cells for drag-to-create */}
+                {hours.map((hour) => (
+                  <div
+                    key={hour}
+                    className="hour-cell"
+                    data-hour={hour}
+                    data-day={format(day, 'yyyy-MM-dd')}
+                    style={{
+                      height: `${HOUR_HEIGHT}px`,
+                      top: `${(hour - DAY_START_HOUR) * HOUR_HEIGHT}px`
+                    }}
+                    onMouseDown={(e) => handleMouseDown(e, day, hour)}
+                    onMouseMove={(e) => handleMouseMove(e, day, hour)}
+                  />
+                ))}
+                
+                {/* Drag selection indicator */}
+                {isDragging && dragDay && isSameDay(dragDay, day) && (
+                  <div
+                    className="drag-selection"
+                    style={{
+                      top: `${(Math.min(dragStart, dragEnd) - DAY_START_HOUR) * HOUR_HEIGHT}px`,
+                      height: `${Math.abs(dragEnd - dragStart) * HOUR_HEIGHT || HOUR_HEIGHT/4}px`,
+                      left: '2px',
+                      right: '2px',
+                      borderRadius: '6px',
+                      backgroundColor: 'rgba(0, 122, 255, 0.3)',
+                      border: '1px solid rgba(0, 122, 255, 0.5)',
+                      pointerEvents: 'none', // Ensure it doesn't interfere with mouse events
+                      zIndex: 10
+                    }}
+                  />
+                )}
+                
                 {/* Events for this day */}
                 {weekEvents
-                  .filter(event => isSameDay(new Date(event.start), day))
+                  .filter(event => isSameDay(event.start, day))
                   .map(event => (
                     <WeekEvent 
                       key={event.id} 

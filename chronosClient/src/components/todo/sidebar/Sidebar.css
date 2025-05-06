@@ -9,10 +9,10 @@
   overflow-x: hidden;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   box-shadow: 0 0 10px rgba(0, 0, 0, 0.05);
-  padding-left: 8px;
+  padding-left: 16px;
   padding-right: 8px;
   position: relative;
-  transition: width 0.2s ease;
+  /* removed transition to avoid lag during resize */
   will-change: width;
 }
 
@@ -53,4 +53,39 @@
 
 .sidebar.collapsed .sidebar-toggle-icon {
   transform: rotate(-135deg); /* Points left when sidebar is collapsed */
+}
+
+.all-category-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px 8px 18px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  margin-bottom: 8px;
+  position: relative;
+}
+
+/* Removed the line below All */
+
+.category-title-all {
+  font-size: 20px; /* Bigger text for All */
+  font-weight: 600;
+  color: #000000;
+}
+
+.all-tab-task-input {
+  margin-top: 2px; /* Reduced distance between All and textbox */
+  margin-bottom: 16px;
+  animation: slideDown 0.2s ease-out;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }

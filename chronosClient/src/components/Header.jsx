@@ -24,8 +24,9 @@ const Header = ({
   // Header no longer manages categories as they're moved to App level
 
   return (
-    <header className="flex items-center h-12 bg-white dark:bg-gray-800" style={{ WebkitAppRegion: 'drag' }}>
-      <div className="flex items-center justify-end w-full" style={{ WebkitAppRegion: 'no-drag' }}>
+    <header className="flex items-center h-12 bg-white dark:bg-gray-800" style={{ WebkitAppRegion: 'drag', paddingTop: '6px' }}>
+      <div className="flex items-center justify-end w-full">
+        {/* Controls inside buttons will automatically be no-drag */}
 
         {/* Navigation controls moved to App level */}
 
@@ -35,6 +36,7 @@ const Header = ({
           <button
             onClick={() => openEventModal()}
             className="px-2 py-1 text-xs bg-white border border-gray-300 dark:bg-gray-800 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
+            style={{ WebkitAppRegion: 'no-drag' }}
           >
             New Event
           </button>
@@ -47,6 +49,7 @@ const Header = ({
                   ? 'bg-gray-100 dark:bg-gray-700'
                   : 'bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700'
               }`}
+              style={{ WebkitAppRegion: 'no-drag', pointerEvents: 'auto' }}
             >
               Month
             </button>
@@ -58,6 +61,7 @@ const Header = ({
                   ? 'bg-gray-100 dark:bg-gray-700'
                   : 'bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700'
               }`}
+              style={{ WebkitAppRegion: 'no-drag', pointerEvents: 'auto' }}
             >
               Week
             </button>
@@ -69,6 +73,7 @@ const Header = ({
                   ? 'bg-gray-100 dark:bg-gray-700'
                   : 'bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700'
               }`}
+              style={{ WebkitAppRegion: 'no-drag', pointerEvents: 'auto' }}
             >
               Day
             </button>
