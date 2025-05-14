@@ -22,26 +22,52 @@ const DayEvent = ({ event, hourHeight, dayStartHour }) => {
     openEventModal(event)
   }
   
-  // Format time for display
+  // Format time for display - restore 12-hour format
   const formatTime = (date) => {
-    return format(date, 'h:mm')
+    return format(date, 'h:mm a')
   }
+  
+  // Get event color or default to blue
+  const eventColor = event.color || 'blue'
   
   return (
     <div
-      className={`absolute left-4 right-4 rounded p-2 overflow-hidden cursor-pointer event-${event.color} text-${event.color} z-10`}
+      className={`absolute left-4 right-4 rounded-lg p-2 overflow-hidden cursor-pointer
+                  text-sm z-10 group ${event.completed ? 'opacity-50 line-through' : ''}`}
       style={{
         top: `${top}px`,
         height: `${height}px`,
-        minHeight: '25px'
+        minHeight: '25px',
+        backgroundColor: `var(--color-${eventColor}-500)`,
+        opacity: 0.8, // Make more translucent
       }}
       onClick={handleClick}
     >
-      <div className="font-medium truncate">
-        {event.title}
-      </div>
-      <div className="text-xs">
-        {formatTime(startDate)}—{formatTime(endDate)}
+      {/* Vertical line */}
+      <div 
+        className="absolute left-0 top-0 bottom-0 w-1" 
+        style={{ 
+          backgroundColor: `var(--color-${eventColor}-900)`,
+        }}
+      ></div>
+      
+      <div className="ml-3"> {/* Add margin to accommodate for the vertical line */}
+        <div 
+          className="font-medium truncate mb-0.5" 
+          style={{ 
+            color: `var(--color-${eventColor}-900)` // Darker version of the event color
+          }}
+        >
+          {event.title}
+        </div>
+        <div 
+          className="text-xs"
+          style={{ 
+            color: `var(--color-${eventColor}-900)` // Darker version of the event color
+          }}
+        >
+          {formatTime(startDate)}
+        </div>
       </div>
     </div>
   )

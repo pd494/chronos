@@ -37,24 +37,24 @@
   display: flex;
   align-items: center;
   background: transparent;
-  padding-left: 8px;
+  padding-left: 0;
   width: 100%;
   overflow: hidden;
   white-space: nowrap;
-  margin-left: 2px;
 }
 
 .category-tabs-container.in-header .category-tabs-horizontal {
   background: transparent;
   padding: 0;
   height: 100%;
-  gap: 2px;
+  gap: 4px;
   align-items: center;
   flex-wrap: nowrap;
+  padding-left: 8px;
 }
 
 .category-tabs-container.in-header .category-tab-horizontal {
-  padding: 0 12px;
+  padding: 0 8px;
   height: 28px;
   border-radius: 4px;
   font-size: 13px;
@@ -63,6 +63,8 @@
   background-color: transparent;
   border: none;
   margin-right: 2px;
+  display: flex;
+  align-items: center;
 }
 
 .category-tabs-container.in-header .category-tab-horizontal.active {
@@ -123,7 +125,6 @@
 
 .category-tab-horizontal {
   background-color: inherit;
-
   scroll-snap-align: start;
 }
 
@@ -131,7 +132,6 @@
 .sidebar, .category-content, .category-items {
   overflow-x: hidden !important;
 }
-
 
 .menu-button {
   background: none;

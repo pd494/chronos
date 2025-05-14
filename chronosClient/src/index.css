@@ -6,22 +6,56 @@
   --color-bg: #ffffff;
   --color-text: #111827;
   --color-border: #e5e7eb;
+  --color-lavender: #d8b4fe;
+  
+  /* Event colors for light mode - lighter and more translucent */
   --color-event-blue: #dbeafe;
   --color-event-purple: #ede9fe;
   --color-event-orange: #ffedd5;
   --color-event-green: #d1fae5;
   --color-event-red: #fee2e2;
+  
+  /* Color variables for color picker - lighter shades */
+  --color-blue-500: #bfdbfe;    /* Even lighter blue */
+  --color-orange-500: #fed7aa;  /* Even lighter orange */
+  --color-violet-500: #ddd6fe;  /* Even lighter violet */
+  --color-rose-500: #fecaca;    /* Even lighter rose */
+  --color-emerald-500: #a7f3d0; /* Even lighter emerald */
+  
+  /* Darker variants for text and vertical lines */
+  --color-blue-900: #1e3a8a;    /* Darker blue */
+  --color-orange-900: #7c2d12;  /* Darker orange */
+  --color-violet-900: #4c1d95;  /* Darker violet */
+  --color-rose-900: #881337;    /* Darker rose */
+  --color-emerald-900: #064e3b; /* Darker emerald */
 }
 
 .dark {
   --color-bg: #111827;
   --color-text: #f3f4f6;
   --color-border: #374151;
+  --color-lavender: #a78bfa;
+  
+  /* Event colors for dark mode */
   --color-event-blue: #1e40af;
   --color-event-purple: #5b21b6;
   --color-event-orange: #9a3412;
   --color-event-green: #065f46;
   --color-event-red: #991b1b;
+  
+  /* Color variables for color picker in dark mode */
+  --color-blue-500: #3b82f6;
+  --color-orange-500: #f97316;
+  --color-violet-500: #8b5cf6;
+  --color-rose-500: #f43f5e;
+  --color-emerald-500: #10b981;
+  
+  /* Darker variants for text and vertical lines */
+  --color-blue-900: #1e3a8a;
+  --color-orange-900: #7c2d12;
+  --color-violet-900: #4c1d95;
+  --color-rose-900: #881337;
+  --color-emerald-900: #064e3b;
 }
 
 * {
@@ -127,11 +161,11 @@ body {
 .event-green { background-color: var(--color-event-green); }
 .event-red { background-color: var(--color-event-red); }
 
-.text-blue { color: #3b82f6; }
-.text-purple { color: #8b5cf6; }
-.text-orange { color: #f97316; }
-.text-green { color: #10b981; }
-.text-red { color: #ef4444; }
+.text-blue { color: var(--color-blue-900); }
+.text-purple { color: var(--color-violet-900); }
+.text-orange { color: var(--color-orange-900); }
+.text-green { color: var(--color-emerald-900); }
+.text-red { color: var(--color-rose-900); }
 
 .calendar-day {
   transition: background-color 0.2s ease;

@@ -34,12 +34,8 @@
   position: absolute;
   left: 0;
   right: 0;
+  cursor: default;
   z-index: 2;
-  cursor: pointer;
-}
-
-.hour-cell:hover {
-  background-color: rgba(0, 122, 255, 0.05);
 }
 
 .drag-selection {
@@ -51,4 +47,57 @@
   border-radius: 4px;
   z-index: 5;
   pointer-events: none;
+}
+
+.droppable-cell {
+  transition: background-color 0.2s ease;
+}
+
+.droppable-cell.sortable-ghost {
+  background-color: rgba(59, 130, 246, 0.1); /* Light blue highlight */
+}
+
+.droppable-cell.sortable-drag-active {
+  background-color: rgba(59, 130, 246, 0.2); /* Slightly darker highlight */
+}
+
+.droppable-cell.sortable-chosen {
+  background-color: rgba(59, 130, 246, 0.3); /* Even darker highlight */
+  animation: stick-pulse 0.5s ease-in-out infinite alternate;
+}
+
+/* Animation for the stick effect */
+@keyframes stick-pulse {
+  from {
+    background-color: rgba(59, 130, 246, 0.2);
+    transform: scale(1);
+  }
+  to {
+    background-color: rgba(59, 130, 246, 0.4);
+    transform: scale(1.02);
+  }
+}
+
+/* Style for tasks being dragged */
+.task-item.sortable-chosen {
+  opacity: 0.8;
+  transform: scale(0.95);
+  box-shadow: 0 0 15px rgba(59, 130, 246, 0.3);
+  z-index: 9999;
+}
+
+.task-item.sortable-ghost {
+  opacity: 0.4;
+}
+
+.task-ghost {
+  opacity: 0.4 !important;
+}
+
+.task-chosen {
+  background-color: rgba(59, 130, 246, 0.1);
+}
+
+.task-drag {
+  transform: rotate(2deg) !important;
 }

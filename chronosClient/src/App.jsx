@@ -5,12 +5,14 @@ import MonthlyView from './components/calendar/MonthlyView'
 import WeeklyView from './components/calendar/WeeklyView'
 import DailyView from './components/calendar/DailyView'
 import Sidebar from './components/todo/sidebar/Sidebar'
-import CategoryTabs from './components/todo/sidebar/CategoryTabs'
-
-import EventModal from './components/events/EventModal'
-import { useCalendar } from './context/CalendarContext'
+import FloatingChatBar from './components/FloatingChatBar'
 import { TaskProvider } from './context/TaskContext'
 import { FiSun, FiMoon } from 'react-icons/fi'
+import CategoryTabs from './components/todo/sidebar/CategoryTabs'
+import EventModal from './components/events/EventModal'
+
+import { useCalendar } from './context/CalendarContext'
+import './components/header.css'
 
 function App() {
   const { view, showEventModal, changeView } = useCalendar()
@@ -57,6 +59,11 @@ function App() {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
         return;
       }
+
+      // If the event modal is open, let its internal shortcuts handle the key press.
+      if (showEventModal) {
+        return;
+      }
       
       switch (e.key.toLowerCase()) {
         case 'm':
@@ -85,7 +92,7 @@ function App() {
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [changeView]);
+  }, [changeView, showEventModal]);
 
   const toggleDarkMode = () => {
     setIsDarkMode(!isDarkMode)
@@ -157,13 +164,13 @@ function App() {
   return (
     <TaskProvider>
       <div className="h-full flex flex-col">
-        <div className="header-container flex flex-col relative">
-          {/* Position the header tabs area and the header side by side */}
-          <div className="flex w-full h-12 border-b border-gray-200 dark:border-gray-700">
-            {/* Category tabs section - expands/collapses with sidebar */}
+        <div className="header-container">
+          {/* Position the header areas side by side */}
+          <div className="flex w-full items-center bg-white dark:bg-gray-800">
+            {/* Category tabs section - positioned on the left with added space for Window controls */}
             <div 
               id="header-tabs-wrapper"
-              className="h-full flex items-center bg-white dark:bg-gray-800 overflow-hidden border-r border-gray-200 dark:border-gray-700"
+              className="flex-shrink-0 flex items-center bg-white dark:bg-gray-800 overflow-hidden border-r border-gray-200 dark:border-gray-700"
               style={{ width: sidebarVisible ? sidebarWidth + 'px' : '0' }}
             >
               <CategoryTabs
@@ -204,6 +211,7 @@ function App() {
           onSidebarWidthChange={handleSidebarChange}
         />
         {showEventModal && <EventModal />}
+        {!showEventModal && <FloatingChatBar />}
       </div>
     </TaskProvider>
   )

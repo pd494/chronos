@@ -26,6 +26,7 @@ async def get_user(user = Depends(get_current_user)):
 async def protected_route(user = Depends(get_current_user)):
     return {"message": "This is a protected route", "user_id": user.id}
 
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(

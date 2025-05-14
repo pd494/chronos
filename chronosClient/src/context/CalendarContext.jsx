@@ -119,7 +119,9 @@ export const CalendarProvider = ({ children }) => {
     return savedEvents ? JSON.parse(savedEvents).map(event => ({
       ...event,
       start: new Date(event.start),
-      end: new Date(event.end)
+      end: new Date(event.end),
+      // Ensure all events have a color property
+      color: event.color || 'blue'
     })) : initialEvents
   })
   const [selectedEvent, setSelectedEvent] = useState(null)
@@ -180,7 +182,9 @@ export const CalendarProvider = ({ children }) => {
     const processedData = {
       ...eventData,
       start: eventData.start instanceof Date ? eventData.start : new Date(eventData.start),
-      end: eventData.end instanceof Date ? eventData.end : new Date(eventData.end)
+      end: eventData.end instanceof Date ? eventData.end : new Date(eventData.end),
+      // Make sure color is always set
+      color: eventData.color || 'blue'
     };
     
     const newEvent = {
@@ -231,6 +235,23 @@ export const CalendarProvider = ({ children }) => {
     setEvents(prev => prev.filter(event => event.id !== id))
   }, [])
 
+  const toggleEventComplete = useCallback((id) => {
+    setEvents(prev => {
+      const updatedEvents = prev.map(event => 
+        event.id === id ? { ...event, completed: !event.completed } : event
+      );
+      // Update localStorage for persistence
+      localStorage.setItem('calendarEvents', JSON.stringify(updatedEvents));
+      
+      // If the currently selected event is being toggled, update it
+      if (selectedEvent && selectedEvent.id === id) {
+        setSelectedEvent(prev => ({ ...prev, completed: !prev.completed }));
+      }
+      
+      return updatedEvents;
+    });
+  }, [selectedEvent]);
+
   const openEventModal = useCallback((event = null, isNewEvent = false) => {
     // If this is a new drag-created event
     if (isNewEvent && event) {
@@ -255,12 +276,37 @@ export const CalendarProvider = ({ children }) => {
         startDate: exactStartDate,
         endDate: exactEndDate,
         title: event.title || 'New Event',
-        color: event.color || 'blue'
+        color: event.color || 'blue',
+        noAutoFocus: true // Add flag to prevent auto-focusing
       };
-    } else {
+    } else if (event) {
       // Normal event editing
       setSelectedEvent(event);
       window.prefilledEventDates = null;
+    } else {
+      // Called from the + Event button in header with no event
+      setSelectedEvent(null);
+      
+      // Create a default new event starting at the current hour, lasting 1 hour
+      const now = new Date();
+      const startDate = new Date(now);
+      startDate.setMinutes(0, 0, 0); // Round to the current hour
+      
+      const endDate = new Date(startDate);
+      endDate.setHours(startDate.getHours() + 1); // 1 hour duration
+      
+      // Create default prefilled event
+      window.prefilledEventDates = {
+        startDate,
+        endDate,
+        title: 'New Event',
+        color: 'blue'
+      };
+      
+      console.log('Opening new event modal from button:', {
+        start: startDate.toLocaleString(),
+        end: endDate.toLocaleString()
+      });
     }
     
     setShowEventModal(true);
@@ -302,6 +348,7 @@ export const CalendarProvider = ({ children }) => {
     createEvent,
     updateEvent,
     deleteEvent,
+    toggleEventComplete,
     openEventModal,
     closeEventModal,
     formatDateHeader,

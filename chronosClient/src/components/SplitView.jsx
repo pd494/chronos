@@ -47,7 +47,7 @@ const SplitView = ({ sidebar, main, onSidebarWidthChange }) => {
   }, []);
   
   return (
-    <div className="flex flex-1 overflow-hidden relative">
+    <div className="flex flex-1 overflow-hidden relative border-t border-gray-200 dark:border-gray-700">
       {/* Resizable Sidebar */}
       {sidebarVisible && (
         <div

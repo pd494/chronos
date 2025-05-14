@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState } from 'react';
+import { useCalendar } from './CalendarContext';
 
 const TaskContext = createContext();
 
@@ -11,6 +12,9 @@ export const TaskProvider = ({ children }) => {
     { id: 3, text: 'Review quarterly goals', completed: false, category: 'Today' },
     { id: 4, text: 'Update documentation', completed: false, category: 'Inbox' },
   ]);
+  
+  // Get the calendar context to create events
+  const calendar = useCalendar();
   
   // Get today's date as a number for the Today icon
   const getTodayDateNumber = () => {
@@ -75,9 +79,48 @@ export const TaskProvider = ({ children }) => {
   };
 
   const addTaskToCalendar = (taskId, date) => {
-    // This function will be implemented to add a task to the calendar
-    console.log(`Adding task ${taskId} to calendar on ${date}`);
-    // For now, just log the action
+    // Convert task to calendar event
+    const task = tasks.find(t => t.id.toString() === taskId.toString());
+    
+    if (!task) {
+      console.error(`Task with ID ${taskId} not found`);
+      return;
+    }
+    
+    // Parse the date (format is expected to be YYYY-MM-DD)
+    const targetDate = new Date(date);
+    
+    // Set default start and end times (1 hour event starting at noon)
+    targetDate.setHours(12, 0, 0, 0);
+    const endDate = new Date(targetDate);
+    endDate.setHours(13, 0, 0, 0);
+    
+    // Generate a random color from available options
+    const colors = ['blue', 'orange', 'violet', 'rose', 'emerald'];
+    const randomColor = colors[Math.floor(Math.random() * colors.length)];
+    
+    // Create the event
+    const newEvent = {
+      id: `task-${task.id}-${Date.now()}`,
+      title: task.text,
+      start: targetDate,
+      end: endDate,
+      color: randomColor,
+      description: `Converted from task: ${task.text}`,
+      fromTask: task.id // Reference to original task
+    };
+    
+    // Add the event to the calendar
+    if (calendar && calendar.createEvent) {
+      calendar.createEvent(newEvent);
+      
+      // Optionally, mark the task as completed
+      toggleTaskComplete(task.id);
+    } else {
+      console.error('Calendar context not available or missing createEvent method');
+    }
+    
+    console.log(`Added task ${taskId} to calendar on ${date}`);
   };
 
   return (

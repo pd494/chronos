@@ -1,0 +1,198 @@
+/* Header alignment styles */
+.header-container {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  z-index: 10;
+  border-bottom: 1px solid #e5e5ea;
+}
+
+/* Ensure all header elements are vertically centered */
+.header-container header,
+.header-container .flex {
+  height: 48px;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+}
+
+/* Category tabs in header */
+#header-tabs-wrapper {
+  height: 48px;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: nowrap;
+  padding-left: 70px; /* Much more padding to avoid OS controls */
+  transition: width 0.3s ease;
+}
+
+/* Main header */
+header {
+  height: 48px;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  background-color: white;
+}
+
+/* Make buttons the same height */
+header button,
+.category-tab-horizontal {
+  height: 28px;
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+/* Navigation buttons style */
+header .navigation-buttons {
+  display: flex;
+  align-items: center;
+  height: 28px;
+  margin-left: 8px; /* Add space after month */
+}
+
+header .navigation-buttons button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  width: 28px;
+  padding: 0;
+}
+
+/* Date format text */
+header .current-date {
+  font-size: 18px;
+  font-weight: 600;
+  margin-right: 2px;
+}
+
+/* Today button - after arrows now, no border or background */
+header .today-button {
+  margin-left: 8px;
+  background: transparent !important;
+  border: none !important;
+  font-size: 16px !important;
+  font-weight: 500 !important;
+  color: grey !important;
+  padding: 0 4px !important;
+  display: flex;
+  align-items: center;
+  height: 28px;
+}
+
+/* Clean button styles (no border/box) */
+header .clean-button {
+  background: transparent !important;
+  border: none !important;
+  color: #333 !important;
+  padding: 0 8px !important;
+  font-size: 14px !important;
+  font-weight: 500 !important;
+  display: flex;
+  align-items: center;
+  margin-right: 4px;
+}
+
+/* Share button with lavender color but blue button style */
+header .share-button {
+  background-color: #e6e6fa !important; /* Lavender color */
+  border: none !important;
+  border-radius: 18px !important; /* More rounded corners */
+  padding: 4px 16px !important;
+  color: #5f5f7b !important;
+  font-weight: 500 !important;
+  font-size: 14px !important;
+  margin-left: 8px;
+  color: white !important;
+  background-color: rgb(159 134 255 / var(--tw-text-opacity, 1)) !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1) !important;
+}
+
+header .share-button:hover {
+  background-color: #d8d8f0 !important; /* Slightly darker on hover */
+}
+
+/* Dark mode icon should be smaller */
+header .dark-mode-button {
+  font-size: 18px !important;
+  width: 32px !important;
+  height: 32px !important;
+  padding: 6px !important;
+}
+
+header .dark-mode-button svg {
+  width: 18px !important;
+  height: 18px !important;
+}
+
+/* Completely redone dropdown styles */
+.view-dropdown-menu {
+  position: fixed !important;
+  top: 48px !important;
+  right: auto !important;
+  z-index: 9999 !important;
+  background-color: white !important;
+  border-radius: 8px !important;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15) !important;
+  border: 1px solid rgba(0, 0, 0, 0.1) !important;
+  overflow: hidden !important;
+  width: 140px !important;
+  display: block !important;
+}
+
+.view-dropdown-menu button {
+  display: flex !important;
+  justify-content: space-between !important;
+  width: 100% !important;
+  text-align: left !important;
+  padding: 10px 16px !important;
+  border: none !important;
+  background-color: transparent !important;
+  font-size: 14px !important;
+  border-radius: 0 !important;
+  transition: background-color 0.2s !important;
+  margin: 0 !important;
+}
+
+.view-dropdown-menu button:hover {
+  background-color: #f5f5f5 !important;
+}
+
+.view-dropdown-menu button.active {
+  background-color: #f0f0f0 !important;
+  font-weight: 500 !important;
+}
+
+.keyboard-shortcut {
+  color: #999 !important;
+  font-size: 12px !important;
+  font-weight: normal !important;
+  margin-left: 8px !important;
+}
+
+.dark .view-dropdown-menu {
+  background-color: #2c2c2e !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+.dark .view-dropdown-menu button:hover {
+  background-color: #3c3c3e !important;
+}
+
+.dark .view-dropdown-menu button.active {
+  background-color: #3a3a3c !important;
+}
+
+.dark header,
+.dark #header-tabs-wrapper {
+  background-color: #1c1c1e;
+  border-color: #2c2c2e;
+} 

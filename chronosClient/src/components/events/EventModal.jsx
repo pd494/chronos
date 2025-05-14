@@ -1,287 +1,402 @@
-import { useState, useEffect, useCallback } from 'react'
-import { format } from 'date-fns'
-import { FiX, FiTrash2 } from 'react-icons/fi'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { format, parse } from 'date-fns'
+import { 
+  FiX, FiTrash2, FiUsers, FiMapPin, FiClock, FiCheckCircle, FiCheck, FiCalendar, FiChevronDown
+  // Removed unused icons like FiVideo, FiRefreshCw, FiLock, FiBell, FiMoreHorizontal, FiBriefcase
+} from 'react-icons/fi'
 import { useCalendar } from '../../context/CalendarContext'
 
-const EVENT_COLORS = [
-  { name: 'blue', label: 'Blue' },
-  { name: 'purple', label: 'Purple' },
-  { name: 'green', label: 'Green' },
-  { name: 'orange', label: 'Orange' },
-  { name: 'red', label: 'Red' }
-]
+// Define color options directly
+const COLOR_OPTIONS = [
+  { id: 'blue', name: 'Blue', value: 'blue' },
+  { id: 'green', name: 'Green', value: 'green' },
+  { id: 'orange', name: 'Orange', value: 'orange' },
+  { id: 'purple', name: 'Purple', value: 'purple' },
+  { id: 'red', name: 'Red', value: 'red' }
+];
 
 const EventModal = () => {
   const { 
     selectedEvent, 
-    closeEventModal: originalCloseEventModal,
+    closeEventModal: contextCloseEventModal, // Renamed to avoid conflict
     createEvent,
     updateEvent,
     deleteEvent,
-    currentDate
+    // currentDate, // Not directly used in this modal's state logic anymore for new events
+    toggleEventComplete
   } = useCalendar()
   
-  const closeEventModal = useCallback(() => {
-    // Clear prefilled dates when closing
-    window.prefilledEventDates = null
-    originalCloseEventModal()
-  }, [originalCloseEventModal])
-  
-  const [title, setTitle] = useState('')
-  const [startDate, setStartDate] = useState('')
-  const [startTime, setStartTime] = useState('')
-  const [endDate, setEndDate] = useState('')
-  const [endTime, setEndTime] = useState('')
+  const [eventName, setEventName] = useState('')
+  const [eventDate, setEventDate] = useState(format(new Date(), 'yyyy-MM-dd'))
+  const [timeStart, setTimeStart] = useState('10:30')
+  const [timeEnd, setTimeEnd] = useState('11:45')
   const [color, setColor] = useState('blue')
+  const [isAllDay, setIsAllDay] = useState(false)
+  const [location, setLocation] = useState('')
+  const [completed, setCompleted] = useState(false)
+  const [internalVisible, setInternalVisible] = useState(false)
+  const titleInputRef = useRef(null)
+
+  useEffect(() => {
+    // Animate in when the component is mounted
+    requestAnimationFrame(() => {
+      setInternalVisible(true);
+    });
+  }, []);
+
+  const closeAndAnimateOut = useCallback(() => {
+    setInternalVisible(false);
+    setTimeout(() => {
+      window.prefilledEventDates = null; // Clear prefilled dates on close
+      contextCloseEventModal();
+    }, 300); // Match animation duration
+  }, [contextCloseEventModal]);
+  
+  // Set up keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      // Close on Escape
+      if (e.key === 'Escape') {
+        closeAndAnimateOut();
+        return; // Prevent further processing for Escape
+      }
+
+      // Don't block global shortcuts like W/D/M when modal is closing
+      if (!internalVisible) return;
+      
+      // Stop propagation for all keyboard events when modal is visible
+      // This prevents global shortcuts from firing
+      e.stopPropagation();
+      
+      // These shortcuts should only apply if there's a selected event
+      // for delete operations
+      if (selectedEvent) {
+        // Delete on Backspace or Delete
+        if ((e.key === 'Backspace' || e.key === 'Delete') && (e.ctrlKey || e.metaKey)) {
+          handleDelete(); // handleDelete itself will call closeAndAnimateOut
+        }
+        
+        // Toggle complete on 'd' key
+        if (e.key === 'd' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+          toggleEventComplete(selectedEvent.id);
+        }
+      }
+    };
+    
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [selectedEvent, closeAndAnimateOut, toggleEventComplete, deleteEvent, internalVisible]);
   
   useEffect(() => {
-    try {
-      if (selectedEvent) {
-        // Editing existing event
-        const start = new Date(selectedEvent.start)
-        const end = new Date(selectedEvent.end)
-        
-        setTitle(selectedEvent.title)
-        setStartDate(format(start, 'yyyy-MM-dd'))
-        setStartTime(format(start, 'HH:mm'))
-        setEndDate(format(end, 'yyyy-MM-dd'))
-        setEndTime(format(end, 'HH:mm'))
-        setColor(selectedEvent.color)
-      } else if (window.prefilledEventDates) {
-        // Creating new event from drag-to-create with prefilled dates
-        const { startDate: dragStartDate, endDate: dragEndDate, title: dragTitle, color: dragColor } = window.prefilledEventDates
-        
-        // Ensure we have valid Date objects
-        const startDate = dragStartDate instanceof Date ? dragStartDate : new Date(dragStartDate)
-        const endDate = dragEndDate instanceof Date ? dragEndDate : new Date(dragEndDate)
-        
-        // Log for debugging
-        console.log('Setting up event modal with:', {
-          startDate: startDate.toString(),
-          endDate: endDate.toString()
-        })
-        
-        // Set form values from drag times
-        setTitle(dragTitle || '')
-        setStartDate(format(startDate, 'yyyy-MM-dd'))
-        setStartTime(format(startDate, 'HH:mm'))
-        setEndDate(format(endDate, 'yyyy-MM-dd'))
-        setEndTime(format(endDate, 'HH:mm'))
-        setColor(dragColor || 'blue')
+    let initialEventName = 'New Event';
+    let initialEventDate = format(new Date(), 'yyyy-MM-dd');
+    let initialTimeStart = '10:30';
+    let initialTimeEnd = '11:45';
+    let initialColor = 'blue';
+    let initialIsAllDay = false;
+    let initialLocation = '';
+    let initialCompleted = false;
+
+    if (selectedEvent) {
+      // Editing existing event
+      const start = new Date(selectedEvent.start);
+      const end = new Date(selectedEvent.end);
       
-      } else {
-        // Creating new event
-        const now = new Date(currentDate)
-        const later = new Date(now)
-        later.setHours(now.getHours() + 1)
-        
-        setTitle('')
-        setStartDate(format(now, 'yyyy-MM-dd'))
-        setStartTime(format(now, 'HH:mm'))
-        setEndDate(format(now, 'yyyy-MM-dd'))
-        setEndTime(format(later, 'HH:mm'))
-        setColor('blue')
-      }
-    } catch (error) {
-      console.error('Error setting up event modal:', error)
+      initialEventName = selectedEvent.title || '';
+      initialEventDate = format(start, 'yyyy-MM-dd');
+      initialTimeStart = format(start, 'HH:mm');
+      initialTimeEnd = format(end, 'HH:mm');
+      initialColor = selectedEvent.color || 'blue';
+      initialIsAllDay = selectedEvent.isAllDay || false;
+      initialLocation = selectedEvent.location || '';
+      initialCompleted = selectedEvent.completed || false;
+    } else if (window.prefilledEventDates) {
+      // Creating new event from drag-to-create/double-click with prefilled dates
+      const { 
+        startDate: dragStartDate, 
+        endDate: dragEndDate, 
+        title: dragTitle, 
+        color: dragColor,
+        isAllDay: dragIsAllDay,
+        noAutoFocus
+      } = window.prefilledEventDates;
+      
+      const startDateObj = dragStartDate instanceof Date ? dragStartDate : new Date(dragStartDate);
+      const endDateObj = dragEndDate instanceof Date ? dragEndDate : new Date(dragEndDate);
+      
+      initialEventName = dragTitle || 'New Event';
+      initialEventDate = format(startDateObj, 'yyyy-MM-dd');
+      initialTimeStart = format(startDateObj, 'HH:mm');
+      initialTimeEnd = format(endDateObj, 'HH:mm');
+      initialColor = dragColor || 'blue';
+      initialIsAllDay = dragIsAllDay || false;
     }
-  }, [selectedEvent, currentDate])
+    
+    setEventName(initialEventName);
+    setEventDate(initialEventDate);
+    setTimeStart(initialTimeStart);
+    setTimeEnd(initialTimeEnd);
+    setColor(initialColor);
+    setIsAllDay(initialIsAllDay);
+    setLocation(initialLocation);
+    setCompleted(initialCompleted);
+
+  }, [selectedEvent]); // Removed window.prefilledEventDates from deps, it's a global side effect. Consider context for this.
   
   const handleSubmit = (e) => {
-    e.preventDefault()
+    if (e) e.preventDefault();
     
-    // Log the input values to debug the issue
-    console.log('Form submission with values:', {
-      startDate, startTime, endDate, endTime
-    });
-    
-    // Construct Date objects to preserve local times and avoid timezone offsets
-    const [startHour, startMinute] = startTime.split(':').map(Number)
-    const start = new Date(startDate)
-    start.setHours(startHour, startMinute, 0, 0)
-    
-    const [endHour, endMinute] = endTime.split(':').map(Number)
-    const end = new Date(endDate)
-    end.setHours(endHour, endMinute, 0, 0)
-    
-    console.log('Created date objects:', {
-      start: start.toString(),
-      end: end.toString()
-    });
+    const finalStartDateTime = isAllDay 
+      ? parse(`${eventDate} 00:00`, 'yyyy-MM-dd HH:mm', new Date())
+      : parse(`${eventDate} ${timeStart}`, 'yyyy-MM-dd HH:mm', new Date());
+      
+    const finalEndDateTime = isAllDay
+      ? parse(`${eventDate} 23:59`, 'yyyy-MM-dd HH:mm', new Date())
+      : parse(`${eventDate} ${timeEnd}`, 'yyyy-MM-dd HH:mm', new Date());
 
     const eventData = {
-      title,
-      start,
-      end,
-      color
-    }
-    
-    // Clear prefilled dates
-    window.prefilledEventDates = null
-    
+      title: eventName.trim() === '' ? (selectedEvent ? selectedEvent.title : 'New Event') : eventName,
+      start: finalStartDateTime,
+      end: finalEndDateTime,
+      color,
+      isAllDay,
+      location,
+      completed
+    };
+        
     if (selectedEvent) {
-      // Update the event with the new data
-      updateEvent(selectedEvent.id, eventData)
-      
-      // Log the updated event for debugging
-      console.log('Updated event:', {
-        id: selectedEvent.id,
-        ...eventData
-      })
+      updateEvent(selectedEvent.id, eventData);
     } else {
-      // Create a new event
-      const newEvent = createEvent(eventData)
-      console.log('Created new event:', newEvent)
+      createEvent(eventData);
     }
     
-    // Close modal immediately to avoid flickering
-    closeEventModal()
-  }
+    closeAndAnimateOut();
+  };
   
-  const handleDelete = () => {
+  const handleDelete = () => { // Ensure this is a stable function if used in useEffect deps
     if (selectedEvent) {
-      deleteEvent(selectedEvent.id)
-      closeEventModal()
+      deleteEvent(selectedEvent.id);
+      closeAndAnimateOut();
     }
-  }
+  };
+  
+  const handleToggleComplete = () => {
+    if (selectedEvent) {
+      toggleEventComplete(selectedEvent.id);
+      setCompleted(!completed);
+    } else {
+      setCompleted(!completed);
+    }
+  };
+
+  const formatTimeForDisplay = (time24h) => {
+    if (!time24h || typeof time24h !== 'string' || !time24h.includes(':')) return 'Invalid Time';
+    const [hours, minutes] = time24h.split(':');
+    const hour = parseInt(hours, 10);
+    const period = hour >= 12 ? 'PM' : 'AM';
+    const hour12 = hour % 12 || 12;
+    return `${hour12}:${minutes} ${period}`;
+  };
+  
+  const formatDateForDisplay = (dateStr) => {
+    try {
+      const date = parse(dateStr, 'yyyy-MM-dd', new Date());
+      return format(date, 'EEEE, MMM d');
+    } catch {
+      return 'Invalid Date';
+    }
+  };
   
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50 p-4">
-      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-md">
-        <div className="flex justify-between items-center p-4 border-b border-gray-200 dark:border-gray-700">
-          <h2 className="text-xl font-semibold">
-            {selectedEvent ? 'Edit Event' : 'Create Event'}
-          </h2>
+    <>
+      {/* Overlay background */}
+      <div className={`fixed inset-0 bg-black bg-opacity-30 z-40 transition-opacity duration-300 ${internalVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+           onClick={closeAndAnimateOut}></div>
+      
+      {/* Bottom Sheet Modal */}
+      <div 
+        className={`fixed bottom-0 left-0 right-0 bg-white dark:bg-gray-800 rounded-t-xl shadow-2xl z-50 transition-all duration-300 ease-in-out
+                   ${internalVisible ? 'transform translate-y-0' : 'transform translate-y-full'}`}
+        style={{ maxHeight: '90vh', overflowY: 'auto' }}
+      >
+        {/* Checkmark/Complete button in top left */}
+        <div className="absolute left-4 top-4">
           <button
-            onClick={closeEventModal}
-            className="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700"
+            type="button"
+            onClick={handleToggleComplete}
+            className={`w-8 h-8 rounded-full flex items-center justify-center ${
+              completed 
+                ? 'bg-green-100 text-green-600 dark:bg-green-900 dark:text-green-200' 
+                : 'bg-gray-100 text-gray-500 dark:bg-gray-700 dark:text-gray-400'
+            }`}
           >
-            <FiX />
+            <FiCheckCircle size={18} />
           </button>
         </div>
         
-        <form onSubmit={handleSubmit} className="p-4">
-          <div className="mb-4">
-            <label htmlFor="title" className="block mb-2 text-sm font-medium">
-              Title
-            </label>
-            <input
-              type="text"
-              id="title"
-              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              required
-            />
-          </div>
-          
-          <div className="grid grid-cols-2 gap-4 mb-4">
+        <div className="flex justify-between items-center px-5 py-4 border-b border-gray-200 dark:border-gray-700">
+          <h2 className="text-xl font-semibold text-gray-800 dark:text-gray-100 ml-10">
+            {selectedEvent ? 'Edit Event' : 'Create Event'}
+          </h2>
+          <button 
+            type="button"
+            onClick={closeAndAnimateOut}
+            className="p-1 text-gray-500 dark:text-gray-400 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700"
+          >
+            <FiX size={20} />
+          </button>
+        </div>
+        
+        <form onSubmit={handleSubmit} className="px-5 py-4">
+          <div className="space-y-5">
+            {/* Event Name */}
             <div>
-              <label htmlFor="startDate" className="block mb-2 text-sm font-medium">
-                Start Date
-              </label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Event Name</label>
               <input
-                type="date"
-                id="startDate"
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-                required
+                ref={titleInputRef}
+                type="text"
+                value={eventName}
+                onChange={(e) => setEventName(e.target.value)}
+                placeholder="Add title"
+                className="w-full px-3 py-2 text-gray-900 dark:text-gray-100 bg-gray-100 dark:bg-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
-            <div>
-              <label htmlFor="startTime" className="block mb-2 text-sm font-medium">
-                Start Time
-              </label>
-              <input
-                type="time"
-                id="startTime"
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700"
-                value={startTime}
-                onChange={(e) => setStartTime(e.target.value)}
-                required
-              />
-            </div>
-          </div>
-          
-          <div className="grid grid-cols-2 gap-4 mb-4">
-            <div>
-              <label htmlFor="endDate" className="block mb-2 text-sm font-medium">
-                End Date
-              </label>
-              <input
-                type="date"
-                id="endDate"
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700"
-                value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-                required
-              />
-            </div>
-            <div>
-              <label htmlFor="endTime" className="block mb-2 text-sm font-medium">
-                End Time
-              </label>
-              <input
-                type="time"
-                id="endTime"
-                className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md dark:bg-gray-700"
-                value={endTime}
-                onChange={(e) => setEndTime(e.target.value)}
-                required
-              />
-            </div>
-          </div>
-          
-          <div className="mb-6">
-            <label className="block mb-2 text-sm font-medium">
-              Color
-            </label>
-            <div className="flex space-x-2">
-              {EVENT_COLORS.map((eventColor) => (
-                <button
-                  key={eventColor.name}
-                  type="button"
-                  className={`h-8 w-8 rounded-full event-${eventColor.name} flex items-center justify-center border-2 ${
-                    color === eventColor.name ? `border-${eventColor.name}` : 'border-transparent'
-                  }`}
-                  onClick={() => setColor(eventColor.name)}
-                  aria-label={`Select ${eventColor.label}`}
-                />
-              ))}
-            </div>
-          </div>
-          
-          <div className="flex justify-between">
-            {selectedEvent && (
-              <button
-                type="button"
-                onClick={handleDelete}
-                className="px-4 py-2 bg-red-500 text-white rounded-md hover:bg-red-600 transition-colors flex items-center"
-              >
-                <FiTrash2 className="mr-1" /> Delete
-              </button>
-            )}
             
-            <div className="flex ml-auto space-x-2">
-              <button
-                type="button"
-                onClick={closeEventModal}
-                className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
+            {/* Date */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Date</label>
+              <div className="relative">
+                <div className="flex items-center px-3 py-2 bg-gray-100 dark:bg-gray-700 rounded-lg">
+                  <FiCalendar className="text-gray-500 mr-2" />
+                  <span className="flex-grow">{formatDateForDisplay(eventDate)}</span>
+                  <FiChevronDown className="text-gray-500" />
+                </div>
+                <input
+                  type="date"
+                  value={eventDate}
+                  onChange={(e) => setEventDate(e.target.value)}
+                  className="absolute inset-0 opacity-0 cursor-pointer"
+                />
+              </div>
+            </div>
+            
+            {/* Time Start/End */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Time Start</label>
+                <div className="relative">
+                  <div className="flex items-center px-3 py-2 bg-gray-100 dark:bg-gray-700 rounded-lg">
+                    <FiClock className="text-gray-500 mr-2" />
+                    <span className="flex-grow">{formatTimeForDisplay(timeStart)}</span>
+                    <FiChevronDown className="text-gray-500" />
+                  </div>
+                  <input
+                    type="time"
+                    value={timeStart}
+                    onChange={(e) => setTimeStart(e.target.value)}
+                    className="absolute inset-0 opacity-0 cursor-pointer"
+                    disabled={isAllDay}
+                  />
+                </div>
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Time End</label>
+                <div className="relative">
+                  <div className="flex items-center px-3 py-2 bg-gray-100 dark:bg-gray-700 rounded-lg">
+                    <FiClock className="text-gray-500 mr-2" />
+                    <span className="flex-grow">{formatTimeForDisplay(timeEnd)}</span>
+                    <FiChevronDown className="text-gray-500" />
+                  </div>
+                  <input
+                    type="time"
+                    value={timeEnd}
+                    onChange={(e) => setTimeEnd(e.target.value)}
+                    className="absolute inset-0 opacity-0 cursor-pointer"
+                    disabled={isAllDay}
+                  />
+                </div>
+              </div>
+            </div>
+            
+            {/* All Day Toggle */}
+            <div className="flex items-center">
+              <label className="inline-flex items-center cursor-pointer">
+                <input 
+                  type="checkbox" 
+                  checked={isAllDay}
+                  onChange={(e) => setIsAllDay(e.target.checked)}
+                  className="form-checkbox h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                />
+                <span className="ml-2 text-sm text-gray-700 dark:text-gray-300">All day</span>
+              </label>
+            </div>
+            
+            {/* Participants */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Participants</label>
+              <div className="flex items-center px-3 py-2 bg-gray-100 dark:bg-gray-700 rounded-lg cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-600">
+                <FiUsers className="text-gray-500 mr-2" />
+                <span className="text-gray-700 dark:text-gray-300">Add participants</span>
+              </div>
+            </div>
+            
+            {/* Color Selection */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Color</label>
+              <div className="flex items-center space-x-3">
+                {COLOR_OPTIONS.map(opt => (
+                  <button
+                    type="button"
+                    key={opt.id}
+                    onClick={() => setColor(opt.value)}
+                    className={`w-8 h-8 rounded-full transition-all ${
+                      color === opt.value 
+                        ? 'ring-2 ring-offset-2 ring-gray-400 dark:ring-gray-600' 
+                        : ''
+                    }`}
+                    style={{ backgroundColor: `var(--color-${opt.value}-500)` }}
+                    title={opt.name}
+                    aria-label={`Set color to ${opt.name}`}
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
+          
+          {/* Action Buttons */}
+          <div className="mt-6 flex justify-between pb-5">
+            <button 
+              type="button"
+              onClick={closeAndAnimateOut}
+              className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-800 dark:text-gray-200 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600"
+            >
+              Cancel
+            </button>
+            
+            <div className="flex space-x-2">
+              {selectedEvent && (
+                <button 
+                  type="button"
+                  onClick={handleDelete}
+                  className="px-4 py-2 bg-red-100 text-red-600 dark:bg-red-900 dark:text-red-200 rounded-lg hover:bg-red-200 dark:hover:bg-red-800"
+                >
+                  Delete
+                </button>
+              )}
+              <button 
                 type="submit"
-                className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors"
+                className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50"
               >
-                {selectedEvent ? 'Update' : 'Create'}
+                {selectedEvent ? 'Save' : 'Create Event'}
               </button>
             </div>
           </div>
         </form>
       </div>
-    </div>
+    </>
   )
 }
 

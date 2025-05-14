@@ -49,6 +49,7 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
   const [isEditingNewTask, setIsEditingNewTask] = useState(false);
   const [newTaskText, setNewTaskText] = useState('');
   const newTaskInputRef = useRef(null);
+  const tasksContainerRef = useRef(null);
   
   // Focus the input when it appears
   useEffect(() => {
@@ -56,6 +57,32 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
       newTaskInputRef.current.focus();
     }
   }, [isEditingNewTask]);
+  
+  // Set up sortable for dragging tasks within each category group
+  useEffect(() => {
+    if (tasksContainerRef.current) {
+      const sortable = Sortable.create(tasksContainerRef.current, {
+        animation: 150,
+        handle: '.task-drag-handle',
+        group: {
+          name: 'tasks',
+          pull: 'clone',
+          put: false // Don't allow dropping back into the list
+        },
+        sort: false,
+        ghostClass: 'task-ghost',
+        chosenClass: 'task-chosen',
+        dragClass: 'task-drag',
+        onEnd: function(evt) {
+          // This will be handled by the parent TaskList component
+        }
+      });
+      
+      return () => {
+        sortable.destroy();
+      };
+    }
+  }, [tasks]);
   
   const handleAddTask = () => {
     if (newTaskText.trim()) {
@@ -99,10 +126,8 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
         )}
       </div>
       
-
-      
       {!isCollapsed && (
-        <div className="category-tasks">
+        <div className="category-tasks" ref={tasksContainerRef}>
           {tasks.map(task => (
             <TaskItem
               key={task.id}
@@ -164,8 +189,9 @@ const TaskList = ({ tasks, onToggleComplete, activeCategory, categories: propCat
     addTask(text, categoryName);
   };
   
+  // Only set up Sortable on the taskListRef for NON-All category views
   useEffect(() => {
-    if (taskListRef.current) {
+    if (taskListRef.current && activeCategory !== 'All') {
       // Initialize Sortable for drag-and-drop functionality
       const sortable = Sortable.create(taskListRef.current, {
         animation: 150,
@@ -176,6 +202,9 @@ const TaskList = ({ tasks, onToggleComplete, activeCategory, categories: propCat
           put: false // Don't allow dropping back into the list
         },
         sort: false, // Disable sorting within the list
+        ghostClass: 'task-ghost',
+        chosenClass: 'task-chosen',
+        dragClass: 'task-drag',
         onEnd: function(evt) {
           // Handle drop on calendar
           const taskId = evt.item.getAttribute('data-id');
@@ -198,7 +227,7 @@ const TaskList = ({ tasks, onToggleComplete, activeCategory, categories: propCat
         sortable.destroy();
       };
     }
-  }, [tasks, addTaskToCalendar]);
+  }, [tasks, addTaskToCalendar, activeCategory]);
   
   // If we're in the 'All' tab, group tasks by category
   if (activeCategory === 'All') {
@@ -245,7 +274,7 @@ const TaskList = ({ tasks, onToggleComplete, activeCategory, categories: propCat
       .sort(([, a], [, b]) => a.order - b.order);
     
     return (
-      <div className="task-list" data-view="all" ref={taskListRef}>
+      <div className="task-list" data-view="all">
         {sortedCategories.map(([categoryName, { tasks, icon }], index) => (
           <div key={categoryName} className={`category-group-wrapper ${index > 0 ? 'with-spacing' : ''}`}>
             <CategoryGroup
