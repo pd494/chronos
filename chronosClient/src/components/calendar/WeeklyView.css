@@ -53,6 +53,29 @@
   transition: background-color 0.2s ease;
 }
 
+/* When the cell is being targeted for drop */
+.droppable-cell.sortable-dragover {
+  background-color: rgba(59, 130, 246, 0.3) !important;
+  box-shadow: none !important; /* Remove the inset shadow */
+  border: 2px dashed rgba(59, 130, 246, 0.5);
+  z-index: 10 !important;
+}
+
+/* Simpler but clear highlighting for the target cell */
+.hour-cell.sortable-dragover {
+  background-color: rgba(59, 130, 246, 0.25) !important;
+  animation: simple-target-pulse 0.8s ease-in-out infinite alternate;
+}
+
+@keyframes simple-target-pulse {
+  from {
+    background-color: rgba(59, 130, 246, 0.15);
+  }
+  to {
+    background-color: rgba(59, 130, 246, 0.35);
+  }
+}
+
 .droppable-cell.sortable-ghost {
   background-color: rgba(59, 130, 246, 0.1); /* Light blue highlight */
 }
@@ -64,18 +87,6 @@
 .droppable-cell.sortable-chosen {
   background-color: rgba(59, 130, 246, 0.3); /* Even darker highlight */
   animation: stick-pulse 0.5s ease-in-out infinite alternate;
-}
-
-/* Animation for the stick effect */
-@keyframes stick-pulse {
-  from {
-    background-color: rgba(59, 130, 246, 0.2);
-    transform: scale(1);
-  }
-  to {
-    background-color: rgba(59, 130, 246, 0.4);
-    transform: scale(1.02);
-  }
 }
 
 /* Style for tasks being dragged */
@@ -100,4 +111,16 @@
 
 .task-drag {
   transform: rotate(2deg) !important;
+}
+
+/* Animation for the stick effect */
+@keyframes stick-pulse {
+  from {
+    background-color: rgba(59, 130, 246, 0.2);
+    transform: scale(1);
+  }
+  to {
+    background-color: rgba(59, 130, 246, 0.4);
+    transform: scale(1.02);
+  }
 }

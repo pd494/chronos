@@ -14,6 +14,14 @@
   --color-event-orange: #ffedd5;
   --color-event-green: #d1fae5;
   --color-event-red: #fee2e2;
+  --color-event-pink: #fce7f3;
+  --color-event-brown: #f5f0e6;
+  --color-event-teal: #d1fafb;
+  --color-event-cyan: #cffafe;
+  --color-event-amber: #fef3c7;
+  --color-event-lime: #ecfccb;
+  --color-event-indigo: #e0e7ff;
+  --color-event-yellow: #fef9c3;
   
   /* Color variables for color picker - lighter shades */
   --color-blue-500: #bfdbfe;    /* Even lighter blue */
@@ -21,6 +29,14 @@
   --color-violet-500: #ddd6fe;  /* Even lighter violet */
   --color-rose-500: #fecaca;    /* Even lighter rose */
   --color-emerald-500: #a7f3d0; /* Even lighter emerald */
+  --color-pink-500: #fbcfe8;    /* Even lighter pink */
+  --color-brown-500: #e9d5b5;   /* Even lighter brown */
+  --color-teal-500: #99f6e4;    /* Teal */
+  --color-cyan-500: #a5f3fc;    /* Cyan */
+  --color-amber-500: #fcd34d;   /* Amber */
+  --color-lime-500: #d9f99d;    /* Lime */
+  --color-indigo-500: #a5b4fc;  /* Indigo */
+  --color-yellow-500: #fef08a;  /* Yellow */
   
   /* Darker variants for text and vertical lines */
   --color-blue-900: #1e3a8a;    /* Darker blue */
@@ -28,6 +44,14 @@
   --color-violet-900: #4c1d95;  /* Darker violet */
   --color-rose-900: #881337;    /* Darker rose */
   --color-emerald-900: #064e3b; /* Darker emerald */
+  --color-pink-900: #831843;    /* Darker pink */
+  --color-brown-900: #78350f;   /* Darker brown */
+  --color-teal-900: #134e4a;    /* Darker teal */
+  --color-cyan-900: #164e63;    /* Darker cyan */
+  --color-amber-900: #78350f;   /* Darker amber */
+  --color-lime-900: #365314;    /* Darker lime */
+  --color-indigo-900: #312e81;  /* Darker indigo */
+  --color-yellow-900: #713f12;  /* Darker yellow */
 }
 
 .dark {
@@ -42,6 +66,14 @@
   --color-event-orange: #9a3412;
   --color-event-green: #065f46;
   --color-event-red: #991b1b;
+  --color-event-pink: #9d174d;
+  --color-event-brown: #78350f;
+  --color-event-teal: #115e59;
+  --color-event-cyan: #0e7490;
+  --color-event-amber: #92400e;
+  --color-event-lime: #4d7c0f;
+  --color-event-indigo: #4338ca;
+  --color-event-yellow: #a16207;
   
   /* Color variables for color picker in dark mode */
   --color-blue-500: #3b82f6;
@@ -49,6 +81,14 @@
   --color-violet-500: #8b5cf6;
   --color-rose-500: #f43f5e;
   --color-emerald-500: #10b981;
+  --color-pink-500: #ec4899;
+  --color-brown-500: #b45309;
+  --color-teal-500: #14b8a6;
+  --color-cyan-500: #06b6d4;
+  --color-amber-500: #f59e0b;
+  --color-lime-500: #84cc16;
+  --color-indigo-500: #6366f1;
+  --color-yellow-500: #eab308;
   
   /* Darker variants for text and vertical lines */
   --color-blue-900: #1e3a8a;
@@ -56,6 +96,14 @@
   --color-violet-900: #4c1d95;
   --color-rose-900: #881337;
   --color-emerald-900: #064e3b;
+  --color-pink-900: #831843;
+  --color-brown-900: #78350f;
+  --color-teal-900: #134e4a;
+  --color-cyan-900: #164e63;
+  --color-amber-900: #78350f;
+  --color-lime-900: #365314;
+  --color-indigo-900: #312e81;
+  --color-yellow-900: #713f12;
 }
 
 * {
@@ -160,12 +208,28 @@ body {
 .event-orange { background-color: var(--color-event-orange); }
 .event-green { background-color: var(--color-event-green); }
 .event-red { background-color: var(--color-event-red); }
+.event-pink { background-color: var(--color-event-pink); }
+.event-brown { background-color: var(--color-event-brown); }
+.event-teal { background-color: var(--color-event-teal); }
+.event-cyan { background-color: var(--color-event-cyan); }
+.event-amber { background-color: var(--color-event-amber); }
+.event-lime { background-color: var(--color-event-lime); }
+.event-indigo { background-color: var(--color-event-indigo); }
+.event-yellow { background-color: var(--color-event-yellow); }
 
 .text-blue { color: var(--color-blue-900); }
 .text-purple { color: var(--color-violet-900); }
 .text-orange { color: var(--color-orange-900); }
 .text-green { color: var(--color-emerald-900); }
 .text-red { color: var(--color-rose-900); }
+.text-pink { color: var(--color-pink-900); }
+.text-brown { color: var(--color-brown-900); }
+.text-teal { color: var(--color-teal-900); }
+.text-cyan { color: var(--color-cyan-900); }
+.text-amber { color: var(--color-amber-900); }
+.text-lime { color: var(--color-lime-900); }
+.text-indigo { color: var(--color-indigo-900); }
+.text-yellow { color: var(--color-yellow-900); }
 
 .calendar-day {
   transition: background-color 0.2s ease;
@@ -231,4 +295,39 @@ body {
   border: solid white;
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
+}
+
+/* Global drag styles */
+body.task-dragging .droppable-cell {
+  transition: all 0.2s ease;
+}
+
+body.task-dragging .hour-cell:hover {
+  background-color: rgba(59, 130, 246, 0.15);
+  outline: 2px dashed rgba(59, 130, 246, 0.5);
+}
+
+/* Custom cursor when dragging tasks */
+body.task-dragging {
+  cursor: grabbing !important;
+}
+
+body.task-dragging * {
+  cursor: grabbing !important;
+}
+
+/* Prevent text selection during drag operations */
+body.task-dragging,
+body.task-dragging * {
+  user-select: none !important;
+}
+
+/* Enhance dragging experience with smooth transitions */
+.task-item {
+  transition: transform 0.2s ease, opacity 0.2s ease, box-shadow 0.2s ease;
+}
+
+/* Increase z-index for dragged elements to ensure they appear above everything */
+html.dragging .sortable-drag {
+  z-index: 9999 !important;
 }

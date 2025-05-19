@@ -1,9 +1,26 @@
-const { app, BrowserWindow, session, ipcMain } = require('electron');
+const { app, BrowserWindow, session, ipcMain, shell } = require('electron');
 const path = require('path');
 const url = require('url');
 
 // Keep a global reference of the window object to prevent garbage collection
 let mainWindow;
+
+// Register custom protocol
+if (process.defaultApp) {
+  if (process.argv.length >= 2) {
+    app.setAsDefaultProtocolClient('chronos', process.execPath, [path.resolve(process.argv[1])]);
+  }
+} else {
+  app.setAsDefaultProtocolClient('chronos');
+}
+
+// Handle the deep link on macOS
+app.on('open-url', (event, url) => {
+  event.preventDefault();
+  // Extract the auth token from URL
+  const mainWindow = BrowserWindow.getAllWindows()[0];
+  mainWindow.webContents.send('auth-callback', url);
+});
 
 function createWindow() {
   // Create the browser window
@@ -65,11 +82,37 @@ function createWindow() {
     mainWindow = null;
   });
 
+  // Handle opening OAuth links in external browser instead of in the app
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    // If the URL includes the OAuth provider domain or auth-related paths
+    if (url.includes('accounts.google.com') || url.includes('oauth') || url.includes('login')) {
+      event.preventDefault();
+      shell.openExternal(url);
+    }
+  });
+
+  // Also handle window.open from the renderer which is used by some auth libraries
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    // If the URL includes the OAuth provider domain or auth-related paths 
+    if (url.includes('accounts.google.com') || url.includes('oauth') || url.includes('login')) {
+      shell.openExternal(url);
+      return { action: 'deny' };
+    }
+    return { action: 'allow' };
+  });
+
   // We'll use CSS for window dragging instead of IPC
 }
 
 app.whenReady().then(() => {
   createWindow();
+  
+  // Handle IPC message to open URLs in external browser
+  ipcMain.on('open-external-url', (_, url) => {
+    console.log('Opening external URL:', url);
+    shell.openExternal(url);
+  });
+  
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

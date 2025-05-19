@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { format, isSameDay, isToday, getHours, getMinutes, getDay, addDays } from 'date-fns'
 import { useCalendar } from '../../context/CalendarContext'
 import WeekEvent from '../events/WeekEvent'
+import Sortable from 'sortablejs'
 import './WeeklyView.css'
 
 const HOUR_HEIGHT = 60 // Height of one hour in pixels
@@ -42,6 +43,9 @@ const WeeklyView = () => {
   
   const hasDraggedRef = useRef(false)
   const dragInitialDayHourRef = useRef(null)
+  
+  const hourCellsRef = useRef({});
+  const allDayCellsRef = useRef({});
   
   useEffect(() => {
     setDays(getDaysInWeek(currentDate))
@@ -369,6 +373,110 @@ const WeeklyView = () => {
     color: e.color,
     isImported: e.isImported
   })));
+  
+  // Initialize Sortable for droppable hour cells
+  useEffect(() => {
+    const hourCells = document.querySelectorAll('.hour-cell');
+    
+    // Create sortable instances for each hour cell
+    hourCells.forEach(cell => {
+      const sortable = Sortable.create(cell, {
+        group: {
+          name: 'tasks',
+          pull: false,
+          put: true // Allow dropping into the cell
+        },
+        animation: 150,
+        ghostClass: 'sortable-ghost',
+        chosenClass: 'sortable-chosen',
+        dragClass: 'sortable-drag-active',
+        dragoverClass: 'sortable-dragover',
+        onStart: function() {
+          // Add a class to the body to indicate dragging is in progress
+          document.body.classList.add('task-dragging');
+        },
+        onEnd: function() {
+          // Remove the dragging indicator class
+          document.body.classList.remove('task-dragging');
+          
+          // Clear any lingering dragover classes
+          document.querySelectorAll('.sortable-dragover').forEach(el => {
+            el.classList.remove('sortable-dragover');
+          });
+        },
+        // Handle when a task is dragged over this cell
+        onAdd: function(evt) {
+          console.log('Task dropped on hour cell', evt.to.getAttribute('data-hour'));
+        },
+        sort: false, // Disable sorting within the cell
+        delay: 0, // No delay for mobile
+        delayOnTouchOnly: true // Only apply delay on touch devices
+      });
+      
+      // Store the sortable instance for cleanup
+      hourCellsRef.current[cell.getAttribute('data-hour') + cell.getAttribute('data-day')] = sortable;
+    });
+    
+    // Cleanup function to destroy sortable instances
+    return () => {
+      Object.values(hourCellsRef.current).forEach(sortable => {
+        if (sortable && sortable.destroy) sortable.destroy();
+      });
+      hourCellsRef.current = {};
+    };
+  }, [days]); // Re-run when days change
+  
+  // Initialize Sortable for droppable all-day cells
+  useEffect(() => {
+    const allDayCells = document.querySelectorAll('[data-all-day="true"]');
+    
+    // Create sortable instances for each all-day cell
+    allDayCells.forEach((cell, index) => {
+      const sortable = Sortable.create(cell, {
+        group: {
+          name: 'tasks',
+          pull: false,
+          put: true // Allow dropping into the cell
+        },
+        animation: 150,
+        ghostClass: 'sortable-ghost',
+        chosenClass: 'sortable-chosen',
+        dragClass: 'sortable-drag-active',
+        dragoverClass: 'sortable-dragover',
+        onStart: function() {
+          // Add a class to the body to indicate dragging is in progress
+          document.body.classList.add('task-dragging');
+        },
+        onEnd: function() {
+          // Remove the dragging indicator class
+          document.body.classList.remove('task-dragging');
+          
+          // Clear any lingering dragover classes
+          document.querySelectorAll('.sortable-dragover').forEach(el => {
+            el.classList.remove('sortable-dragover');
+          });
+        },
+        // Handle when a task is dragged over this cell
+        onAdd: function(evt) {
+          console.log('Task dropped on all-day cell', evt.to.getAttribute('data-date'));
+        },
+        sort: false, // Disable sorting within the cell
+        delay: 0, // No delay for mobile
+        delayOnTouchOnly: true // Only apply delay on touch devices
+      });
+      
+      // Store the sortable instance for cleanup
+      allDayCellsRef.current[index] = sortable;
+    });
+    
+    // Cleanup function to destroy sortable instances
+    return () => {
+      Object.values(allDayCellsRef.current).forEach(sortable => {
+        if (sortable && sortable.destroy) sortable.destroy();
+      });
+      allDayCellsRef.current = {};
+    };
+  }, [days]); // Re-run when days change
   
   return (
     <div 

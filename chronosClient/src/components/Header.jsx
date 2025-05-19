@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { FiChevronLeft, FiChevronRight, FiChevronDown, FiPlus, FiShare2 } from 'react-icons/fi'
+import { FiChevronLeft, FiChevronRight, FiChevronDown, FiPlus, FiShare2, FiUser } from 'react-icons/fi'
 import { useCalendar } from '../context/CalendarContext'
 import { useTaskContext } from '../context/TaskContext'
+import { useAuth } from '../context/AuthContext'
 import './header.css'
 
 const ViewButton = ({ view, currentView, onChange }) => {
@@ -37,14 +38,20 @@ const Header = ({
     openEventModal
   } = useCalendar()
   
+  // Auth context
+  const { user, signInWithGoogle, signOut } = useAuth()
+  
   // State for view dropdown
   const [showViewDropdown, setShowViewDropdown] = useState(false)
+  // State for user dropdown
+  const [showUserDropdown, setShowUserDropdown] = useState(false)
   
   // Task context for categories
   const { tasks } = useTaskContext()
   
   // Reference for dropdown button
   const viewButtonRef = useRef(null)
+  const userButtonRef = useRef(null)
   
   // Handle view change
   const handleViewChange = (newView) => {
@@ -170,6 +177,46 @@ const Header = ({
               >
                 <span>Month</span>
                 <span className="keyboard-shortcut">(M)</span>
+              </button>
+            </div>
+          )}
+        </div>
+        
+        {/* User authentication button */}
+        <div style={{ position: 'relative', zIndex: 9998 }}>
+          <button 
+            ref={userButtonRef}
+            onClick={() => user ? setShowUserDropdown(!showUserDropdown) : signInWithGoogle()}
+            className="clean-button"
+            style={{ WebkitAppRegion: 'no-drag' }}
+          >
+            {user ? (
+              <>
+                <FiUser size={14} className="mr-1" />
+                <span className="hidden md:inline">{user.email?.split('@')[0]}</span>
+                <FiChevronDown size={14} className="ml-1" />
+              </>
+            ) : (
+              <>
+                <FiUser size={14} className="mr-1" />
+                <span>Sign In</span>
+              </>
+            )}
+          </button>
+          
+          {user && showUserDropdown && (
+            <div className="view-dropdown-menu user-dropdown-menu">
+              <div className="px-4 py-2 text-sm text-gray-500 truncate">
+                {user.email}
+              </div>
+              <button
+                onClick={() => {
+                  signOut();
+                  setShowUserDropdown(false);
+                }}
+                className="w-full text-left"
+              >
+                <span>Sign Out</span>
               </button>
             </div>
           )}

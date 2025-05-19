@@ -10,7 +10,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Example: expose a method to send messages to main process
   send: (channel, data) => {
     // whitelist channels
-    let validChannels = ['toMain', 'start-drag'];
+    let validChannels = ['toMain', 'start-drag', 'open-external-url'];
     if (validChannels.includes(channel)) {
       ipcRenderer.send(channel, data);
     }
@@ -22,5 +22,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
       // Deliberately strip event as it includes `sender` 
       ipcRenderer.on(channel, (event, ...args) => func(...args));
     }
+  },
+  // Function to receive auth callbacks from main process
+  onAuthCallback: (callback) => {
+    ipcRenderer.on('auth-callback', (_event, value) => {
+      callback(value);
+    });
   }
 });

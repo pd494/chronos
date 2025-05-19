@@ -20,6 +20,14 @@
   z-index: 1000;
 }
 
+.task-drag {
+  transform: rotate(1deg) !important;
+  background-color: rgba(59, 130, 246, 0.15) !important;
+  border: 1px solid rgba(59, 130, 246, 0.4) !important;
+  cursor: grabbing !important;
+  z-index: 1001 !important;
+}
+
 .task-item {
   display: flex;
   align-items: center;

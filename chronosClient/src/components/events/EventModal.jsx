@@ -12,7 +12,14 @@ const COLOR_OPTIONS = [
   { id: 'green', name: 'Green', value: 'green' },
   { id: 'orange', name: 'Orange', value: 'orange' },
   { id: 'purple', name: 'Purple', value: 'purple' },
-  { id: 'red', name: 'Red', value: 'red' }
+  { id: 'red', name: 'Red', value: 'red' },
+  { id: 'pink', name: 'Pink', value: 'pink' },
+  { id: 'teal', name: 'Teal', value: 'teal' },
+  { id: 'cyan', name: 'Cyan', value: 'cyan' },
+  { id: 'amber', name: 'Amber', value: 'amber' },
+  { id: 'lime', name: 'Lime', value: 'lime' },
+  { id: 'indigo', name: 'Indigo', value: 'indigo' },
+  { id: 'yellow', name: 'Yellow', value: 'yellow' }
 ];
 
 const EventModal = () => {
@@ -357,7 +364,12 @@ const EventModal = () => {
                         ? 'ring-2 ring-offset-2 ring-gray-400 dark:ring-gray-600' 
                         : ''
                     }`}
-                    style={{ backgroundColor: `var(--color-${opt.value}-500)` }}
+                    style={{ 
+                      backgroundColor: 
+                        opt.value === 'purple' ? 'var(--color-violet-500)' :
+                        opt.value === 'red' ? 'var(--color-rose-500)' :
+                        `var(--color-${opt.value}-500)`
+                    }}
                     title={opt.name}
                     aria-label={`Set color to ${opt.name}`}
                   />

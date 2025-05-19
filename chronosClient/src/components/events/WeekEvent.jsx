@@ -31,6 +31,14 @@ const WeekEvent = ({ event, hourHeight, dayStartHour }) => {
   // Get event color or default to blue
   const eventColor = event.color || 'blue'
   
+  // Map color names to CSS variable names
+  const getColorVar = (color, shade) => {
+    if (color === 'purple') return `var(--color-violet-${shade})`;
+    if (color === 'red') return `var(--color-rose-${shade})`;
+    if (color === 'green') return `var(--color-emerald-${shade})`;
+    return `var(--color-${color}-${shade})`;
+  }
+  
   return (
     <div
       className={`absolute left-1 right-1 rounded-lg p-1 overflow-hidden cursor-default 
@@ -39,7 +47,7 @@ const WeekEvent = ({ event, hourHeight, dayStartHour }) => {
         top: `${top}px`,
         height: `${height}px`,
         minHeight: '20px',
-        backgroundColor: `var(--color-${eventColor}-500)`,
+        backgroundColor: getColorVar(eventColor, '500'),
         opacity: 0.8, // Make more translucent
       }}
       onClick={handleClick}
@@ -48,7 +56,7 @@ const WeekEvent = ({ event, hourHeight, dayStartHour }) => {
       <div 
         className="absolute left-0 top-0 bottom-0 w-1" 
         style={{ 
-          backgroundColor: `var(--color-${eventColor}-900)`,
+          backgroundColor: getColorVar(eventColor, '900'),
         }}
       ></div>
       
@@ -56,7 +64,7 @@ const WeekEvent = ({ event, hourHeight, dayStartHour }) => {
         <div 
           className="font-medium truncate mb-0.5" 
           style={{ 
-            color: `var(--color-${eventColor}-900)` // Darker version of the event color
+            color: getColorVar(eventColor, '900') // Darker version of the event color
           }}
         >
           {event.title}
@@ -64,7 +72,7 @@ const WeekEvent = ({ event, hourHeight, dayStartHour }) => {
         <div 
           className="text-xs"
           style={{ 
-            color: `var(--color-${eventColor}-900)` // Darker version of the event color
+            color: getColorVar(eventColor, '900') // Darker version of the event color
           }}
         >
           {formatTime(startDate)}

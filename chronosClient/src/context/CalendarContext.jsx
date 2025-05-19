@@ -183,7 +183,7 @@ export const CalendarProvider = ({ children }) => {
       ...eventData,
       start: eventData.start instanceof Date ? eventData.start : new Date(eventData.start),
       end: eventData.end instanceof Date ? eventData.end : new Date(eventData.end),
-      // Make sure color is always set
+      // Make sure color is always set and mapped correctly
       color: eventData.color || 'blue'
     };
     

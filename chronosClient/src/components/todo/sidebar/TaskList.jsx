@@ -73,7 +73,16 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
         ghostClass: 'task-ghost',
         chosenClass: 'task-chosen',
         dragClass: 'task-drag',
+        onStart: function() {
+          // Add dragging class to body for global styling
+          document.body.classList.add('task-dragging');
+          document.documentElement.classList.add('dragging');
+        },
         onEnd: function(evt) {
+          // Remove dragging classes
+          document.body.classList.remove('task-dragging');
+          document.documentElement.classList.remove('dragging');
+          
           // This will be handled by the parent TaskList component
         }
       });
@@ -205,7 +214,16 @@ const TaskList = ({ tasks, onToggleComplete, activeCategory, categories: propCat
         ghostClass: 'task-ghost',
         chosenClass: 'task-chosen',
         dragClass: 'task-drag',
+        onStart: function() {
+          // Add dragging class to body for global styling
+          document.body.classList.add('task-dragging');
+          document.documentElement.classList.add('dragging');
+        },
         onEnd: function(evt) {
+          // Remove dragging classes
+          document.body.classList.remove('task-dragging');
+          document.documentElement.classList.remove('dragging');
+          
           // Handle drop on calendar
           const taskId = evt.item.getAttribute('data-id');
           const targetDate = evt.to.getAttribute('data-date');
