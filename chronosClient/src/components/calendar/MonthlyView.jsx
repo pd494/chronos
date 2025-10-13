@@ -53,6 +53,7 @@ const MonthlyView = () => {
   const [cellSize, setCellSize]   = useState(0);
 
   const scrollContainerRef = useRef(null);
+  const headerRef = useRef(null);
 
   // ── build weeks for current range ───────────────────────────────────────
   const weeks = useMemo(() => {
@@ -70,23 +71,22 @@ const MonthlyView = () => {
   useEffect(() => {
     const update = () => {
       if (!scrollContainerRef.current) return;
-      const w = scrollContainerRef.current.clientWidth;
-      // Calculate container height to determine proper row height
       const containerHeight = scrollContainerRef.current.clientHeight;
-      // Calculate row height based on available height divided by 6 weeks
-      const calculatedRowHeight = containerHeight / WEEKS_PER_VIEW;
-      // Use exact division for width - no rounding to prevent gaps
-      const cellWidth = w / 7;
       
-      setCellSize(cellWidth);
-      setRowHeight(calculatedRowHeight);
+      // Calculate row height to fit exactly 6 weeks
+      const rowHeightFromContainer = containerHeight / WEEKS_PER_VIEW;
       
-      // No need to set parent height as we're using a percentage-based height
+      // Make cells perfect squares: width = height
+      const cellSize = rowHeightFromContainer;
+      
+      setCellSize(cellSize);
+      setRowHeight(cellSize);
     };
     update();
     window.addEventListener('resize', update);
     return () => window.removeEventListener('resize', update);
   }, []);
+
 
   // ── jump to today once row height is known ──────────────────────────────
   useEffect(() => {
@@ -106,7 +106,7 @@ const MonthlyView = () => {
 
   return (
     <div className="view-container flex flex-col h-full">
-      <div className="calendar-container p-4 flex flex-col flex-grow">
+      <div className="calendar-container p-4 flex flex-col flex-grow overflow-hidden">
         {/* weekday header */}
         <div className="grid grid-cols-7 mb-2 flex-shrink-0">
           {dayNames.map((d) => (
@@ -120,11 +120,14 @@ const MonthlyView = () => {
         <div
           ref={scrollContainerRef}
           className="overflow-y-auto flex-grow relative bg-white dark:bg-gray-800"
-          style={{ height: 'calc(100% - 60px)', scrollbarWidth: 'thin' }}
+          style={{ 
+            height: 'calc(100% - 60px)', 
+            scrollbarWidth: 'thin'
+          }}
         >
           <div className="relative" style={{ height: `${weeks.length * rowHeight}px` }}>
             {weeks.map(({ weekStart, days }) => (
-              <div key={weekStart} className="flex w-full h-full" style={{ height: `${rowHeight}px` }}>
+              <div key={weekStart} className="grid grid-cols-7" style={{ height: `${rowHeight}px` }}>
                 {days.map((day) => {
                   const events       = getEventsForDate(day) || [];
                   const isSelected   = isSameDay(day, currentDate);
@@ -134,7 +137,7 @@ const MonthlyView = () => {
                     <div
                       key={formatDateKey(day)}
                       onDoubleClick={() => selectDate(day)}
-                      style={{ height: `${rowHeight}px`, width: 'calc(100% / 7)', boxSizing: 'border-box' }}
+                      style={{ height: `${rowHeight}px`, boxSizing: 'border-box' }}
                       className="calendar-day bg-white dark:bg-gray-800 border-r border-b border-gray-100 dark:border-gray-800 relative p-1 flex flex-col group"
                     >
                       <div className="flex justify-between items-start text-xs mb-1">

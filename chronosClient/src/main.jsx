@@ -2,10 +2,9 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { createBrowserRouter, RouterProvider } from 'react-router-dom'
 import App from './App.jsx'
-import AuthCallback from './components/AuthCallback.jsx'
 import './index.css'
 import { CalendarProvider } from './context/CalendarContext.jsx'
-import { TodoProvider } from './context/TodoContext.jsx'
+import { TaskProvider } from './context/TaskContext.jsx'
 import { AuthProvider } from './context/AuthContext.jsx'
 
 // Create the router
@@ -14,17 +13,13 @@ const router = createBrowserRouter([
     path: '/',
     element: (
       <AuthProvider>
-        <TodoProvider>
+        <TaskProvider>
           <CalendarProvider>
             <App />
           </CalendarProvider>
-        </TodoProvider>
+        </TaskProvider>
       </AuthProvider>
     ),
-  },
-  {
-    path: '/auth-callback',
-    element: <AuthCallback />,
   },
 ]);
 

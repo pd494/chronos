@@ -73,6 +73,29 @@
   color: #000000;
 }
 
+.category-header-icon {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.category-header-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.category-header-dot.with-date {
+  margin-right: 4px;
+}
+
+.category-today-date {
+  font-size: 14px;
+  font-weight: 500;
+  color: #333;
+}
+
 .all-tab-task-input {
   margin-top: 2px; /* Reduced distance between All and textbox */
   margin-bottom: 16px;

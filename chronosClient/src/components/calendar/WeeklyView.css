@@ -2,7 +2,7 @@
 
 .time-grid-line {
   position: absolute;
-  left: 0;
+  left: 64px;
   right: 0;
   height: 1px;
   background-color: #e5e5ea;

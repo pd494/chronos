@@ -3,25 +3,27 @@ import Sortable from 'sortablejs';
 import { useTaskContext } from '../../../context/TaskContext';
 import './TaskList.css';
 
-// Task Item component
 const TaskItem = ({ task, onToggleComplete }) => {
   const checkboxRef = useRef(null);
+  const [isChecking, setIsChecking] = useState(false);
   
   const handleCheckboxClick = (id) => {
-    // Add the animation class
-    if (checkboxRef.current) {
-      checkboxRef.current.classList.add('checking');
+    if (!task.completed) {
+      setIsChecking(true);
+      if (checkboxRef.current) {
+        checkboxRef.current.classList.add('checking');
+      }
       
-      // Remove the class after animation completes
       setTimeout(() => {
         if (checkboxRef.current) {
           checkboxRef.current.classList.remove('checking');
         }
-      }, 300);
+        setIsChecking(false);
+        onToggleComplete(id);
+      }, 150);
+    } else {
+      onToggleComplete(id);
     }
-    
-    // Toggle the task complete state
-    onToggleComplete(id);
   };
   
   return (
@@ -31,12 +33,12 @@ const TaskItem = ({ task, onToggleComplete }) => {
     >
       <div 
         ref={checkboxRef}
-        className="task-checkbox"
+        className={`task-checkbox ${task.completed ? 'completed' : ''} ${isChecking ? 'checking' : ''}`}
         onClick={() => handleCheckboxClick(task.id)}
       >
-        {task.completed ? <span>✓</span> : <span></span>}
+        {(task.completed || isChecking) ? <span>✓</span> : <span></span>}
       </div>
-      <div className="task-text">{task.text}</div>
+      <div className="task-text">{task.content}</div>
       <div className="task-drag-handle">
         <span>⋮⋮</span>
       </div>
@@ -51,14 +53,12 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
   const newTaskInputRef = useRef(null);
   const tasksContainerRef = useRef(null);
   
-  // Focus the input when it appears
   useEffect(() => {
     if (isEditingNewTask && newTaskInputRef.current) {
       newTaskInputRef.current.focus();
     }
   }, [isEditingNewTask]);
   
-  // Set up sortable for dragging tasks within each category group
   useEffect(() => {
     if (tasksContainerRef.current) {
       const sortable = Sortable.create(tasksContainerRef.current, {
@@ -67,23 +67,20 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
         group: {
           name: 'tasks',
           pull: 'clone',
-          put: false // Don't allow dropping back into the list
+          put: false 
         },
         sort: false,
         ghostClass: 'task-ghost',
         chosenClass: 'task-chosen',
         dragClass: 'task-drag',
         onStart: function() {
-          // Add dragging class to body for global styling
           document.body.classList.add('task-dragging');
           document.documentElement.classList.add('dragging');
         },
         onEnd: function(evt) {
-          // Remove dragging classes
           document.body.classList.remove('task-dragging');
           document.documentElement.classList.remove('dragging');
           
-          // This will be handled by the parent TaskList component
         }
       });
       
@@ -110,6 +107,15 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
     }
   };
   
+  const getCategoryIcon = () => {
+    if (!category.icon) return '⬤';
+    // If icon is a hex color, render a colored dot
+    if (category.icon.startsWith('#')) {
+      return <span className="dot" style={{ backgroundColor: category.icon }}></span>;
+    }
+    return category.icon;
+  };
+
   return (
     <div className="category-group">
       <div className="category-header-container">
@@ -117,7 +123,7 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
           className="category-header" 
           onClick={() => setIsCollapsed(!isCollapsed)}
         >
-          <span className="category-icon">{category.icon || '⬤'}</span>
+          <span className="category-icon">{getCategoryIcon()}</span>
           <span className="category-name">{category.name}</span>
           <span className="category-count">{tasks.length}</span>
           <span className={`collapse-arrow ${isCollapsed ? 'collapsed' : ''}`}>
@@ -180,72 +186,12 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
   );
 };
 
-const TaskList = ({ tasks, onToggleComplete, activeCategory, categories: propCategories }) => {
-  const taskListRef = useRef(null);
-  const { addTaskToCalendar, categories: contextCategories, addTask } = useTaskContext();
+const TaskList = ({ tasks, onToggleComplete, activeCategory, categories }) => {
+  const { addTask } = useTaskContext();
   
-  // Use categories from props if provided, otherwise use from context
-  const categories = propCategories || contextCategories;
-  
-  // Force re-render when categories change
-  const [, forceUpdate] = useState({});
-  useEffect(() => {
-    forceUpdate({});
-  }, [categories]);
-  
-  // Handler for adding a task to a specific category
   const handleAddTaskToCategory = (text, categoryName) => {
-    addTask(text, categoryName);
+    addTask({ content: text, categoryName });
   };
-  
-  // Only set up Sortable on the taskListRef for NON-All category views
-  useEffect(() => {
-    if (taskListRef.current && activeCategory !== 'All') {
-      // Initialize Sortable for drag-and-drop functionality
-      const sortable = Sortable.create(taskListRef.current, {
-        animation: 150,
-        handle: '.task-drag-handle',
-        group: {
-          name: 'tasks',
-          pull: 'clone',
-          put: false // Don't allow dropping back into the list
-        },
-        sort: false, // Disable sorting within the list
-        ghostClass: 'task-ghost',
-        chosenClass: 'task-chosen',
-        dragClass: 'task-drag',
-        onStart: function() {
-          // Add dragging class to body for global styling
-          document.body.classList.add('task-dragging');
-          document.documentElement.classList.add('dragging');
-        },
-        onEnd: function(evt) {
-          // Remove dragging classes
-          document.body.classList.remove('task-dragging');
-          document.documentElement.classList.remove('dragging');
-          
-          // Handle drop on calendar
-          const taskId = evt.item.getAttribute('data-id');
-          const targetDate = evt.to.getAttribute('data-date');
-          
-          if (targetDate && taskId) {
-            // Add task to calendar on the target date
-            addTaskToCalendar(taskId, targetDate);
-            
-            // Return the clone to the original list
-            if (evt.pullMode === 'clone') {
-              evt.item.parentNode.removeChild(evt.item);
-            }
-          }
-        }
-      });
-      
-      return () => {
-        // Destroy Sortable instance when component unmounts
-        sortable.destroy();
-      };
-    }
-  }, [tasks, addTaskToCalendar, activeCategory]);
   
   // If we're in the 'All' tab, group tasks by category
   if (activeCategory === 'All') {
@@ -255,17 +201,20 @@ const TaskList = ({ tasks, onToggleComplete, activeCategory, categories: propCat
     // Initialize with all categories, even empty ones
     categories.forEach(cat => {
       if (cat.id !== 'all' && cat.id !== 'add-category') {
+        const orderValue = typeof cat.order === 'number' ? cat.order : categories.findIndex(c => c.id === cat.id);
         tasksByCategory[cat.name] = {
           tasks: [],
           icon: cat.icon,
-          order: cat.name === 'Completed' ? Number.MAX_SAFE_INTEGER : categories.findIndex(c => c.name === cat.name)
+          order: orderValue
         };
       }
     });
     
-    // Add tasks to their categories
+    // Add tasks to their categories (skip Uncategorized)
     tasks.forEach(task => {
-      const category = task.category || 'Uncategorized';
+      const category = task.category_name;
+      if (!category || category === 'Uncategorized') return;
+      
       if (!tasksByCategory[category]) {
         tasksByCategory[category] = {
           tasks: [],
@@ -279,10 +228,11 @@ const TaskList = ({ tasks, onToggleComplete, activeCategory, categories: propCat
     // Make sure all categories from the context are included, even if they don't have tasks
     categories.forEach(cat => {
       if (cat.id !== 'all' && cat.id !== 'add-category' && !tasksByCategory[cat.name]) {
+        const orderValue = typeof cat.order === 'number' ? cat.order : categories.findIndex(c => c.id === cat.id);
         tasksByCategory[cat.name] = {
           tasks: [],
           icon: cat.icon,
-          order: cat.name === 'Completed' ? Number.MAX_SAFE_INTEGER : categories.findIndex(c => c.name === cat.name)
+          order: orderValue
         };
       }
     });
@@ -315,7 +265,7 @@ const TaskList = ({ tasks, onToggleComplete, activeCategory, categories: propCat
   
   // Regular view for specific categories
   return (
-    <div className="task-list" ref={taskListRef}>
+    <div className="task-list">
       {tasks.map(task => (
         <TaskItem
           key={task.id}

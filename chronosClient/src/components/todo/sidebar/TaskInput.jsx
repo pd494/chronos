@@ -3,10 +3,23 @@ import ReactDOM from 'react-dom';
 import data from '@emoji-mart/data';
 import Picker from '@emoji-mart/react';
 import './TaskInput.css';
+import { useTaskContext } from '../../../context/TaskContext';
 
-const TaskInput = ({ onAddTask, activeCategory, categoryCount, categoryIcon, isEditable = false, showNewTaskInput = true, autoFocus = false, showAddButton = true, showCategoryHeader = true }) => {
+const TaskInput = ({
+  onAddTask,
+  activeCategory,
+  categoryCount,
+  categoryIcon,
+  isEditable = false,
+  showNewTaskInput = true,
+  autoFocus = false,
+  showAddButton = true,
+  showCategoryHeader = true,
+  placeholder = 'new meeting @ 2pm',
+  onCategoryRenamed = () => {}
+}) => {
+  const { updateCategory, categories } = useTaskContext();
   const [inputValue, setInputValue] = useState('');
-  const [isComposing, setIsComposing] = useState(false);
   const [isEditingCategory, setIsEditingCategory] = useState(false);
   const [categoryNameEdit, setCategoryNameEdit] = useState(activeCategory);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
@@ -21,16 +34,17 @@ const TaskInput = ({ onAddTask, activeCategory, categoryCount, categoryIcon, isE
     }
   }, [autoFocus]);
 
+  useEffect(() => {
+    setCategoryNameEdit(activeCategory);
+    setCurrentIcon(categoryIcon);
+  }, [activeCategory, categoryIcon]);
+
   const handleSubmit = (e) => {
     e.preventDefault();
     if (inputValue.trim()) {
       onAddTask(inputValue);
       setInputValue('');
     }
-  };
-
-  const handleComposeClick = () => {
-    setIsComposing(true);
   };
 
   const toggleEmojiPicker = (e) => {
@@ -47,7 +61,7 @@ const TaskInput = ({ onAddTask, activeCategory, categoryCount, categoryIcon, isE
 
   const handleCategoryEdit = () => {
     setIsEditingCategory(true);
-    setCurrentIcon(categoryIcon); // Ensure current icon is set when editing
+    setCurrentIcon(categoryIcon); 
     setTimeout(() => {
       if (categoryInputRef.current) {
         categoryInputRef.current.focus();
@@ -56,15 +70,26 @@ const TaskInput = ({ onAddTask, activeCategory, categoryCount, categoryIcon, isE
   };
 
   const saveCategoryEdit = () => {
-    // Here you would update the category name and icon in your context
-    // For example, you could call a function like:
-    // updateCategory(activeCategory, categoryNameEdit, currentIcon);
-    
-    // For now, we'll just update the local state
+    const trimmed = categoryNameEdit.trim();
+    if (!trimmed) {
+      setCategoryNameEdit(activeCategory);
+      setIsEditingCategory(false);
+      return;
+    }
+
+    const category = categories.find(cat => cat.name === activeCategory);
+    if (category && trimmed !== activeCategory) {
+      const payload = { name: trimmed };
+      if (typeof currentIcon === 'string' && currentIcon.startsWith('#')) {
+        payload.color = currentIcon;
+      }
+      updateCategory(category.id, payload);
+      onCategoryRenamed(activeCategory, trimmed);
+    }
+    setCategoryNameEdit(trimmed);
     setIsEditingCategory(false);
   };
 
-  // Close emoji picker when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (emojiPickerRef.current && !emojiPickerRef.current.contains(event.target)) {
@@ -161,7 +186,7 @@ const TaskInput = ({ onAddTask, activeCategory, categoryCount, categoryIcon, isE
             type="text"
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
-            placeholder="new meeting @ 2pm"
+            placeholder={placeholder}
             className="task-input-field"
           />
           <span className="keyboard-shortcut">N</span>

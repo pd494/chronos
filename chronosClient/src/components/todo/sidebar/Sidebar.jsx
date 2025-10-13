@@ -1,47 +1,66 @@
-import React, { useState, useRef, useEffect } from 'react';
-import CategoryTabs from './CategoryTabs';
+import React from 'react';
 import TaskInput from './TaskInput';
 import TaskList from './TaskList';
 import { useTaskContext } from '../../../context/TaskContext';
 import './Sidebar.css';
 
-const Sidebar = ({ activeCategory, isSidebarCollapsed, sidebarWidth, sidebarVisible, toggleSidebar }) => {
+const Sidebar = ({ activeCategory, isSidebarCollapsed, sidebarWidth, sidebarVisible, toggleSidebar, onCategoryRenamed }) => {
   const { tasks, addTask, toggleTaskComplete, categories } = useTaskContext();
-  const [showNewTaskInput, setShowNewTaskInput] = useState(false);
-
-  // toggleSidebar is now passed from App.jsx as a prop
-
-  // Toggle sidebar collapse state
-
+  
   const handleAddTask = (text) => {
-    addTask(text, activeCategory === 'All' ? 'Inbox' : activeCategory);
-    setShowNewTaskInput(false);
+    addTask({ content: text, categoryName: activeCategory });
   };
 
   const handleToggleComplete = (id) => {
     toggleTaskComplete(id);
   };
 
-  // Find the icon for the active category
-  const getCategoryIcon = () => {
+  const findActiveCategory = () =>
+    categories.find(cat => cat.name === activeCategory);
+
+  const renderCategoryDot = (color, extraClass = '') => (
+    <span
+      className={`category-header-dot ${extraClass}`.trim()}
+      style={{ backgroundColor: color }}
+    />
+  );
+
+  const renderCategoryIcon = () => {
     if (activeCategory === 'All') return '★';
-    const category = categories.find(cat => cat.name === activeCategory);
-    return category ? category.icon : null;
+    const category = findActiveCategory();
+    if (!category) return null;
+    if (typeof category.icon === 'string' && category.icon.startsWith('#')) {
+      return renderCategoryDot(category.icon);
+    }
+    return category.icon;
   };
   
-  // Get today's date as a number for the Today icon
   const getTodayDateNumber = () => {
     return new Date().getDate().toString();
   };
-  
-  // Update the icon for Today category
-  useEffect(() => {
-    const todayCategory = categories.find(cat => cat.name === 'Today');
-    if (todayCategory && todayCategory.icon !== getTodayDateNumber()) {
-      // This would update the icon if we had a function to update categories
-      // For now, this is just a placeholder
+
+  const renderTaskInputIcon = () => {
+    if (activeCategory === 'Today') {
+      const category = findActiveCategory();
+      const color =
+        (category && typeof category.icon === 'string' && category.icon.startsWith('#'))
+          ? category.icon
+          : '#FF9500';
+      return (
+        <>
+          {renderCategoryDot(color, 'with-date')}
+          <span className="category-today-date">{getTodayDateNumber()}</span>
+        </>
+      );
     }
-  }, [categories]);
+    return renderCategoryIcon();
+  };
+  
+  const filteredTasks = tasks.filter(task => {
+    if (activeCategory === 'All') return true;
+    if (activeCategory === 'Completed') return task.completed;
+    return task.category_name === activeCategory;
+  });
 
   return (
     <div 
@@ -53,16 +72,17 @@ const Sidebar = ({ activeCategory, isSidebarCollapsed, sidebarWidth, sidebarVisi
             <TaskInput 
               onAddTask={handleAddTask} 
               activeCategory={activeCategory}
-              categoryIcon={activeCategory === 'Today' ? getTodayDateNumber() : getCategoryIcon()}
-              categoryCount={tasks.filter(task => task.category === activeCategory).length}
+              categoryIcon={renderTaskInputIcon()}
+              categoryCount={filteredTasks.length}
               isEditable={activeCategory !== 'All' && activeCategory !== 'Today' && activeCategory !== 'Inbox' && activeCategory !== 'Completed'}
               showNewTaskInput={true}
               showAddButton={true}
+              onCategoryRenamed={onCategoryRenamed}
             />
           ) : (
             <div className="all-category-header">
               <div className="category-title-container">
-                <span className="category-header-icon">{getCategoryIcon()}</span>
+                <span className="category-header-icon">{renderCategoryIcon()}</span>
                 <span className="category-title-all">All</span>
               </div>
               <div className="category-count-container">
@@ -72,28 +92,18 @@ const Sidebar = ({ activeCategory, isSidebarCollapsed, sidebarWidth, sidebarVisi
           )}
           
           {activeCategory === 'All' && (
-            <div className="all-tab-task-input">
-              <form className="task-input all-tab-form" onSubmit={(e) => {
-                e.preventDefault();
-                if (e.target.elements.taskText.value.trim()) {
-                  handleAddTask(e.target.elements.taskText.value);
-                  e.target.elements.taskText.value = '';
-                }
-              }}>
-                <input
-                  name="taskText"
-                  type="text"
-                  placeholder="New todo @list @2pm, or compose email"
-                  className="task-input-field"
-                  autoFocus={showNewTaskInput}
-                />
-                <span className="keyboard-shortcut">N</span>
-              </form>
-            </div>
+            <TaskInput
+              onAddTask={handleAddTask}
+              activeCategory={activeCategory}
+              categoryIcon={renderCategoryIcon()}
+              showCategoryHeader={false}
+              showAddButton={false}
+              placeholder="New todo @list @2pm, or compose email"
+            />
           )}
           
           <TaskList 
-            tasks={tasks.filter(task => activeCategory === 'All' || task.category === activeCategory)} 
+            tasks={filteredTasks} 
             onToggleComplete={handleToggleComplete} 
             activeCategory={activeCategory}
             categories={categories}

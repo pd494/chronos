@@ -1,146 +1,166 @@
-import { createContext, useContext, useEffect, useState } from 'react'
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
+import { authApi } from '../lib/api'
 
-// Create the auth context
-const AuthContext = createContext({})
+const AuthContext = createContext()
+
+export const useAuth = () => {
+  const context = useContext(AuthContext)
+  if (!context) {
+    throw new Error('useAuth must be used within AuthProvider')
+  }
+  return context
+}
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [isLoggingOut, setIsLoggingOut] = useState(false)
+  const isLoggingOutRef = useRef(false)
+  const hasProcessedOAuthRef = useRef(false)
 
-  // Set up auth callback listener for Electron
   useEffect(() => {
-    // Check for existing session on component mount
-    const checkSession = async () => {
-      try {
-        const { data: { session } } = await supabase.auth.getSession()
-        setUser(session?.user ?? null)
-      } catch (error) {
-        console.error('Error checking session:', error)
-      } finally {
-        setLoading(false)
-      }
-    }
+    let unsubscribe
 
-    checkSession()
-
-    // Listen for auth state changes from Supabase
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null)
-    })
-
-    // Listen for deep link callbacks from Electron if we're in Electron
-    if (window.electronAPI) {
-      window.electronAPI.onAuthCallback(async (url) => {
-        console.log('Auth callback received from Electron:', url)
-        
-        try {
-          // Extract hash from URL
-          const hashMatch = url.match(/#(.*)/)
-          if (hashMatch && hashMatch[1]) {
-            const hash = hashMatch[1]
-            console.log('Hash extracted:', hash)
-            
-            // Use parseFragment helper to extract tokens from hash
-            const params = parseFragment(hash)
-            
-            if (params.access_token && params.refresh_token) {
-              // Set the session with the tokens
-              const { error } = await supabase.auth.setSession({
-                access_token: params.access_token,
-                refresh_token: params.refresh_token
-              })
-              
-              if (error) throw error
-            }
+    const initAuth = async () => {
+      unsubscribe = supabase.auth.onAuthStateChange(async (event, session) => {
+        if (isLoggingOutRef.current) return
+        if (event === 'SIGNED_IN' && session) {
+          if (!hasProcessedOAuthRef.current) {
+            hasProcessedOAuthRef.current = true
+            await handleOAuthCallback(session)
           }
-        } catch (error) {
-          console.error('Error processing auth callback:', error)
+        } else if (event === 'SIGNED_OUT') {
+          setUser(null)
+        } else if (event === 'INITIAL_SESSION') {
+          if (session) {
+            if (!hasProcessedOAuthRef.current) {
+              hasProcessedOAuthRef.current = true
+              await handleOAuthCallback(session)
+            }
+          } else {
+            await checkAuth()
+          }
         }
       })
+
+      try {
+        const { data } = await supabase.auth.getSession()
+        if (data?.session && !hasProcessedOAuthRef.current) {
+          hasProcessedOAuthRef.current = true
+          await handleOAuthCallback(data.session)
+        } else {
+          const start = Date.now()
+          const poll = async () => {
+            if (Date.now() - start > 1500 || hasProcessedOAuthRef.current) return
+            const { data: later } = await supabase.auth.getSession()
+            if (later?.session && !hasProcessedOAuthRef.current) {
+              hasProcessedOAuthRef.current = true
+              await handleOAuthCallback(later.session)
+              return
+            }
+            setTimeout(poll, 150)
+          }
+          setTimeout(poll, 150)
+        }
+      } catch (_) {}
     }
 
-    // Cleanup subscriptions
-    return () => {
-      subscription?.unsubscribe()
-    }
+    initAuth()
+    return () => unsubscribe?.data?.subscription?.unsubscribe()
   }, [])
 
-  // Helper to parse hash fragment into an object of params
-  const parseFragment = (hash) => {
-    const params = {};
-    new URLSearchParams(hash).forEach((value, key) => {
-      params[key] = value;
-    });
-    return params;
+  const handleOAuthCallback = async (session) => {
+    try {
+      await authApi.syncSession(session.access_token, session.refresh_token)
+      await checkAuth()
+      await supabase.auth.signOut({ scope: 'local' })
+    } catch (error) {
+      setUser(null)
+    }
   }
 
-  // Sign in with Google
-  const signInWithGoogle = async () => {
+  const checkAuth = async () => {
     try {
-      // Default web callback (for browser)
-      const webRedirect = window.location.origin + '/auth-callback';
-      const scopes = 'https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/calendar.events';
-      
-      // If we're running in Electron, open auth in the external browser
-      if (window.electronAPI) {
-        // Use custom protocol so Google will send the user straight back to the Electron app
-        const protocolRedirect = 'chronos://auth/callback';
-        const { data, error } = await supabase.auth.signInWithOAuth({
-          provider: 'google',
-          options: {
-            redirectTo: protocolRedirect,
-            scopes,
-            skipBrowserRedirect: true
-          }
-        });
-        if (error) throw error;
-        window.electronAPI.send('open-external-url', data.url);
-        return;
-      }
-      
-      // Fall back to normal in-app auth for web browser usage (redirects to our React route)
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: 'google',
-        options: {
-          redirectTo: webRedirect,
-          scopes,
+      const userData = await authApi.getMe()
+      setUser(userData)
+    } catch (error) {
+      console.log('checkAuth error:', error.message)
+      if (error.message.includes('expired')) {
+        try {
+          await authApi.refresh()
+          return checkAuth()
+        } catch (refreshError) {
+          console.log('Refresh failed, setting user to null')
+          setUser(null)
         }
-      });
-      if (error) throw error;
-    } catch (error) {
-      console.error('Error signing in with Google:', error.message);
+      } else {
+        console.log('Auth check failed, setting user to null')
+        setUser(null)
+      }
+    } finally {
+      setLoading(false)
     }
   }
 
-  // Sign out
-  const signOut = async () => {
+  const login = async () => {
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: `${window.location.origin}/`,
+        scopes: 'https://www.googleapis.com/auth/calendar.events'
+      }
+    })
+    if (error) throw error
+  }
+
+  const logout = async () => {
+    setIsLoggingOut(true)
+    isLoggingOutRef.current = true
+
     try {
-      const { error } = await supabase.auth.signOut()
-      if (error) throw error
-    } catch (error) {
-      console.error('Error signing out:', error.message)
+      Object.keys(window.localStorage)
+        .filter((k) => k.startsWith('sb-'))
+        .forEach((k) => window.localStorage.removeItem(k))
+      Object.keys(window.sessionStorage)
+        .filter((k) => k.startsWith('sb-'))
+        .forEach((k) => window.sessionStorage.removeItem(k))
+    } catch (e) {
+      // ignore
     }
+
+    console.log('Signing out from Supabase (local scope)...')
+    try {
+      await Promise.race([
+        supabase.auth.signOut({ scope: 'local' }),
+        new Promise((resolve) => setTimeout(resolve, 1500)) // timeout so we don't hang
+      ])
+      console.log('Supabase local signout attempted')
+    } catch (e) {
+      console.log('Supabase local signout error (ignored):', e?.message)
+    }
+    
+    
+    try {
+      console.log('Calling backend logout...')
+      await authApi.logout()
+      console.log('Backend logout successful')
+    } catch (error) {
+      console.error('Backend logout error:', error)
+    }
+    
+    
+    setUser(null)
+    console.log('User set to null')
+    
+    
+    console.log('Reloading page...')
+    window.location.reload()
   }
 
-  // Provide auth context to children
   return (
-    <AuthContext.Provider value={{
-      user,
-      loading,
-      signInWithGoogle,
-      signOut
-    }}>
+    <AuthContext.Provider value={{ user, loading, login, logout, checkAuth }}>
       {children}
     </AuthContext.Provider>
   )
 }
-
-// Custom hook to use auth context
-export const useAuth = () => {
-  const context = useContext(AuthContext)
-  if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider')
-  }
-  return context
-} 

@@ -2,19 +2,16 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Get the project root directory (parent of chronosServer)
 PROJECT_ROOT = Path(__file__).parent.parent
+load_dotenv(PROJECT_ROOT / ".env")
 
-# Load environment variables from the root .env file
-dotenv_path = os.path.join(PROJECT_ROOT, ".env")
-load_dotenv(dotenv_path)
 
-# Simple settings class without pydantic to avoid validation issues
 class Settings:
-    def __init__(self):
-        # Read directly from environment variables
-        self.SUPABASE_URL = os.getenv('VITE_SUPABASE_URL')
-        self.SUPABASE_KEY = os.getenv('VITE_SUPABASE_ANON_KEY')
-        self.JWT_SECRET = os.getenv('JWT_SECRET', 'your_secure_jwt_secret')  # Default value if not provided
+    SUPABASE_URL: str = os.getenv("VITE_SUPABASE_URL", "")
+    SUPABASE_KEY: str = os.getenv("SERVICE_ROLE_KEY", "")
+    SUPABASE_CALLBACK_URL: str = os.getenv("SUPABASE_CALLBACK_URL", "http://localhost:8000/auth/callback")
+    IS_PRODUCTION: bool = os.getenv("IS_PRODUCTION", "false").lower() == "true"
+    FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:5174")
+
 
 settings = Settings()

@@ -1,31 +1,24 @@
-from fastapi import FastAPI, Depends, HTTPException, status, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from auth import get_current_user
-
+from endpoints.auth import router as auth_router
+from endpoints.todos import router as todo_router
 app = FastAPI(title="Chronos API")
 
-# Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://127.0.0.1:5173", "http://127.0.0.1:8090"],  # Include all necessary origins
+    allow_origins=["http://localhost:5174", "http://localhost:5174/"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+app.include_router(auth_router)
+app.include_router(todo_router)
+
 @app.get("/")
 async def root():
     return {"message": "Welcome to Chronos API"}
-
-@app.get("/api/user")
-async def get_user(user = Depends(get_current_user)):
-    return {"user": user}
-
-@app.get("/api/protected")
-async def protected_route(user = Depends(get_current_user)):
-    return {"message": "This is a protected route", "user_id": user.id}
-
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):

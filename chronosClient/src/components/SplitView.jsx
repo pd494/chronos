@@ -6,22 +6,11 @@ const SplitView = ({ sidebar, main, onSidebarWidthChange }) => {
   const [sidebarVisible, setSidebarVisible] = useState(true)
   const [sidebarWidth, setSidebarWidth] = useState(320)
   
-  // Store sidebar width in localStorage
-  useEffect(() => {
-    const savedWidth = localStorage.getItem('sidebarWidth')
-    if (savedWidth) {
-      setSidebarWidth(parseInt(savedWidth))
-    }
-  }, [])
   
-  // Save sidebar width when changed
+  // Notify parent component about width changes
   useEffect(() => {
-    if (sidebarWidth > 100) {
-      localStorage.setItem('sidebarWidth', sidebarWidth.toString())
-      // Notify parent component about the width change
-      if (onSidebarWidthChange) {
-        onSidebarWidthChange(sidebarWidth, sidebarVisible)
-      }
+    if (sidebarWidth > 100 && onSidebarWidthChange) {
+      onSidebarWidthChange(sidebarWidth, sidebarVisible)
     }
   }, [sidebarWidth, sidebarVisible, onSidebarWidthChange])
   
@@ -58,7 +47,7 @@ const SplitView = ({ sidebar, main, onSidebarWidthChange }) => {
           {sidebar}
           <div
             onMouseDown={startDrag}
-            className="absolute right-0 top-0 h-full w-2 bg-gray-200 dark:bg-gray-700 cursor-col-resize hover:bg-blue-300 dark:hover:bg-blue-600 z-10"
+            className="absolute right-0 top-0 h-full w-[1px] bg-gray-200 dark:bg-gray-700 cursor-col-resize hover:bg-blue-300 dark:hover:bg-blue-600 z-10"
           />
         </div>
       )}

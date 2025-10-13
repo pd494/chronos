@@ -548,9 +548,9 @@ const WeeklyView = () => {
           {hours.map((hour) => (
             <div 
               key={hour} 
-              className="h-[60px] relative border-t border-gray-200 dark:border-gray-700"
+              className="h-[60px] relative"
             >
-              <span className="absolute -top-2.5 left-2 text-xs text-gray-500">
+              <span className="absolute left-2 text-xs text-gray-500" style={{ top: hour === 0 ? '4px' : '-10px' }}>
                 {hour === 0 ? '12 AM' : hour < 12 ? `${hour} AM` : hour === 12 ? '12 PM' : `${hour - 12} PM`}
               </span>
             </div>

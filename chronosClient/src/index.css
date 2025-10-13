@@ -313,7 +313,7 @@ body.task-dragging {
 }
 
 body.task-dragging * {
-  cursor: grabbing !important;
+  cursor: pointer;
 }
 
 /* Prevent text selection during drag operations */

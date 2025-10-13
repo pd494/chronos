@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { FiChevronLeft, FiChevronRight, FiChevronDown, FiPlus, FiShare2, FiUser } from 'react-icons/fi'
+import { FiChevronLeft, FiChevronRight, FiChevronDown, FiPlus, FiUser, FiLogOut } from 'react-icons/fi'
 import { useCalendar } from '../context/CalendarContext'
 import { useTaskContext } from '../context/TaskContext'
 import { useAuth } from '../context/AuthContext'
@@ -24,9 +24,7 @@ const ViewButton = ({ view, currentView, onChange }) => {
   );
 };
 
-const Header = ({
-  darkModeButton = null
-}) => {
+const Header = () => {
   const {
     currentDate,
     view,
@@ -38,20 +36,18 @@ const Header = ({
     openEventModal
   } = useCalendar()
   
-  // Auth context
-  const { user, signInWithGoogle, signOut } = useAuth()
+  const { user, login, logout } = useAuth()
   
   // State for view dropdown
   const [showViewDropdown, setShowViewDropdown] = useState(false)
-  // State for user dropdown
-  const [showUserDropdown, setShowUserDropdown] = useState(false)
+  const [showUserMenu, setShowUserMenu] = useState(false)
   
   // Task context for categories
   const { tasks } = useTaskContext()
   
   // Reference for dropdown button
   const viewButtonRef = useRef(null)
-  const userButtonRef = useRef(null)
+  const userMenuRef = useRef(null)
   
   // Handle view change
   const handleViewChange = (newView) => {
@@ -61,45 +57,28 @@ const Header = ({
   
   // Close dropdown when clicking outside
   useEffect(() => {
-    if (!showViewDropdown) return
-    
     const handleClickOutside = (event) => {
-      if (viewButtonRef.current && !viewButtonRef.current.contains(event.target) &&
+      if (showViewDropdown && viewButtonRef.current && !viewButtonRef.current.contains(event.target) &&
           !event.target.closest('.view-dropdown-menu')) {
         setShowViewDropdown(false)
+      }
+      
+      if (showUserMenu && userMenuRef.current && !userMenuRef.current.contains(event.target) &&
+          !event.target.closest('.user-menu-dropdown')) {
+        setShowUserMenu(false)
       }
     }
     
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [showViewDropdown])
-  
-  // Share functionality
-  const handleShare = () => {
-    console.log('Share calendar')
-    // Add your share functionality here
-  }
-
-  // Create modified dark mode button
-  const renderDarkModeButton = () => {
-    if (!darkModeButton) return null;
-    
-    // Clone the original button but add our class
-    return (
-      <div className="flex-shrink-0">
-        {React.cloneElement(darkModeButton, { 
-          className: `p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors dark-mode-button ${darkModeButton.props.className || ''}`
-        })}
-      </div>
-    );
-  }
+  }, [showViewDropdown, showUserMenu])
 
   return (
-    <header className="flex items-center justify-between h-12 bg-white dark:bg-gray-800 px-4 md:px-6" style={{ WebkitAppRegion: 'drag' }}>
+    <header className="flex items-center justify-between h-12 bg-white px-4 md:px-6" style={{ WebkitAppRegion: 'drag' }}>
       {/* Left: Month/Year and Navigation */}
       <div className="flex items-center space-x-3">
         {/* Current Date Display - Now first */}
-        <span className="text-sm font-semibold text-gray-900 dark:text-gray-100 select-none current-date" style={{ WebkitAppRegion: 'no-drag' }}>
+        <span className="text-sm font-semibold text-gray-900 select-none current-date" style={{ WebkitAppRegion: 'no-drag' }}>
           {formatDateHeader()}
         </span>
         
@@ -107,14 +86,14 @@ const Header = ({
         <div className="flex items-center navigation-buttons">
           <button
             onClick={navigateToPrevious}
-            className="p-1 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300"
+            className="p-1 rounded-full hover:bg-gray-100 text-gray-600"
             style={{ WebkitAppRegion: 'no-drag' }}
           >
             <FiChevronLeft size={18} />
           </button>
           <button
             onClick={navigateToNext}
-            className="p-1 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300"
+            className="p-1 rounded-full hover:bg-gray-100 text-gray-600"
             style={{ WebkitAppRegion: 'no-drag' }}
           >
             <FiChevronRight size={18} />
@@ -182,56 +161,95 @@ const Header = ({
           )}
         </div>
         
-        {/* User authentication button */}
-        <div style={{ position: 'relative', zIndex: 9998 }}>
-          <button 
-            ref={userButtonRef}
-            onClick={() => user ? setShowUserDropdown(!showUserDropdown) : signInWithGoogle()}
-            className="clean-button"
+        {/* Auth Button/Menu */}
+        {user ? (
+          <div style={{ position: 'relative', zIndex: 9999 }}>
+            <button
+              ref={userMenuRef}
+              onClick={() => setShowUserMenu(!showUserMenu)}
+              style={{ 
+                WebkitAppRegion: 'no-drag',
+                border: 'none',
+                background: 'none',
+                cursor: 'pointer',
+                padding: 0
+              }}
+            >
+              {user.avatar_url ? (
+                <img 
+                  src={user.avatar_url} 
+                  alt={user.name} 
+                  style={{ 
+                    width: '32px', 
+                    height: '32px', 
+                    borderRadius: '50%',
+                    objectFit: 'cover'
+                  }} 
+                />
+              ) : (
+                <div style={{
+                  width: '32px',
+                  height: '32px',
+                  borderRadius: '50%',
+                  backgroundColor: '#e5e7eb',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}>
+                  <FiUser size={18} />
+                </div>
+              )}
+            </button>
+            
+            {showUserMenu && (
+              <div className="user-menu-dropdown" style={{
+                position: 'absolute',
+                top: '100%',
+                right: 0,
+                marginTop: '8px',
+                backgroundColor: 'white',
+                border: '1px solid #e5e7eb',
+                borderRadius: '8px',
+                boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
+                minWidth: '200px',
+                zIndex: 10000
+              }}>
+                <div style={{ padding: '12px', borderBottom: '1px solid #e5e7eb' }}>
+                  <div style={{ fontSize: '14px', fontWeight: '500' }}>{user.name}</div>
+                  <div style={{ fontSize: '12px', color: '#6b7280' }}>{user.email}</div>
+                </div>
+                <button
+                  onClick={logout}
+                  style={{
+                    width: '100%',
+                    padding: '12px',
+                    textAlign: 'left',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    border: 'none',
+                    background: 'none',
+                    cursor: 'pointer',
+                    fontSize: '14px'
+                  }}
+                  onMouseEnter={(e) => e.target.style.backgroundColor = '#f3f4f6'}
+                  onMouseLeave={(e) => e.target.style.backgroundColor = 'transparent'}
+                >
+                  <FiLogOut size={16} />
+                  <span>Sign out</span>
+                </button>
+              </div>
+            )}
+          </div>
+        ) : (
+          <button
+            onClick={login}
+            className="share-button"
             style={{ WebkitAppRegion: 'no-drag' }}
           >
-            {user ? (
-              <>
-                <FiUser size={14} className="mr-1" />
-                <span className="hidden md:inline">{user.email?.split('@')[0]}</span>
-                <FiChevronDown size={14} className="ml-1" />
-              </>
-            ) : (
-              <>
-                <FiUser size={14} className="mr-1" />
-                <span>Sign In</span>
-              </>
-            )}
+            Sign In
           </button>
-          
-          {user && showUserDropdown && (
-            <div className="view-dropdown-menu user-dropdown-menu">
-              <div className="px-4 py-2 text-sm text-gray-500 truncate">
-                {user.email}
-              </div>
-              <button
-                onClick={() => {
-                  signOut();
-                  setShowUserDropdown(false);
-                }}
-                className="w-full text-left"
-              >
-                <span>Sign Out</span>
-              </button>
-            </div>
-          )}
-        </div>
-        
-        {/* Share Button with lavender background */}
-        <button
-          onClick={handleShare}
-          className="share-button"
-          style={{ WebkitAppRegion: 'no-drag' }}
-        >
-          Share
-        </button>
-        
-        {renderDarkModeButton()}
+        )}
       </div>
     </header>
   )

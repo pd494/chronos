@@ -1,8 +1,18 @@
 import { createClient } from '@supabase/supabase-js'
 
-// Get environment variables
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 
-// Create and export the Supabase client
-export const supabase = createClient(supabaseUrl, supabaseAnonKey) 
+if (!supabaseUrl || !supabaseAnonKey) {
+  throw new Error('Missing Supabase environment variables')
+}
+
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    flowType: 'pkce',
+    autoRefreshToken: false,  
+    detectSessionInUrl: true,
+    persistSession: true,
+    storage: window.sessionStorage
+  }
+})

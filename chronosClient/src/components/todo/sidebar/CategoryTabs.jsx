@@ -1,25 +1,40 @@
 import React, { useState, useRef, useEffect } from 'react';
 import ReactDOM from 'react-dom';
+import Sortable from 'sortablejs';
 import './CategoryTabs.css';
-import data from '@emoji-mart/data';
-import Picker from '@emoji-mart/react';
+import { useTaskContext } from '../../../context/TaskContext';
 
-const CategoryTabs = ({ categories, activeCategory, onCategoryChange, onAddCategory, isCollapsed = false, isCompact = false, inHeader = false }) => {
+const CategoryTabs = ({ categories, activeCategory, onCategoryChange, isCollapsed = false, isCompact = false, inHeader = false }) => {
+  const { createCategory, reorderCategories, deleteCategory } = useTaskContext();
   const [truncatedTabs, setTruncatedTabs] = useState(new Set());
   const [isAddingCategory, setIsAddingCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
-  const [selectedEmoji, setSelectedEmoji] = useState('⬤'); // Default emoji (black circle)
-  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [selectedColor, setSelectedColor] = useState('#3478F6');
+  const [showColorPicker, setShowColorPicker] = useState(false);
+  const [contextMenu, setContextMenu] = useState(null);
   const tabRefs = useRef({});
+  const labelRefs = useRef({});
+  const listRef = useRef(null);
   const inputRef = useRef(null);
   const tabsContainerRef = useRef(null);
-  const emojiPickerRef = useRef(null);
+  const colorPickerRef = useRef(null);
+  const contextMenuRef = useRef(null);
+  
+  const categoryColors = [
+    '#3478F6',
+    '#FF3B30',
+    '#34C759',
+    '#FF9500',
+    '#AF52DE',
+    '#FFD60A',
+    '#00C7BE',
+    '#FF2D55',
+  ];
 
-  // Check which tabs are truncated
   useEffect(() => {
     const checkTruncation = () => {
       const newTruncated = new Set();
-      Object.entries(tabRefs.current).forEach(([id, element]) => {
+      Object.entries(labelRefs.current).forEach(([id, element]) => {
         if (element && element.scrollWidth > element.clientWidth) {
           newTruncated.add(id);
         }
@@ -32,13 +47,49 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, onAddCateg
     return () => window.removeEventListener('resize', checkTruncation);
   }, [categories]);
 
-  // Default emoji for new categories
-  const defaultEmoji = '⬤'; // Black circle
+  useEffect(() => {
+    if (!listRef.current) return;
+    if (isAddingCategory) return;
+
+    const sortable = Sortable.create(listRef.current, {
+      animation: 200,
+      draggable: '.category-tab-horizontal[data-draggable="true"]',
+      filter: '.add-category-button',
+      ghostClass: 'category-tab-ghost',
+      chosenClass: 'category-tab-chosen',
+      dragClass: 'category-tab-drag',
+      forceFallback: false,
+      swapThreshold: 0.5,
+      invertSwap: false,
+      direction: 'horizontal',
+      easing: 'cubic-bezier(0.25, 0.1, 0.25, 1)',
+      onEnd: (evt) => {
+        if (evt.oldIndex === evt.newIndex) return;
+        const orderedIds = Array.from(listRef.current.querySelectorAll('[data-category-id]'))
+          .map(el => el.getAttribute('data-category-id'))
+          .filter(Boolean)
+          .filter(id => id !== 'add-category' && id !== 'all');
+        reorderCategories(orderedIds);
+      }
+    });
+
+    return () => {
+      sortable.destroy();
+    };
+  }, [reorderCategories, categories, isAddingCategory]);
+
+  const getCategoryColor = (category) => {
+    if (category.icon && category.icon.startsWith('#')) {
+      return category.icon;
+    }
+    if (category.name === 'All') return '#666';
+    if (category.name === 'Inbox') return '#3478F6';
+    if (category.name === 'Today') return '#FF9500';
+    return '#3478F6'; 
+  };
   
-  // Handle starting the add category process
   const handleStartAddCategory = () => {
     setIsAddingCategory(true);
-    // Focus the input after it renders
     setTimeout(() => {
       if (inputRef.current) {
         inputRef.current.focus();
@@ -46,35 +97,22 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, onAddCateg
     }, 10);
   };
   
-  // Handle saving the new category
   const handleSaveCategory = () => {
     if (newCategoryName.trim()) {
-      const newCategory = {
-        id: `category-${Date.now()}`,
-        name: newCategoryName.trim(),
-        count: 0,
-        icon: selectedEmoji
-      };
-      onAddCategory(newCategory);
-      // Reset the form
+      createCategory(newCategoryName.trim(), selectedColor);
       setNewCategoryName('');
-      setSelectedEmoji('●');
+      setSelectedColor('#3478F6');
       setIsAddingCategory(false);
-      
-      // If we're in the All tab, we want to stay there to see the new category
-      // This is handled by the parent component
     }
   };
   
-  // Handle canceling the add category process
   const handleCancelAddCategory = () => {
     setIsAddingCategory(false);
     setNewCategoryName('');
-    setSelectedEmoji('●');
-    setShowEmojiPicker(false);
+    setSelectedColor('#3478F6');
+    setShowColorPicker(false);
   };
   
-  // Handle key presses in the input field
   const handleKeyDown = (e) => {
     if (e.key === 'Enter') {
       handleSaveCategory();
@@ -83,23 +121,23 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, onAddCateg
     }
   };
 
-  // Toggle emoji picker
-  const toggleEmojiPicker = (e) => {
+  const toggleColorPicker = (e) => {
     e.stopPropagation();
-    setShowEmojiPicker(!showEmojiPicker);
+    setShowColorPicker(!showColorPicker);
   };
 
-  // Handle emoji selection
-  const handleEmojiSelect = (emoji) => {
-    setSelectedEmoji(emoji.native);
-    setShowEmojiPicker(false);
+  const handleColorSelect = (color) => {
+    setSelectedColor(color);
+    setShowColorPicker(false);
   };
 
-  // Close emoji picker when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {
-      if (emojiPickerRef.current && !emojiPickerRef.current.contains(event.target)) {
-        setShowEmojiPicker(false);
+      if (colorPickerRef.current && !colorPickerRef.current.contains(event.target)) {
+        setShowColorPicker(false);
+      }
+      if (contextMenuRef.current && !contextMenuRef.current.contains(event.target)) {
+        setContextMenu(null);
       }
     };
 
@@ -109,61 +147,92 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, onAddCateg
     };
   }, []);
 
+  const handleContextMenu = (e, category) => {
+    e.preventDefault();
+    if (category.id === 'all' || category.name === 'Today' || category.name === 'Inbox' || category.name === 'Completed') {
+      return;
+    }
+    const rect = e.currentTarget.getBoundingClientRect();
+    setContextMenu({
+      category,
+      x: rect.left,
+      y: rect.bottom + 4
+    });
+  };
+
   return (
     <div className={`category-tabs-container ${isCompact ? 'compact' : ''} ${inHeader ? 'in-header' : ''}`} ref={tabsContainerRef}>
-      <div className="category-tabs-horizontal">
-        {/* Regular category tabs - hide when adding a new category */}
-        {!isAddingCategory && categories.filter(cat => cat.id !== 'add-category').map(category => (
+      <div className="category-tabs-horizontal" ref={listRef}>
+        {!isAddingCategory && categories.map(category => (
           <div
             key={category.id}
+            data-category-id={category.id}
+            data-draggable={category.id !== 'all'}
             className={`category-tab-horizontal ${activeCategory === category.name ? 'active' : ''}`}
             onClick={() => {
               if (category.name) {
                 onCategoryChange(category.name);
               }
             }}
+            onContextMenu={(e) => handleContextMenu(e, category)}
+            ref={(el) => {
+              if (el) {
+                tabRefs.current[category.id] = el;
+              } else {
+                delete tabRefs.current[category.id];
+              }
+            }}
           >
-            <span className="category-icon">{category.icon}</span>
-            {/* Always show name in header, even in collapsed view */}
+            {category.icon && typeof category.icon === 'string' && category.icon.startsWith('#') ? (
+              <span className="category-icon" style={{ backgroundColor: getCategoryColor(category) }}></span>
+            ) : (
+              <span className="category-icon-emoji">{category.icon}</span>
+            )}
             {(inHeader || !isCollapsed) && (
               <span 
                 className="category-name" 
-                ref={el => tabRefs.current[category.id] = el}
+                ref={(el) => {
+                  if (el) {
+                    labelRefs.current[category.id] = el;
+                  } else {
+                    delete labelRefs.current[category.id];
+                  }
+                }}
                 title={truncatedTabs.has(category.id) ? category.name : ''}
               >
                 {category.name}
               </span>
             )}
-            {/* Show counts for all items */}
             {category.count !== undefined && (
               <span className="category-count-bubble">{category.count}</span>
             )}
           </div>
         ))}
         
-        {/* Add category button or form */}
         {isAddingCategory ? (
           <div className="category-tab-horizontal add-category-form">
-            <div className="emoji-picker-wrapper">
+            <div className="color-picker-wrapper">
               <button 
                 type="button"
-                className="emoji-button"
-                onClick={toggleEmojiPicker}
+                className="color-button"
+                onClick={toggleColorPicker}
+                style={{ backgroundColor: selectedColor }}
               >
-                {selectedEmoji}
               </button>
-              {showEmojiPicker && ReactDOM.createPortal(
+              {showColorPicker && ReactDOM.createPortal(
                 <>
-                  <div className="emoji-picker-backdrop" onClick={() => setShowEmojiPicker(false)}></div>
-                  <div className="emoji-picker-container" ref={emojiPickerRef}>
-                    <Picker
-                      data={data}
-                      onEmojiSelect={handleEmojiSelect}
-                      theme="light"
-                      previewPosition="none"
-                      skinTonePosition="none"
-                      emojiSize={20}
-                    />
+                  <div className="color-picker-backdrop" onClick={() => setShowColorPicker(false)}></div>
+                  <div className="color-picker-container" ref={colorPickerRef}>
+                    <div className="color-grid">
+                      {categoryColors.map((color) => (
+                        <button
+                          key={color}
+                          className={`color-option ${selectedColor === color ? 'selected' : ''}`}
+                          style={{ backgroundColor: color }}
+                          onClick={() => handleColorSelect(color)}
+                        />
+                      ))}
+                    </div>
                   </div>
                 </>,
                 document.body
@@ -176,7 +245,7 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, onAddCateg
               value={newCategoryName}
               onChange={(e) => setNewCategoryName(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="New category name..."
+              placeholder="New category"
             />
             <div className="add-category-actions">
               <button 
@@ -197,17 +266,42 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, onAddCateg
         ) : (
           <div
             className="category-tab-horizontal add-category-button"
+            data-category-id="add-category"
             onClick={handleStartAddCategory}
           >
-            <span className="category-icon add-category-icon">+</span>
+            <span className="add-category-icon">+</span>
           </div>
         )}
       </div>
       
-      {/* Rest of the content */}
       <div className="category-content">
-        {/* Content will be rendered by other components */}
       </div>
+      
+       {contextMenu && ReactDOM.createPortal(
+         <div 
+           ref={contextMenuRef}
+           className="category-context-menu"
+           style={{
+             position: 'fixed',
+             left: `${contextMenu.x}px`,
+             top: `${contextMenu.y}px`,
+           }}
+         >
+           <button
+             onClick={async () => {
+               try {
+                 await deleteCategory(contextMenu.category.id);
+                 setContextMenu(null);
+               } catch (error) {
+                 console.error('Failed to delete category:', error);
+               }
+             }}
+           >
+             <span>Delete Category</span>
+           </button>
+         </div>,
+         document.body
+       )}
     </div>
   );
 };

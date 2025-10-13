@@ -1,4 +1,4 @@
-.task-list {
+a.task-list {
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -33,7 +33,7 @@
   align-items: center;
   padding: 10px 16px 10px 0; /* Increased height */
   margin-bottom: 6px;
-  cursor: grab;
+  cursor: default;
   transition: all 0.2s ease;
   border-radius: 20px; /* Even more rounded */
   position: relative;
@@ -45,7 +45,7 @@
 
 .task-item.dragging {
   opacity: 0.5;
-  cursor: grabbing;
+  cursor: pointer;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
   background-color: rgba(0, 0, 0, 0.05);
 }
@@ -63,6 +63,7 @@
   transition: all 0.2s ease;
   position: relative;
   overflow: hidden;
+  cursor: default;
 }
 
 .task-checkbox::after {
@@ -78,8 +79,20 @@
   opacity: 0;
 }
 
+.task-checkbox.completed {
+  background-color: #34c759;
+  border-color: #34c759;
+  color: white;
+}
+
+.task-checkbox.checking {
+  background-color: #34c759;
+  border-color: #34c759;
+  color: white;
+}
+
 .task-checkbox.checking::after {
-  animation: checkbox-ripple 300ms ease-out;
+  animation: checkbox-ripple 500ms ease-out;
 }
 
 @keyframes checkbox-ripple {
@@ -110,6 +123,15 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.task-drag-handle {
+  cursor: grab;
+}
+
+.task-drag-handle:active {
+  cursor: grabbing;
+}
+
 
 /* Styles for the new editable task item */
 .new-task-item {
@@ -216,7 +238,7 @@
 }
 
 .category-icon {
-  margin-right: 10px;
+  margin-right: 12px;
   font-size: 16px;
 }
 

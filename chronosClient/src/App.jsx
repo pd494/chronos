@@ -6,51 +6,18 @@ import WeeklyView from './components/calendar/WeeklyView'
 import DailyView from './components/calendar/DailyView'
 import Sidebar from './components/todo/sidebar/Sidebar'
 import FloatingChatBar from './components/FloatingChatBar'
-import { TaskProvider } from './context/TaskContext'
-import { FiSun, FiMoon } from 'react-icons/fi'
+import { TaskProvider, useTaskContext } from './context/TaskContext'
+import { AuthProvider } from './context/AuthContext'
 import CategoryTabs from './components/todo/sidebar/CategoryTabs'
 import EventModal from './components/events/EventModal'
 
 import { useCalendar } from './context/CalendarContext'
 import './components/header.css'
 
-function App() {
+function AppContent() {
   const { view, showEventModal, changeView } = useCalendar()
-  const [isDarkMode, setIsDarkMode] = useState(false)
-  
-  // Categories for the header tabs - similar to reference screenshot
-  const [categories, setCategories] = useState([
-    { id: 'all', name: 'All', count: 398, icon: '★' },
-    { id: 'inbox', name: 'Inbox', count: 5, icon: '📥' },
-    { id: 'today', name: 'Today', count: 1, icon: '1' },
-    { id: 'completed', name: 'Completed', count: 0, icon: '✓' },
-  ])
+  const { categories } = useTaskContext()
 
-  useEffect(() => {
-    // Check user's preference from localStorage or system preference
-    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-    const savedMode = localStorage.getItem('darkMode')
-    
-    if (savedMode !== null) {
-      setIsDarkMode(savedMode === 'true')
-    } else {
-      setIsDarkMode(prefersDark)
-    }
-  }, [])
-
-  useEffect(() => {
-    // Apply dark mode class to document
-    if (isDarkMode) {
-      document.documentElement.classList.add('dark')
-    } else {
-      document.documentElement.classList.remove('dark')
-    }
-  }, [isDarkMode])
-
-  useEffect(() => {
-    // Save preference to localStorage
-    localStorage.setItem('darkMode', isDarkMode)
-  }, [isDarkMode])
 
   // Add keyboard shortcuts
   useEffect(() => {
@@ -94,9 +61,6 @@ function App() {
     };
   }, [changeView, showEventModal]);
 
-  const toggleDarkMode = () => {
-    setIsDarkMode(!isDarkMode)
-  }
   
   const renderCalendarView = () => {
     switch (view) {
@@ -111,13 +75,11 @@ function App() {
     }
   }
 
-  // State for categories, active category, sidebar collapse and width - moved from Sidebar to App level
   const [activeCategory, setActiveCategory] = useState('All');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(320);
   const [sidebarVisible, setSidebarVisible] = useState(true);
   
-  // Handler for sidebar updates
   const handleSidebarChange = (width, visible) => {
     setSidebarWidth(width);
     setSidebarVisible(visible);
@@ -127,94 +89,60 @@ function App() {
   const toggleSidebar = () => {
     setIsSidebarCollapsed(!isSidebarCollapsed);
   };
-  
-  // Handler for category change
+
   const handleCategoryChange = (category) => {
     setActiveCategory(category);
   };
-  
-  // Handler for adding new category
-  const handleAddCategory = (newCategory) => {
-    // Add the new category to the categories list
-    setCategories(prev => {
-      // Create a new array with the new category
-      const updatedCategories = [...prev];
-      
-      // Add the new category before the last item (if it's 'Completed')
-      const completedIndex = updatedCategories.findIndex(c => c.name === 'Completed');
-      
-      if (completedIndex !== -1) {
-        // Insert before 'Completed'
-        updatedCategories.splice(completedIndex, 0, newCategory);
-      } else {
-        // Just append to the end
-        updatedCategories.push(newCategory);
-      }
-      
-      return updatedCategories;
-    });
-    
-    // If user is in the All tab, stay there to see the new category
-    // Otherwise, switch to the new category
-    if (activeCategory !== 'All') {
-      setActiveCategory(newCategory.name);
+
+  const handleCategoryRenamed = (previousName, nextName) => {
+    if (previousName && nextName && activeCategory === previousName) {
+      setActiveCategory(nextName);
     }
   };
 
   return (
-    <TaskProvider>
-      <div className="h-full flex flex-col">
-        <div className="header-container">
-          {/* Position the header areas side by side */}
-          <div className="flex w-full items-center bg-white dark:bg-gray-800">
-            {/* Category tabs section - positioned on the left with added space for Window controls */}
-            <div 
-              id="header-tabs-wrapper"
-              className="flex-shrink-0 flex items-center bg-white dark:bg-gray-800 overflow-hidden border-r border-gray-200 dark:border-gray-700"
-              style={{ width: sidebarVisible ? sidebarWidth + 'px' : '0' }}
-            >
-              <CategoryTabs
-                categories={[...categories, { id: 'add-category', name: '', icon: '+' }]}
-                activeCategory={activeCategory}
-                onCategoryChange={handleCategoryChange}
-                onAddCategory={handleAddCategory}
-                isCompact={true}
-                inHeader={true}
-              />
-            </div>
-            
-            {/* Header with controls and navigation */}
-            <div className="flex-1">
-              <Header
-                darkModeButton={
-                  <button
-                    onClick={toggleDarkMode}
-                    className="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
-                    aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
-                  >
-                    {isDarkMode ? <FiSun className="text-xl" /> : <FiMoon className="text-xl" />}
-                  </button>
-                }
-              />
-            </div>
+    <div className="h-full flex flex-col">
+      <div className="header-container">
+        <div className="flex w-full items-center bg-white dark:bg-gray-800">
+          <div 
+            id="header-tabs-wrapper"
+            className="flex-shrink-0 flex items-center bg-white overflow-hidden border-r border-gray-200"
+            style={{ width: sidebarVisible ? sidebarWidth + 'px' : '0' }}
+          >
+            <CategoryTabs
+              categories={categories}
+              activeCategory={activeCategory}
+              onCategoryChange={handleCategoryChange}
+              isCompact={true}
+              inHeader={true}
+            />
+          </div>
+          
+          <div className="flex-1">
+            <Header />
           </div>
         </div>
-        <SplitView
-          sidebar={<Sidebar 
-            activeCategory={activeCategory}
-            isSidebarCollapsed={isSidebarCollapsed}
-            sidebarWidth={sidebarWidth}
-            sidebarVisible={sidebarVisible}
-            toggleSidebar={toggleSidebar}
-          />}
-          main={renderCalendarView()}
-          onSidebarWidthChange={handleSidebarChange}
-        />
-        {showEventModal && <EventModal />}
-        {!showEventModal && <FloatingChatBar />}
       </div>
-    </TaskProvider>
+      <SplitView
+        sidebar={<Sidebar 
+          activeCategory={activeCategory}
+          isSidebarCollapsed={isSidebarCollapsed}
+          sidebarWidth={sidebarWidth}
+          sidebarVisible={sidebarVisible}
+          toggleSidebar={toggleSidebar}
+          onCategoryRenamed={handleCategoryRenamed}
+        />}
+        main={renderCalendarView()}
+        onSidebarWidthChange={handleSidebarChange}
+      />
+      {showEventModal && <EventModal />}
+      {!showEventModal && <FloatingChatBar />}
+    </div>
   )
+}
+
+function App() {
+  return <AppContent />
 }
 
 export default App

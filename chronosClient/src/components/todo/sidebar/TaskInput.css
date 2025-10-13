@@ -1,5 +1,5 @@
 .task-input-container {
-  margin: 16px 0 20px 0;
+  margin: 13.6px 0 20px 0; /* Reduced by 15% from 16px */
 }
 
 .category-header {
@@ -16,8 +16,11 @@
 }
 
 .category-header-icon {
-  margin-right: 8px;
+  margin-right: 10px;
   font-size: 16px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .category-title {
