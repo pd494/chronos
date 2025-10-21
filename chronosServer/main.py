@@ -3,6 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from endpoints.auth import router as auth_router
 from endpoints.todos import router as todo_router
+from endpoints.calendar import router as calendar_router
+
 app = FastAPI(title="Chronos API")
 
 app.add_middleware(
@@ -15,6 +17,7 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(todo_router)
+app.include_router(calendar_router)
 
 @app.get("/")
 async def root():

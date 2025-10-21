@@ -9,20 +9,26 @@ import {
   format,
   isSameDay,
   isToday,
+  startOfMonth,
   startOfWeek,
+  endOfWeek,
+  endOfMonth,
   addDays,
   addWeeks,
+  addMonths,
+  subMonths,
 } from 'date-fns';
 import { useCalendar } from '../../context/CalendarContext';
 import EventIndicator from '../events/EventIndicator';
 
 // ─── Constants ────────────────────────────────────────────────────────────
-const BUFFER_WEEKS     = 156; // 3 y either side
+const BUFFER_WEEKS     = 260; // ~5 years either side (10 years total range)
 const WEEKS_PER_VIEW   = 6;   // always render 6 rows (standard month view)
 const ABOVE            = Math.floor(WEEKS_PER_VIEW / 2); // 3 when view = 6
 const BELOW            = WEEKS_PER_VIEW - 1 - ABOVE;     // 2
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
+const DIRECTIONAL_MONTHS = 24; // prefetch 2 years in scroll direction
 const getStartOfWeekLocal = (date, weekStartsOn = 0) =>
   startOfWeek(date, { weekStartsOn });
 
@@ -35,6 +41,8 @@ const MonthlyView = () => {
     selectDate,
     getEventsForDate,
     setHeaderDisplayDate,
+    fetchEventsForRange,
+    initialLoading,
   } = useCalendar();
 
   const [referenceDate] = useState(new Date());   // today, fixed
@@ -51,9 +59,14 @@ const MonthlyView = () => {
   const [displayMonthDate, setDisplayMonthDate] = useState(referenceDate);
   const [rowHeight, setRowHeight] = useState(0);
   const [cellSize, setCellSize]   = useState(0);
+  const [visibleRange, setVisibleRange] = useState({ start: 0, end: 20 }); // Only render ~20 weeks at a time
 
   const scrollContainerRef = useRef(null);
   const headerRef = useRef(null);
+  const requestedRangesRef = useRef(new Set());
+  const lastScrollTopRef = useRef(0);
+  const lastScrollTsRef = useRef(0);
+  const lastHeaderMonthRef = useRef(null);
 
   // ── build weeks for current range ───────────────────────────────────────
   const weeks = useMemo(() => {
@@ -98,16 +111,153 @@ const MonthlyView = () => {
     scrollContainerRef.current.scrollTop = Math.max(0, top);
   }, [rowHeight, todayWeekIndex]);
 
-  // ── scroll handling (unchanged, trimmed for brevity) ────────────────────
-  // … keep your existing handleScroll logic here …
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container || rowHeight === 0) return;
 
-  // UI --------------------------------------------------------------------
+    let fetchTimeout = null;
+
+    const handleScroll = () => {
+      const scrollTop = container.scrollTop;
+      const containerHeight = container.clientHeight;
+      
+      const startWeek = Math.max(0, Math.floor(scrollTop / rowHeight));
+      const endWeek = Math.min(weeks.length, Math.ceil((scrollTop + containerHeight) / rowHeight));
+      
+      const bufferSize = 10;
+      setVisibleRange({
+        start: Math.max(0, startWeek - bufferSize),
+        end: Math.min(weeks.length, endWeek + bufferSize)
+      });
+
+      if (weeks.length) {
+        const clampedStart = Math.min(startWeek, weeks.length - 1);
+        const clampedEnd = Math.max(clampedStart + 1, endWeek);
+
+        if (clampedStart >= 0 && clampedEnd > clampedStart) {
+          const visibleWeeksList = weeks.slice(clampedStart, clampedEnd);
+          if (visibleWeeksList.length) {
+            const monthTallies = new Map();
+            visibleWeeksList.forEach(({ days }) => {
+              days.forEach((day) => {
+                const key = `${day.getFullYear()}-${day.getMonth()}`;
+                if (!monthTallies.has(key)) {
+                  monthTallies.set(key, {
+                    count: 1,
+                    representativeDate: new Date(day.getFullYear(), day.getMonth(), 1)
+                  });
+                } else {
+                  const data = monthTallies.get(key);
+                  data.count += 1;
+                }
+              });
+            });
+
+            const totalDaysVisible = visibleWeeksList.length * 7;
+            let leadingMonth = null;
+            monthTallies.forEach((value, key) => {
+              if (!leadingMonth || value.count > leadingMonth.count) {
+                leadingMonth = { key, ...value };
+              }
+            });
+
+            let newHeaderDate = null;
+            if (leadingMonth && leadingMonth.count >= totalDaysVisible / 2) {
+              newHeaderDate = leadingMonth.representativeDate;
+            } else {
+              const allVisibleDays = [];
+              visibleWeeksList.forEach(({ days }) => allVisibleDays.push(...days));
+              if (allVisibleDays.length) {
+                newHeaderDate = allVisibleDays[Math.floor(allVisibleDays.length / 2)];
+              }
+            }
+
+            if (newHeaderDate) {
+              const newKey = `${newHeaderDate.getFullYear()}-${newHeaderDate.getMonth()}`;
+              if (lastHeaderMonthRef.current !== newKey) {
+                lastHeaderMonthRef.current = newKey;
+                setHeaderDisplayDate(newHeaderDate);
+              }
+            }
+          }
+        }
+      }
+
+      // Directional+velocity predictive prefetch
+      const now = performance.now();
+      const prevTop = lastScrollTopRef.current;
+      const prevTs = lastScrollTsRef.current || now;
+      const deltaY = scrollTop - prevTop;
+      const dt = Math.max(1, now - prevTs);
+      lastScrollTopRef.current = scrollTop;
+      lastScrollTsRef.current = now;
+      const fastScroll = Math.abs(deltaY) > rowHeight * 2; // moved more than ~2 weeks quickly
+
+      if (!initialLoading && weeks[startWeek] && weeks[endWeek - 1]) {
+        const rangeStart = weeks[startWeek].days[0];
+        const rangeEnd = weeks[endWeek - 1].days[6];
+
+        // Normal neighborhood prefetch (±3 months)
+        const normStart = startOfWeek(startOfMonth(subMonths(rangeStart, 3)));
+        const normEnd = endOfWeek(endOfMonth(addMonths(rangeEnd, 3)));
+        const normKey = `${normStart.getTime()}_${normEnd.getTime()}`;
+        if (!requestedRangesRef.current.has(normKey)) {
+          requestedRangesRef.current.add(normKey);
+          fetchEventsForRange(normStart, normEnd, true).catch(() => {});
+        }
+
+        // Directional extended prefetch when scrolling fast
+        // When scrolling up, always prefetch previous 24 months block
+        if (deltaY < 0) {
+          const upStart = startOfWeek(startOfMonth(subMonths(rangeStart, DIRECTIONAL_MONTHS)));
+          const upEnd = endOfWeek(endOfMonth(subMonths(rangeStart, 1)));
+          const upKey = `${upStart.getTime()}_${upEnd.getTime()}`;
+          if (!requestedRangesRef.current.has(upKey)) {
+            requestedRangesRef.current.add(upKey);
+            fetchEventsForRange(upStart, upEnd, true).catch(() => {});
+          }
+        }
+        // When scrolling down, prefetch next 24 months block
+        if (deltaY > 0) {
+          const downStart = startOfWeek(startOfMonth(addMonths(rangeEnd, 1)));
+          const downEnd = endOfWeek(endOfMonth(addMonths(rangeEnd, DIRECTIONAL_MONTHS)));
+          const downKey = `${downStart.getTime()}_${downEnd.getTime()}`;
+          if (!requestedRangesRef.current.has(downKey)) {
+            requestedRangesRef.current.add(downKey);
+            fetchEventsForRange(downStart, downEnd, true).catch(() => {});
+          }
+        }
+      }
+
+      if (fetchTimeout) clearTimeout(fetchTimeout);
+      fetchTimeout = setTimeout(() => {
+        // Debounced backup prefetch also handled above; no-op here
+      }, 500); 
+    };
+
+    handleScroll(); 
+    container.addEventListener('scroll', handleScroll);
+    return () => {
+      container.removeEventListener('scroll', handleScroll);
+      if (fetchTimeout) clearTimeout(fetchTimeout);
+    };
+  }, [rowHeight, weeks.length, weeks, fetchEventsForRange, setHeaderDisplayDate]);
+
+  useEffect(() => {
+    if (initialLoading) {
+      requestedRangesRef.current.clear();
+    }
+  }, [initialLoading]);
+
+  useEffect(() => () => {
+    requestedRangesRef.current.clear();
+  }, []);
+
   const dayNames = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
   return (
     <div className="view-container flex flex-col h-full">
       <div className="calendar-container p-4 flex flex-col flex-grow overflow-hidden">
-        {/* weekday header */}
         <div className="grid grid-cols-7 mb-2 flex-shrink-0">
           {dayNames.map((d) => (
             <div key={d} className="text-center text-sm text-gray-500 dark:text-gray-400 font-medium py-2">
@@ -116,7 +266,6 @@ const MonthlyView = () => {
           ))}
         </div>
 
-        {/* scrollable grid - fixed to show exactly 6 weeks */}
         <div
           ref={scrollContainerRef}
           className="overflow-y-auto flex-grow relative bg-white dark:bg-gray-800"
@@ -126,8 +275,17 @@ const MonthlyView = () => {
           }}
         >
           <div className="relative" style={{ height: `${weeks.length * rowHeight}px` }}>
-            {weeks.map(({ weekStart, days }) => (
-              <div key={weekStart} className="grid grid-cols-7" style={{ height: `${rowHeight}px` }}>
+            {weeks.slice(visibleRange.start, visibleRange.end).map(({ weekStart, days }, index) => {
+              const actualIndex = visibleRange.start + index;
+              return (
+              <div 
+                key={weekStart} 
+                className="grid grid-cols-7 absolute left-0 right-0" 
+                style={{ 
+                  height: `${rowHeight}px`,
+                  top: `${actualIndex * rowHeight}px`
+                }}
+              >
                 {days.map((day) => {
                   const events       = getEventsForDate(day) || [];
                   const isSelected   = isSameDay(day, currentDate);
@@ -170,7 +328,7 @@ const MonthlyView = () => {
                   );
                 })}
               </div>
-            ))}
+            )})}
           </div>
         </div>
       </div>

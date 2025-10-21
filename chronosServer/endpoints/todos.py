@@ -60,12 +60,23 @@ async def get_todos(
     user: User = Depends(get_current_user)
 ) -> JSONResponse:
     
-    result = (
-        supabase.table("todos")
-        .select("*")
-        .eq("user_id", str(user.id))
-        .execute()
-    )
+    try:
+        result = (
+            supabase.table("todos")
+            .select("*")
+            .eq("user_id", str(user.id))
+            .execute()
+        )
+    except Exception as e:
+        error_msg = str(e)
+        if "JWT expired" in error_msg or "PGRST303" in error_msg:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Session expired. Please refresh.",
+                headers={"X-Token-Expired": "true"}
+            )
+        raise
+    
     if not result.data:
         return JSONResponse(
             status_code=status.HTTP_200_OK,

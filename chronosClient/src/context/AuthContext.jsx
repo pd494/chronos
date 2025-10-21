@@ -1,8 +1,21 @@
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react'
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
-import { authApi } from '../lib/api'
+import { authApi, calendarApi } from '../lib/api'
 
 const AuthContext = createContext()
+
+const USER_STORAGE_KEY = 'chronos:user'
+
+const getStoredUser = () => {
+  if (typeof window === 'undefined') return null
+  const stored = window.sessionStorage.getItem(USER_STORAGE_KEY)
+  if (!stored) return null
+  try {
+    return JSON.parse(stored)
+  } catch (_) {
+    return null
+  }
+}
 
 export const useAuth = () => {
   const context = useContext(AuthContext)
@@ -13,11 +26,24 @@ export const useAuth = () => {
 }
 
 export const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(null)
+  const [user, setUserState] = useState(() => getStoredUser())
   const [loading, setLoading] = useState(true)
   const [isLoggingOut, setIsLoggingOut] = useState(false)
   const isLoggingOutRef = useRef(false)
   const hasProcessedOAuthRef = useRef(false)
+
+  const persistUser = useCallback((value) => {
+    setUserState(value)
+    if (typeof window === 'undefined') return
+    if (value) {
+      try {
+        window.sessionStorage.setItem(USER_STORAGE_KEY, JSON.stringify(value))
+      } catch (_) {
+      }
+    } else {
+      window.sessionStorage.removeItem(USER_STORAGE_KEY)
+    }
+  }, [])
 
   useEffect(() => {
     let unsubscribe
@@ -31,7 +57,7 @@ export const AuthProvider = ({ children }) => {
             await handleOAuthCallback(session)
           }
         } else if (event === 'SIGNED_OUT') {
-          setUser(null)
+          persistUser(null)
         } else if (event === 'INITIAL_SESSION') {
           if (session) {
             if (!hasProcessedOAuthRef.current) {
@@ -74,29 +100,39 @@ export const AuthProvider = ({ children }) => {
     try {
       await authApi.syncSession(session.access_token, session.refresh_token)
       await checkAuth()
+            
+      const providerAccessToken = session.provider_token
+      const providerRefreshToken = session.provider_refresh_token
+
+      if (providerAccessToken && providerRefreshToken) {
+        await calendarApi.saveCredentials({
+          access_token: providerAccessToken,
+          refresh_token: providerRefreshToken,
+          expires_at: session.expires_at
+            ? new Date(session.expires_at * 1000).toISOString()
+            : null,
+        })
+      }
       await supabase.auth.signOut({ scope: 'local' })
     } catch (error) {
-      setUser(null)
+      persistUser(null)
     }
   }
 
   const checkAuth = async () => {
     try {
       const userData = await authApi.getMe()
-      setUser(userData)
+      persistUser(userData)
     } catch (error) {
-      console.log('checkAuth error:', error.message)
       if (error.message.includes('expired')) {
         try {
           await authApi.refresh()
           return checkAuth()
         } catch (refreshError) {
-          console.log('Refresh failed, setting user to null')
-          setUser(null)
+          persistUser(null)
         }
       } else {
-        console.log('Auth check failed, setting user to null')
-        setUser(null)
+        persistUser(null)
       }
     } finally {
       setLoading(false)
@@ -108,7 +144,11 @@ export const AuthProvider = ({ children }) => {
       provider: 'google',
       options: {
         redirectTo: `${window.location.origin}/`,
-        scopes: 'https://www.googleapis.com/auth/calendar.events'
+        scopes: 'https://www.googleapis.com/auth/calendar',
+        queryParams: {
+          access_type: 'offline',
+          prompt: 'consent'
+        }
       }
     })
     if (error) throw error
@@ -126,35 +166,25 @@ export const AuthProvider = ({ children }) => {
         .filter((k) => k.startsWith('sb-'))
         .forEach((k) => window.sessionStorage.removeItem(k))
     } catch (e) {
-      // ignore
     }
-
-    console.log('Signing out from Supabase (local scope)...')
     try {
       await Promise.race([
         supabase.auth.signOut({ scope: 'local' }),
         new Promise((resolve) => setTimeout(resolve, 1500)) // timeout so we don't hang
       ])
-      console.log('Supabase local signout attempted')
     } catch (e) {
-      console.log('Supabase local signout error (ignored):', e?.message)
     }
     
-    
     try {
-      console.log('Calling backend logout...')
       await authApi.logout()
-      console.log('Backend logout successful')
     } catch (error) {
       console.error('Backend logout error:', error)
     }
     
     
-    setUser(null)
-    console.log('User set to null')
+    persistUser(null)
     
     
-    console.log('Reloading page...')
     window.location.reload()
   }
 

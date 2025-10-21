@@ -313,17 +313,41 @@ const WeeklyView = () => {
   })
   
   // Split events into all-day and regular events
-  const allDayEvents = weekEvents.filter(event => 
-    event.isAllDay || 
-    (event.start.getHours() === 0 && event.start.getMinutes() === 0 && 
-     event.end.getHours() === 23 && event.end.getMinutes() === 59)
-  )
+  const allDayEvents = weekEvents.filter(event => {
+    // Check if explicitly marked as all-day
+    if (event.isAllDay) return true;
+    
+    // Check if it spans the entire day (midnight to 11:59pm)
+    if (event.start.getHours() === 0 && event.start.getMinutes() === 0 && 
+        event.end.getHours() === 23 && event.end.getMinutes() === 59) {
+      return true;
+    }
+    
+    // Check if it's a very long event (23+ hours) - treat as all-day
+    const durationMs = event.end - event.start;
+    const durationHours = durationMs / (1000 * 60 * 60);
+    if (durationHours >= 23) return true;
+    
+    return false;
+  })
   
-  const regularEvents = weekEvents.filter(event => 
-    !event.isAllDay && 
-    !(event.start.getHours() === 0 && event.start.getMinutes() === 0 && 
-      event.end.getHours() === 23 && event.end.getMinutes() === 59)
-  )
+  const regularEvents = weekEvents.filter(event => {
+    // Check if explicitly marked as all-day
+    if (event.isAllDay) return false;
+    
+    // Check if it spans the entire day (midnight to 11:59pm)
+    if (event.start.getHours() === 0 && event.start.getMinutes() === 0 && 
+        event.end.getHours() === 23 && event.end.getMinutes() === 59) {
+      return false;
+    }
+    
+    // Check if it's a very long event (23+ hours) - treat as all-day
+    const durationMs = event.end - event.start;
+    const durationHours = durationMs / (1000 * 60 * 60);
+    if (durationHours >= 23) return false;
+    
+    return true;
+  })
   
   // Generate time slots
   const hours = []
@@ -339,22 +363,23 @@ const WeeklyView = () => {
     return (
       <div
         key={event.id}
-        className="absolute h-6 truncate rounded px-1 cursor-pointer text-xs z-10"
+        className="absolute truncate rounded px-2 cursor-pointer text-xs z-10 flex items-center"
         style={{
-          top: '4px',
+          top: '3px',
           left: '2px',
           right: '2px',
+          height: '32px', // 25% taller (was 24px equivalent)
           backgroundColor: `var(--color-${eventColor}-500)`,
           opacity: 0.8,
         }}
         onClick={() => openEventModal(event)}
       >
         <div 
-          className="absolute left-0 top-0 bottom-0 w-1" 
+          className="absolute left-0 top-0 bottom-0 w-1 rounded-l" 
           style={{ backgroundColor: `var(--color-${eventColor}-900)` }}
         ></div>
         <span 
-          className="ml-2 font-medium"
+          className="ml-2 font-medium truncate"
           style={{ color: `var(--color-${eventColor}-900)` }}
         >
           {event.title}
@@ -522,7 +547,7 @@ const WeeklyView = () => {
               className="flex-1 relative border-r border-gray-200 dark:border-gray-700 droppable-cell"
               data-date={format(day, 'yyyy-MM-dd')}
               data-all-day="true"
-              style={{ height: `${ALL_DAY_SECTION_HEIGHT}px` }}
+              style={{ minHeight: `${ALL_DAY_SECTION_HEIGHT}px`, padding: '2px' }}
               onClick={() => handleAllDayCellClick(day)}
             >
               {allDayEvents

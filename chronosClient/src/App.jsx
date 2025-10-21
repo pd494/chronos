@@ -6,18 +6,34 @@ import WeeklyView from './components/calendar/WeeklyView'
 import DailyView from './components/calendar/DailyView'
 import Sidebar from './components/todo/sidebar/Sidebar'
 import FloatingChatBar from './components/FloatingChatBar'
-import { TaskProvider, useTaskContext } from './context/TaskContext'
-import { AuthProvider } from './context/AuthContext'
+import { useTaskContext } from './context/TaskContext'
+import { useAuth } from './context/AuthContext'
 import CategoryTabs from './components/todo/sidebar/CategoryTabs'
 import EventModal from './components/events/EventModal'
 
 import { useCalendar } from './context/CalendarContext'
 import './components/header.css'
 
-function AppContent() {
-  const { view, showEventModal, changeView } = useCalendar()
-  const { categories } = useTaskContext()
+const AppSkeleton = () => (
+  <div className="h-full flex flex-col animate-pulse bg-gray-50">
+    <div className="h-12 bg-white border-b border-gray-200" />
+    <div className="flex flex-1">
+      <div className="w-80 bg-white border-r border-gray-200" />
+      <div className="flex-1 m-4 bg-white border border-gray-200 rounded-lg" />
+    </div>
+  </div>
+)
 
+function AppContent() {
+  const { view, showEventModal, changeView, initialLoading } = useCalendar()
+  const { categories } = useTaskContext()
+  const { loading: authLoading } = useAuth()
+
+  const shouldShowSkeleton = authLoading
+
+  if (shouldShowSkeleton) {
+    return <AppSkeleton />
+  }
 
   // Add keyboard shortcuts
   useEffect(() => {

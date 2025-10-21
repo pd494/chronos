@@ -6,13 +6,15 @@ import DayEvent from '../events/DayEvent'
 const HOUR_HEIGHT = 60 // Height of one hour in pixels
 const DAY_START_HOUR = 0 // Start displaying from 12 AM
 const DAY_END_HOUR = 23 // End displaying at 11 PM
+const ALL_DAY_SECTION_HEIGHT = 40 // Height of the all-day events section
 
 const DailyView = () => {
   const {
     currentDate,
     events,
     navigateToNext,
-    navigateToPrevious
+    navigateToPrevious,
+    openEventModal
   } = useCalendar()
   
   const containerRef = useRef(null)
@@ -120,6 +122,72 @@ const DailyView = () => {
     )
   })
   
+  // Split events into all-day and regular events
+  const allDayEvents = dayEvents.filter(event => {
+    // Check if explicitly marked as all-day
+    if (event.isAllDay) return true;
+    
+    // Check if it spans the entire day (midnight to 11:59pm)
+    if (event.start.getHours() === 0 && event.start.getMinutes() === 0 && 
+        event.end.getHours() === 23 && event.end.getMinutes() === 59) {
+      return true;
+    }
+    
+    // Check if it's a very long event (23+ hours) - treat as all-day
+    const durationMs = event.end - event.start;
+    const durationHours = durationMs / (1000 * 60 * 60);
+    if (durationHours >= 23) return true;
+    
+    return false;
+  })
+  
+  const regularEvents = dayEvents.filter(event => {
+    // Check if explicitly marked as all-day
+    if (event.isAllDay) return false;
+    
+    // Check if it spans the entire day (midnight to 11:59pm)
+    if (event.start.getHours() === 0 && event.start.getMinutes() === 0 && 
+        event.end.getHours() === 23 && event.end.getMinutes() === 59) {
+      return false;
+    }
+    
+    // Check if it's a very long event (23+ hours) - treat as all-day
+    const durationMs = event.end - event.start;
+    const durationHours = durationMs / (1000 * 60 * 60);
+    if (durationHours >= 23) return false;
+    
+    return true;
+  })
+  
+  // Function to render an all-day event
+  const renderAllDayEvent = (event) => {
+    const eventColor = event.color || 'blue';
+    
+    return (
+      <div
+        key={event.id}
+        className="truncate rounded px-2 cursor-pointer text-xs mb-1 relative flex items-center"
+        style={{
+          height: '32px', // 25% taller
+          backgroundColor: `var(--color-${eventColor}-500)`,
+          opacity: 0.8,
+        }}
+        onClick={() => openEventModal(event)}
+      >
+        <div 
+          className="absolute left-0 top-0 bottom-0 w-1 rounded-l" 
+          style={{ backgroundColor: `var(--color-${eventColor}-900)` }}
+        ></div>
+        <span 
+          className="ml-2 font-medium truncate"
+          style={{ color: `var(--color-${eventColor}-900)` }}
+        >
+          {event.title}
+        </span>
+      </div>
+    );
+  };
+  
   return (
     <div 
       ref={containerRef}
@@ -129,6 +197,18 @@ const DailyView = () => {
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
     >
+      {/* All-day events section */}
+      {allDayEvents.length > 0 && (
+        <div className="flex w-full border-b border-gray-200 dark:border-gray-700 sticky top-0 bg-white dark:bg-gray-800 z-20">
+          <div className="w-16 flex-shrink-0 text-center py-2 text-xs text-gray-500 border-r border-gray-200 dark:border-gray-700">
+            All-day
+          </div>
+          <div className="flex-1 p-2" style={{ minHeight: `${ALL_DAY_SECTION_HEIGHT + 10}px` }}>
+            {allDayEvents.map(event => renderAllDayEvent(event))}
+          </div>
+        </div>
+      )}
+      
       <div className="relative flex flex-1">
         {/* Time labels */}
         <div className="w-16 flex-shrink-0 relative z-10 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700">
@@ -170,8 +250,8 @@ const DailyView = () => {
             className="relative min-h-full w-full"
             style={{ height: `${(DAY_END_HOUR - DAY_START_HOUR + 1) * HOUR_HEIGHT}px` }}
           >
-            {/* Events for this day */}
-            {dayEvents.map(event => (
+            {/* Events for this day (only regular events, not all-day) */}
+            {regularEvents.map(event => (
               <DayEvent 
                 key={event.id} 
                 event={event} 

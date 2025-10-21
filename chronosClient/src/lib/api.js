@@ -10,8 +10,15 @@ async function apiFetch(endpoint, options = {}) {
   let response = await makeRequest()
 
   if (response.status === 401 && !endpoint.includes('/auth/refresh')) {
-    await authApi.refresh()
-    response = await makeRequest()
+    try {
+      await authApi.refresh()
+      response = await makeRequest()
+    } catch (refreshError) {
+      console.error('Token refresh failed:', refreshError)
+      // If refresh fails, redirect to login
+      window.location.href = '/?session_expired=true'
+      throw new Error('Session expired. Please sign in again.')
+    }
   }
 
   if (!response.ok) {
@@ -106,6 +113,54 @@ export const todosApi = {
     return apiFetch(`/todos/categories/${categoryId}`, {
       method: 'DELETE'
     })
+  }
+}
+
+// ----- Calendar API -----
+
+export const calendarApi = {
+  async saveCredentials(tokens){
+    return apiFetch('/calendar/credentials', {
+      method: 'POST',
+      body: JSON.stringify(tokens)
+    })
   },
+
+  async getCalendars(){
+    return apiFetch('/calendar/calendars')
+  },
+
+  async getEvents(start, end, calendarIds){
+    const params = new URLSearchParams({
+      start,
+      end
+    })
+    if (calendarIds && calendarIds.length > 0){
+      // Convert array of calendar IDs to comma-separated string and add to query params
+      // e.g., ['cal1', 'cal2', 'cal3'] becomes 'cal1,cal2,cal3'
+      params.append('calendar_ids', calendarIds.join(','))
+    }
+    return apiFetch(`/calendar/events?${params.toString()}`)
+  }, 
+  
+  async createEvent(eventData){
+    return apiFetch('/calendar/events', {
+      method: 'POST',
+      body: JSON.stringify(eventData)
+    })
+  },
+  
+  async updateEvent(eventId, eventData){
+    return apiFetch(`/calendar/events/${eventId}`, {
+      method: 'PUT',
+      body: JSON.stringify(eventData)
+    })
+  },
+
+  async deleteEvent(eventId){
+    return apiFetch(`/calendar/events/${eventId}`, {
+      method: 'DELETE'
+    })
+  }
 
 }
