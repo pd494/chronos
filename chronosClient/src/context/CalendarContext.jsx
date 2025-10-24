@@ -26,6 +26,42 @@ const INITIAL_FUTURE_MONTHS = 3
 const EXPANSION_MONTHS = 2
 const IDLE_PREFETCH_EXTRA_MONTHS = 12
 
+const parseCalendarBoundary = (boundary) => {
+  if (!boundary) return null
+  if (boundary instanceof Date) {
+    return new Date(boundary.getTime())
+  }
+  if (typeof boundary === 'string') {
+    const trimmed = boundary.trim()
+    if (!trimmed) return null
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      const [year, month, day] = trimmed.split('-').map(Number)
+      return new Date(year, month - 1, day, 12, 0, 0, 0)
+    }
+    const parsed = new Date(trimmed)
+    return Number.isNaN(parsed.getTime()) ? null : parsed
+  }
+  if (boundary?.dateTime) {
+    return new Date(boundary.dateTime)
+  }
+  if (boundary?.date) {
+    const [year, month, day] = boundary.date.split('-').map(Number)
+    return new Date(year, month - 1, day, 12, 0, 0, 0)
+  }
+  return null
+}
+
+const resolveIsAllDay = (startBoundary, eventMeta) => {
+  if (typeof eventMeta?.isAllDay === 'boolean') {
+    return eventMeta.isAllDay
+  }
+  if (startBoundary && typeof startBoundary === 'object') {
+    if ('dateTime' in startBoundary) return false
+    if ('date' in startBoundary) return true
+  }
+  return false
+}
+
 
 export const CalendarProvider = ({ children }) => {
   const { user } = useAuth()
@@ -40,7 +76,6 @@ export const CalendarProvider = ({ children }) => {
   const [initialLoading, setInitialLoading] = useState(true)
   const [selectedCalendars, setSelectedCalendars] = useState(null)
   const loadedRangeRef = useRef(null)
-  const inFlightRangesRef = useRef(new Set())
   const prefetchedRangesRef = useRef(new Set())
   const eventsByDayRef = useRef(new Map())
   const eventIdsRef = useRef(new Set())
@@ -215,6 +250,10 @@ export const CalendarProvider = ({ children }) => {
   }, [hydrateFromSnapshot])
 
   const fetchEventsForRange = useCallback(async (startDate, endDate, background = false, force = false) => {
+    if (!user) {
+      return
+    }
+    
     if (!(startDate instanceof Date) || !(endDate instanceof Date)) {
       return
     }
@@ -270,15 +309,16 @@ export const CalendarProvider = ({ children }) => {
             // row.events are serialized minimal events with iso strings
             for (const ev of row.events || []) {
               if (!eventIdsRef.current.has(ev.id)) {
-                cachedEvents.push({
-                  id: ev.id,
-                  title: ev.title || ev.summary || 'Untitled',
-                  start: new Date(ev.start),
-                  end: new Date(ev.end),
-                  color: ev.color || 'blue',
-                  isGoogleEvent: true,
-                  calendar_id: ev.calendar_id
-                })
+              cachedEvents.push({
+                id: ev.id,
+                title: ev.title || ev.summary || 'Untitled',
+                start: new Date(ev.start),
+                end: new Date(ev.end),
+                color: ev.color || 'blue',
+                isGoogleEvent: true,
+                calendar_id: ev.calendar_id,
+                isAllDay: Boolean(ev.isAllDay)
+              })
               }
             }
           })
@@ -332,15 +372,23 @@ export const CalendarProvider = ({ children }) => {
           segEnd.toISOString(),
           selectedCalendars
         )
-        const googleEvents = response.events.map(event => ({
-          id: event.id,
-          title: event.summary || 'Untitled',
-          start: new Date(event.start.dateTime || event.start.date),
-          end: new Date(event.end.dateTime || event.end.date),
-          color: 'blue',
-          isGoogleEvent: true,
-          calendar_id: event.calendar_id
-        }))
+        const googleEvents = response.events.map(event => {
+          const isAllDay = resolveIsAllDay(event.start, event)
+          const start = parseCalendarBoundary(event.start) || new Date(event.start.dateTime || event.start.date)
+          const end = parseCalendarBoundary(event.end) || new Date(event.end.dateTime || event.end.date)
+          // Extract category color from extended properties if available
+          const categoryColor = event.extendedProperties?.private?.categoryColor
+          return {
+            id: event.id,
+            title: event.summary || 'Untitled',
+            start,
+            end,
+            color: categoryColor || 'blue',
+            isGoogleEvent: true,
+            calendar_id: event.calendar_id,
+            isAllDay
+          }
+        })
         const newEvents = googleEvents.filter(e => !eventIdsRef.current.has(e.id))
         if (newEvents.length) {
           setEvents(prev => [...prev, ...newEvents])
@@ -361,7 +409,8 @@ export const CalendarProvider = ({ children }) => {
                 start: ev.start.toISOString(),
                 end: ev.end.toISOString(),
                 color: ev.color,
-                calendar_id: ev.calendar_id
+                calendar_id: ev.calendar_id,
+                isAllDay: ev.isAllDay
               })
               byMonth.set(m, arr)
             }
@@ -421,7 +470,7 @@ export const CalendarProvider = ({ children }) => {
         }
       }
     }
-  }, [selectedCalendars, extendLoadedRange])
+  }, [user, selectedCalendars, extendLoadedRange])
 
   const dateKey = (d) => {
     const y = d.getFullYear()
@@ -431,9 +480,17 @@ export const CalendarProvider = ({ children }) => {
   }
 
   const indexEventByDays = (ev) => {
-    let s = startOfDay(new Date(ev.start))
-    let e = startOfDay(new Date(ev.end))
-    // Handle end before start gracefully
+    const startValue = ev.start instanceof Date ? ev.start : parseCalendarBoundary(ev.start)
+    const endValue = ev.end instanceof Date ? ev.end : parseCalendarBoundary(ev.end)
+    if (!startValue || !endValue) return
+
+    let s = startOfDay(new Date(startValue))
+    let e = startOfDay(new Date(endValue))
+
+    if (ev.isAllDay) {
+      e = addDays(e, -1)
+    }
+
     if (e < s) e = s
     for (let d = new Date(s); d <= e; d = addDays(d, 1)) {
       const key = dateKey(d)
@@ -486,7 +543,7 @@ export const CalendarProvider = ({ children }) => {
     }
 
     const key = `${rangeStart.getTime()}_${rangeEnd.getTime()}`
-    if (prefetchedRangesRef.current.has(key) || inFlightRangesRef.current.has(key)) {
+    if (prefetchedRangesRef.current.has(key)) {
       return
     }
 
@@ -575,7 +632,6 @@ export const CalendarProvider = ({ children }) => {
 
     if (reset) {
       loadedRangeRef.current = null
-      inFlightRangesRef.current.clear()
       prefetchedRangesRef.current.clear()
       eventsByDayRef.current = new Map()
       eventIdsRef.current = new Set()
@@ -640,27 +696,120 @@ export const CalendarProvider = ({ children }) => {
   }, [currentDate, view, initialLoading, events])
 
   const refreshEvents = useCallback(() => {
+    if (!user) return
     fetchGoogleEvents(false, true)
-  }, [fetchGoogleEvents])
+  }, [user, fetchGoogleEvents])
 
   useEffect(() => {
-    fetchGoogleEvents(false)
-  }, [currentDate, view, fetchGoogleEvents])
+    if (!user) return
+    // Use background fetch when only view changes (no date change)
+    // This makes view switching feel instant while still loading any missing data
+    fetchGoogleEvents(true)
+  }, [user, currentDate, view, fetchGoogleEvents])
 
   useEffect(() => {
+    if (!user) return
     fetchGoogleEvents(false, true)
-  }, [selectedCalendars, fetchGoogleEvents])
+  }, [user, selectedCalendars, fetchGoogleEvents])
 
   useEffect(() => {
+    if (!user) return
     const handleFocus = () => fetchGoogleEvents(true)
     window.addEventListener('focus', handleFocus)
     return () => window.removeEventListener('focus', handleFocus)
-  }, [fetchGoogleEvents])
+  }, [user, fetchGoogleEvents])
 
   useEffect(() => {
+    if (!user) return
     // Refresh events every 30 minutes (1800000 ms)
     const interval = setInterval(() => fetchGoogleEvents(true), 1800000)
     return () => clearInterval(interval)
+  }, [user, fetchGoogleEvents])
+
+  // Listen for todo conversion events and add event immediately (optimistic update)
+  useEffect(() => {
+    const handleTodoConverted = (e) => {
+      const eventData = e.detail?.eventData
+      const isOptimistic = e.detail?.isOptimistic
+      const replaceId = e.detail?.replaceId
+      
+      if (eventData) {
+        // Create the event in the same format as Google Calendar events
+        const isAllDay = resolveIsAllDay(eventData.start, eventData)
+        const startBound = parseCalendarBoundary(eventData.start) || new Date(eventData.start.dateTime || eventData.start.date)
+        const endBound = parseCalendarBoundary(eventData.end) || new Date(eventData.end.dateTime || eventData.end.date)
+        const newEvent = {
+          id: eventData.id,
+          title: eventData.title || eventData.summary || 'Untitled',
+          start: startBound,
+          end: endBound,
+          color: eventData.color || 'blue',
+          isGoogleEvent: true,
+          calendar_id: eventData.calendar_id || 'primary',
+          isOptimistic: isOptimistic || false,
+          isAllDay
+        }
+        
+        if (replaceId) {
+          // Replace optimistic event with real one
+          setEvents(prev => {
+            const filtered = prev.filter(e => e.id !== replaceId)
+            if (!eventIdsRef.current.has(newEvent.id)) {
+              eventIdsRef.current.delete(replaceId)
+              eventIdsRef.current.add(newEvent.id)
+              
+              // Remove old event from day index
+              for (const [key, arr] of eventsByDayRef.current.entries()) {
+                const filtered = arr.filter(e => e.id !== replaceId)
+                if (filtered.length !== arr.length) {
+                  eventsByDayRef.current.set(key, filtered)
+                }
+              }
+              
+              indexEventByDays(newEvent)
+              return [...filtered, newEvent]
+            }
+            return prev
+          })
+        } else {
+          // Add new event (optimistic or real)
+          if (!eventIdsRef.current.has(newEvent.id)) {
+            setEvents(prev => [...prev, newEvent])
+            eventIdsRef.current.add(newEvent.id)
+            indexEventByDays(newEvent)
+          }
+        }
+      }
+      
+      // Only refresh in background for real events (not optimistic)
+      if (!isOptimistic) {
+        setTimeout(() => fetchGoogleEvents(true), 500)
+      }
+    }
+    
+    const handleTodoConversionFailed = (e) => {
+      const eventId = e.detail?.eventId
+      if (eventId) {
+        // Remove the optimistic event
+        setEvents(prev => prev.filter(ev => ev.id !== eventId))
+        eventIdsRef.current.delete(eventId)
+        
+        // Remove from day index
+        for (const [key, arr] of eventsByDayRef.current.entries()) {
+          const filtered = arr.filter(ev => ev.id !== eventId)
+          if (filtered.length !== arr.length) {
+            eventsByDayRef.current.set(key, filtered)
+          }
+        }
+      }
+    }
+    
+    window.addEventListener('todoConvertedToEvent', handleTodoConverted)
+    window.addEventListener('todoConversionFailed', handleTodoConversionFailed)
+    return () => {
+      window.removeEventListener('todoConvertedToEvent', handleTodoConverted)
+      window.removeEventListener('todoConversionFailed', handleTodoConversionFailed)
+    }
   }, [fetchGoogleEvents])
 
   useEffect(() => {
@@ -767,11 +916,25 @@ export const CalendarProvider = ({ children }) => {
 
   const createEvent = useCallback((eventData) => {
     // Ensure dates are proper Date objects
+    const start =
+      eventData.start instanceof Date
+        ? eventData.start
+        : parseCalendarBoundary(eventData.start) || new Date(eventData.start)
+    const end =
+      eventData.end instanceof Date
+        ? eventData.end
+        : parseCalendarBoundary(eventData.end) || new Date(eventData.end)
+    const isAllDay =
+      typeof eventData.isAllDay === 'boolean'
+        ? eventData.isAllDay
+        : false
+
     const processedData = {
       ...eventData,
-      start: eventData.start instanceof Date ? eventData.start : new Date(eventData.start),
-      end: eventData.end instanceof Date ? eventData.end : new Date(eventData.end),
-      color: eventData.color || 'blue'
+      start,
+      end,
+      color: eventData.color || 'blue',
+      isAllDay
     };
     
     const newEvent = {
@@ -788,11 +951,27 @@ export const CalendarProvider = ({ children }) => {
 
   const updateEvent = useCallback((id, updatedData) => {
     // Ensure dates are proper Date objects
+    const start =
+      updatedData.start instanceof Date
+        ? updatedData.start
+        : parseCalendarBoundary(updatedData.start) || new Date(updatedData.start)
+    const end =
+      updatedData.end instanceof Date
+        ? updatedData.end
+        : parseCalendarBoundary(updatedData.end) || new Date(updatedData.end)
+    const isAllDay =
+      typeof updatedData.isAllDay === 'boolean'
+        ? updatedData.isAllDay
+        : undefined
+
     const processedData = {
       ...updatedData,
-      start: updatedData.start instanceof Date ? updatedData.start : new Date(updatedData.start),
-      end: updatedData.end instanceof Date ? updatedData.end : new Date(updatedData.end)
+      start,
+      end
     };
+    if (typeof isAllDay === 'boolean') {
+      processedData.isAllDay = isAllDay
+    }
     
     setEvents(prev => 
       prev.map(event => 

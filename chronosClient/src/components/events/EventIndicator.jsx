@@ -11,6 +11,33 @@ const EventIndicator = ({ event, isMonthView }) => {
   
   const formattedTime = format(new Date(event.start), 'h:mma').toLowerCase();
   
+  const eventColor = event.color || 'blue';
+  const isHexColor = eventColor.startsWith('#');
+  
+  // Function to lighten a hex color for background
+  const lightenHexColor = (hex, percent = 70) => {
+    hex = hex.replace('#', '');
+    const r = parseInt(hex.substring(0, 2), 16);
+    const g = parseInt(hex.substring(2, 4), 16);
+    const b = parseInt(hex.substring(4, 6), 16);
+    const lightenedR = Math.min(255, Math.floor(r + (255 - r) * (percent / 100)));
+    const lightenedG = Math.min(255, Math.floor(g + (255 - g) * (percent / 100)));
+    const lightenedB = Math.min(255, Math.floor(b + (255 - b) * (percent / 100)));
+    return `#${lightenedR.toString(16).padStart(2, '0')}${lightenedG.toString(16).padStart(2, '0')}${lightenedB.toString(16).padStart(2, '0')}`;
+  };
+  
+  // Function to darken a hex color for text
+  const darkenHexColor = (hex, percent = 40) => {
+    hex = hex.replace('#', '');
+    const r = parseInt(hex.substring(0, 2), 16);
+    const g = parseInt(hex.substring(2, 4), 16);
+    const b = parseInt(hex.substring(4, 6), 16);
+    const darkenedR = Math.floor(r * (1 - percent / 100));
+    const darkenedG = Math.floor(g * (1 - percent / 100));
+    const darkenedB = Math.floor(b * (1 - percent / 100));
+    return `#${darkenedR.toString(16).padStart(2, '0')}${darkenedG.toString(16).padStart(2, '0')}${darkenedB.toString(16).padStart(2, '0')}`;
+  };
+  
   const getColorClass = (color) => {
     if (color === 'purple') return 'bg-violet-500';
     if (color === 'red') return 'bg-rose-500';
@@ -38,28 +65,43 @@ const EventIndicator = ({ event, isMonthView }) => {
     return `bg-${color}-200 dark:bg-${color}-700`;
   }
   
+  // For hex colors, use inline styles - only for all-day events
+  const bgStyle = (isHexColor && event.isAllDay) ? {
+    backgroundColor: lightenHexColor(eventColor, 70)
+  } : {};
+  
+  const lineStyle = isHexColor ? {
+    backgroundColor: eventColor
+  } : {};
+  
+  const textStyle = isHexColor ? {
+    color: darkenHexColor(eventColor, 40)
+  } : {};
+  
   return (
     <div
-      className={`text-xs mb-1 flex items-center space-x-1 px-1 py-0.5 cursor-pointer overflow-hidden ${isMonthView ? `${getBgColorClass(event.color || 'blue')} ${event.isAllDay ? 'bg-opacity-70' : 'bg-opacity-70'} rounded-md` : ''}`}
+      className={`text-xs mb-1 flex items-center space-x-1 px-1 py-0.5 cursor-pointer overflow-hidden ${isMonthView ? (isHexColor ? (event.isAllDay ? 'rounded-md' : '') : `${event.isAllDay ? getBgColorClass(eventColor) + ' bg-opacity-70' : ''} ${event.isAllDay ? 'rounded-md' : ''}`) : ''}`}
       onClick={handleClick}
       style={{ 
         maxWidth: '100%', 
-        minWidth: 0
+        minWidth: 0,
+        ...(isMonthView && isHexColor && event.isAllDay ? bgStyle : {})
       }}
     >
       {isMonthView ? (
         <>
           {/* Colored line indicator */}
           <div 
-            className={`${getColorClass(event.color || 'blue')} rounded-sm`}
+            className={isHexColor ? 'rounded-sm' : `${getColorClass(eventColor)} rounded-sm`}
             style={{ 
               width: '3.2px', 
               height: '14px',
-              flex: '0 0 3.2px'
+              flex: '0 0 3.2px',
+              ...(isHexColor ? lineStyle : {})
             }}
           ></div>
           
-          <div className="flex-grow truncate overflow-hidden text-ellipsis text-gray-700 dark:text-gray-800 font-medium" style={{ minWidth: '30px' }}>
+          <div className="flex-grow truncate overflow-hidden text-ellipsis font-medium" style={{ minWidth: '30px', ...(isHexColor ? textStyle : { color: 'rgb(55, 65, 81)' }) }}>
             {event.title}
           </div>
           

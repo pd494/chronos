@@ -124,16 +124,9 @@ export const AuthProvider = ({ children }) => {
       const userData = await authApi.getMe()
       persistUser(userData)
     } catch (error) {
-      if (error.message.includes('expired')) {
-        try {
-          await authApi.refresh()
-          return checkAuth()
-        } catch (refreshError) {
-          persistUser(null)
-        }
-      } else {
-        persistUser(null)
-      }
+      // If getMe fails, just set user to null - don't try to refresh
+      // The apiFetch will handle refreshes for other endpoints automatically
+      persistUser(null)
     } finally {
       setLoading(false)
     }

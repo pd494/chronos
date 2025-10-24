@@ -2,14 +2,16 @@ from fastapi import (
     APIRouter,
     HTTPException,
     Depends,
-    status
+    status,
+    Request
 )
 from fastapi.responses import JSONResponse
 from db.supabase_client import get_supabase_client
 from db.auth_dependency import get_current_user
+from db.google_credentials import GoogleCalendarService
 from supabase import Client
 from models.user import User
-from models.todo import CategoryUpdate, Todo, Category
+from models.todo import CategoryUpdate, Todo, Category, BatchCategoryReorder
 from uuid import UUID
 from models.todo import TodoUpdate
 
@@ -280,6 +282,58 @@ async def get_categories(
         },
     )
 
+@router.patch("/categories/batch-reorder")
+async def batch_reorder_categories(
+    payload: BatchCategoryReorder,
+    supabase: Client = Depends(get_supabase_client),
+    user: User = Depends(get_current_user)
+) -> JSONResponse:
+    updates = payload.updates
+    if not updates:
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={"updated": 0, "categories": []}
+        )
+
+    category_ids = [update.id for update in updates]
+    verification = (
+        supabase.table("categories")
+        .select("*")
+        .eq("user_id", str(user.id))
+        .in_("id", category_ids)
+        .execute()
+    )
+
+    if not verification.data or len(verification.data) != len(category_ids):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Some categories do not belong to user"
+        )
+
+    existing_categories = {cat["id"]: cat for cat in verification.data}
+
+    rows = [
+        {
+            "id": update.id,
+            "order": update.order,
+            "user_id": str(user.id),
+            "name": existing_categories[update.id]["name"],
+            "color": existing_categories[update.id]["color"]
+        }
+        for update in updates
+    ]
+
+    result = (
+        supabase.table("categories")
+        .upsert(rows, on_conflict="id")
+        .execute()
+    )
+
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"updated": len(rows), "categories": result.data or []}
+    )
+
 @router.patch("/categories/{category_id}")
 async def update_category(
     category_id: str,
@@ -293,7 +347,7 @@ async def update_category(
         supabase.table("categories")
         .update(updates)
         .eq("id", category_id)
-        .eq("user_id", user.id)
+        .eq("user_id", str(user.id))
         .execute()
     )
     if not result.data:
@@ -308,7 +362,7 @@ async def update_category(
             "data": result.data[0]
         }
     )
-    
+
 @router.patch("/categories/{category_id}/assign-todo/{todo_id}")
 async def assign_todo_to_category(
     category_id: str,
@@ -321,7 +375,7 @@ async def assign_todo_to_category(
         supabase.table("todos")
         .update({"category_id": category_id})
         .eq("id", todo_id)
-        .eq("user_id", user.id)
+        .eq("user_id", str(user.id))
         .execute()
     )
     if not result.data:
@@ -337,6 +391,145 @@ async def assign_todo_to_category(
         }
     )
 
+
+@router.post("/{todo_id}/convert-to-event")
+async def convert_todo_to_event(
+    todo_id: str,
+    request: Request,
+    supabase: Client = Depends(get_supabase_client),
+    user: User = Depends(get_current_user)
+) -> JSONResponse:
+    """
+    Convert a todo into a Google Calendar event
+    """
+    try:
+        body = await request.json()
+        start_date = body.get("start_date")
+        end_date = body.get("end_date")
+        is_all_day = body.get("is_all_day", False)
+        category_color = body.get("category_color")
+        
+        if not start_date or not end_date:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="start_date and end_date are required"
+            )
+        
+        # Fetch the todo
+        todo_result = (
+            supabase.table("todos")
+            .select("*")
+            .eq("id", todo_id)
+            .eq("user_id", str(user.id))
+            .execute()
+        )
+        
+        if not todo_result.data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Todo not found"
+            )
+        
+        todo = todo_result.data[0]
+        
+        service = GoogleCalendarService(str(user.id), supabase)
+        
+        event_data = {
+            "summary": todo.get("content", "Untitled Event"),
+            "description": f"Converted from todo: {todo.get('content', '')}",
+        }
+        
+        # Store category color in extended properties if provided
+        if category_color:
+            event_data["extendedProperties"] = {
+                "private": {
+                    "categoryColor": category_color
+                }
+            }
+            
+            # Map hex color to Google Calendar colorId for better display in Google Calendar
+            # Google Calendar supports colorIds 1-11
+            color_mapping = {
+                "#3478F6": "9",  # Blue
+                "#FF9500": "6",  # Orange
+                "#34C759": "10", # Green
+                "#FF3B30": "11", # Red
+                "#AF52DE": "3",  # Purple/Lavender
+                "#00C7BE": "7",  # Turquoise
+                "#FFCC00": "5",  # Yellow
+                "#FF2D55": "4",  # Pink
+            }
+            
+            # Find closest colorId if exact match not found
+            if category_color in color_mapping:
+                event_data["colorId"] = color_mapping[category_color]
+            elif category_color.startswith('#'):
+                # Default to blue if no mapping found
+                event_data["colorId"] = "9"
+        
+        # Handle all-day vs timed events
+        if is_all_day:
+            # For all-day events, use date format (not dateTime)
+            from datetime import datetime
+            start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+            end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+            
+            event_data["start"] = {
+                "date": start_dt.strftime("%Y-%m-%d")
+            }
+            event_data["end"] = {
+                "date": end_dt.strftime("%Y-%m-%d")
+            }
+        else:
+            # For timed events, use dateTime format
+            event_data["start"] = {
+                "dateTime": start_date,
+                "timeZone": "America/Los_Angeles"  # You may want to make this configurable
+            }
+            event_data["end"] = {
+                "dateTime": end_date,
+                "timeZone": "America/Los_Angeles"
+            }
+        
+        created_event = service.create_event("primary", event_data)
+        
+     
+        formatted_event = {
+            "id": created_event.get("id"),
+            "summary": created_event.get("summary"),
+            "start": created_event.get("start"),
+            "end": created_event.get("end"),
+            "calendar_id": "primary"
+        }
+
+        try:
+            supabase.table("todos").update({
+                "date": start_date, 
+            }).eq("id", todo_id).eq("user_id", str(user.id)).execute()
+        except Exception as update_error:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to persist scheduled date for todo %s: %s", todo_id, update_error
+            )
+        
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "message": "Todo converted to event successfully",
+                "data": formatted_event
+            }
+        )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error converting todo to event: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to convert todo to event: {str(e)}"
+        )
     
 
 

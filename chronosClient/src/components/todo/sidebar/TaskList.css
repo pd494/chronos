@@ -118,10 +118,25 @@ a.task-list {
 
 .task-text {
   flex: 1;
-  padding: 0 12px;
+  padding: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.task-scheduled-tag {
+  margin-right: 12px;
+  padding: 2px 6px;
+  background-color: #ececec;
+  border-radius: 8px;
+  font-size: 9px;
+  color: #0a0a0c;
+  font-weight: 500;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(0, 0, 0, 0.04);
 }
 
 .task-drag-handle {
@@ -130,6 +145,19 @@ a.task-list {
 
 .task-drag-handle:active {
   cursor: grabbing;
+}
+
+.task-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  padding: 0 12px;
+  overflow: hidden;
+}
+
+.task-content .task-scheduled-tag {
+  margin: 0 0 4px 0;
+  align-self: flex-start;
 }
 
 

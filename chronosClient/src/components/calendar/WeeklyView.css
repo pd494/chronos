@@ -59,12 +59,37 @@
   box-shadow: none !important; /* Remove the inset shadow */
   border: 2px dashed rgba(59, 130, 246, 0.5);
   z-index: 10 !important;
+  position: relative;
+}
+
+.droppable-cell.sortable-dragover::after {
+  content: '📌';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 24px;
+  opacity: 0.6;
+  animation: pin-bounce 0.5s ease-in-out infinite alternate;
 }
 
 /* Simpler but clear highlighting for the target cell */
 .hour-cell.sortable-dragover {
   background-color: rgba(59, 130, 246, 0.25) !important;
   animation: simple-target-pulse 0.8s ease-in-out infinite alternate;
+  position: relative;
+}
+
+.hour-cell.sortable-dragover::after {
+  content: '📌';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 20px;
+  opacity: 0.6;
+  animation: pin-bounce 0.5s ease-in-out infinite alternate;
+  pointer-events: none;
 }
 
 @keyframes simple-target-pulse {
@@ -122,5 +147,17 @@
   to {
     background-color: rgba(59, 130, 246, 0.4);
     transform: scale(1.02);
+  }
+}
+
+/* Pin bounce animation */
+@keyframes pin-bounce {
+  from {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 0.5;
+  }
+  to {
+    transform: translate(-50%, -50%) scale(1.15);
+    opacity: 0.8;
   }
 }

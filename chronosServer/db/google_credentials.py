@@ -97,7 +97,8 @@ class GoogleCalendarService:
                     timeMin=time_min,
                     timeMax=time_max,
                     singleEvents=True,
-                    orderBy='startTime'
+                    orderBy='startTime',
+                    fields='items(id,summary,description,start,end,extendedProperties,status,created,updated)'
                 ).execute()
                 events = events_result.get('items', [])
                 

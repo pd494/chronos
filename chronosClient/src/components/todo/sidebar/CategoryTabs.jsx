@@ -4,6 +4,19 @@ import Sortable from 'sortablejs';
 import './CategoryTabs.css';
 import { useTaskContext } from '../../../context/TaskContext';
 
+const CATEGORY_COLORS = [
+  '#3478F6',
+  '#FF3B30',
+  '#34C759',
+  '#FF9500',
+  '#AF52DE',
+  '#FFD60A',
+  '#00C7BE',
+  '#FF2D55'
+];
+
+const PROTECTED_CATEGORY_NAMES = new Set(['Today', 'Inbox', 'Completed']);
+
 const CategoryTabs = ({ categories, activeCategory, onCategoryChange, isCollapsed = false, isCompact = false, inHeader = false }) => {
   const { createCategory, reorderCategories, deleteCategory } = useTaskContext();
   const [truncatedTabs, setTruncatedTabs] = useState(new Set());
@@ -20,17 +33,6 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, isCollapse
   const colorPickerRef = useRef(null);
   const contextMenuRef = useRef(null);
   
-  const categoryColors = [
-    '#3478F6',
-    '#FF3B30',
-    '#34C759',
-    '#FF9500',
-    '#AF52DE',
-    '#FFD60A',
-    '#00C7BE',
-    '#FF2D55',
-  ];
-
   useEffect(() => {
     const checkTruncation = () => {
       const newTruncated = new Set();
@@ -48,8 +50,7 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, isCollapse
   }, [categories]);
 
   useEffect(() => {
-    if (!listRef.current) return;
-    if (isAddingCategory) return;
+    if (!listRef.current || isAddingCategory) return;
 
     const sortable = Sortable.create(listRef.current, {
       animation: 200,
@@ -58,11 +59,7 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, isCollapse
       ghostClass: 'category-tab-ghost',
       chosenClass: 'category-tab-chosen',
       dragClass: 'category-tab-drag',
-      forceFallback: false,
-      swapThreshold: 0.5,
-      invertSwap: false,
       direction: 'horizontal',
-      easing: 'cubic-bezier(0.25, 0.1, 0.25, 1)',
       onEnd: (evt) => {
         if (evt.oldIndex === evt.newIndex) return;
         const orderedIds = Array.from(listRef.current.querySelectorAll('[data-category-id]'))
@@ -82,10 +79,18 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, isCollapse
     if (category.icon && category.icon.startsWith('#')) {
       return category.icon;
     }
-    if (category.name === 'All') return '#666';
-    if (category.name === 'Inbox') return '#3478F6';
-    if (category.name === 'Today') return '#FF9500';
-    return '#3478F6'; 
+    switch (category.name) {
+      case 'All':
+        return '#666';
+      case 'Inbox':
+        return '#3478F6';
+      case 'Today':
+        return '#FF9500';
+      case 'Completed':
+        return '#34C759';
+      default:
+        return '#3478F6';
+    }
   };
   
   const handleStartAddCategory = () => {
@@ -98,12 +103,14 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, isCollapse
   };
   
   const handleSaveCategory = () => {
-    if (newCategoryName.trim()) {
-      createCategory(newCategoryName.trim(), selectedColor);
-      setNewCategoryName('');
-      setSelectedColor('#3478F6');
-      setIsAddingCategory(false);
-    }
+    const trimmed = newCategoryName.trim();
+    if (!trimmed) return;
+    createCategory(trimmed, selectedColor)
+      .finally(() => {
+        setNewCategoryName('');
+        setSelectedColor('#3478F6');
+        setIsAddingCategory(false);
+      });
   };
   
   const handleCancelAddCategory = () => {
@@ -149,7 +156,7 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, isCollapse
 
   const handleContextMenu = (e, category) => {
     e.preventDefault();
-    if (category.id === 'all' || category.name === 'Today' || category.name === 'Inbox' || category.name === 'Completed') {
+    if (category.id === 'all' || PROTECTED_CATEGORY_NAMES.has(category.name)) {
       return;
     }
     const rect = e.currentTarget.getBoundingClientRect();
@@ -224,7 +231,7 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, isCollapse
                   <div className="color-picker-backdrop" onClick={() => setShowColorPicker(false)}></div>
                   <div className="color-picker-container" ref={colorPickerRef}>
                     <div className="color-grid">
-                      {categoryColors.map((color) => (
+                      {CATEGORY_COLORS.map((color) => (
                         <button
                           key={color}
                           className={`color-option ${selectedColor === color ? 'selected' : ''}`}

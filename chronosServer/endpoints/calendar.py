@@ -92,6 +92,25 @@ async def update_event(
     
     return {"event": updated_event}
 
+@router.patch("/events/{event_id}")
+async def patch_event(
+    event_id: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_client)
+):
+    body = await request.json()
+    calendar_id = body.get("calendar_id", "primary")
+    event_data = body.get("event_data")
+
+    if not event_data:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing event_data")
+
+    service = GoogleCalendarService(str(user.id), supabase)
+    patched_event = service.patch_event(event_id, calendar_id, event_data)
+
+    return {"event": patched_event}
+
 @router.delete("/events/{event_id}")
 async def delete_event(
     event_id: str,

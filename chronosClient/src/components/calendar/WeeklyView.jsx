@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { format, isSameDay, isToday, getHours, getMinutes, getDay, addDays } from 'date-fns'
 import { useCalendar } from '../../context/CalendarContext'
+import { useTaskContext } from '../../context/TaskContext'
 import WeekEvent from '../events/WeekEvent'
 import Sortable from 'sortablejs'
 import './WeeklyView.css'
@@ -27,6 +28,8 @@ const WeeklyView = () => {
     selectDate,
     openEventModal
   } = useCalendar()
+  
+  const { convertTodoToEvent } = useTaskContext()
   
   const [days, setDays] = useState(getDaysInWeek(currentDate))
   const containerRef = useRef(null)
@@ -360,6 +363,37 @@ const WeeklyView = () => {
     // Ensure event has a color, default to blue if not present
     const eventColor = event.color || 'blue';
     
+    // Check if color is a hex code (starts with #)
+    const isHexColor = eventColor.startsWith('#');
+    
+    // Function to lighten a hex color for better appearance
+    const lightenHexColor = (hex, percent = 30) => {
+      hex = hex.replace('#', '');
+      const r = parseInt(hex.substring(0, 2), 16);
+      const g = parseInt(hex.substring(2, 4), 16);
+      const b = parseInt(hex.substring(4, 6), 16);
+      const lightenedR = Math.min(255, Math.floor(r + (255 - r) * (percent / 100)));
+      const lightenedG = Math.min(255, Math.floor(g + (255 - g) * (percent / 100)));
+      const lightenedB = Math.min(255, Math.floor(b + (255 - b) * (percent / 100)));
+      return `#${lightenedR.toString(16).padStart(2, '0')}${lightenedG.toString(16).padStart(2, '0')}${lightenedB.toString(16).padStart(2, '0')}`;
+    };
+    
+    // Function to darken a hex color for text/border
+    const darkenHexColor = (hex, percent = 30) => {
+      hex = hex.replace('#', '');
+      const r = parseInt(hex.substring(0, 2), 16);
+      const g = parseInt(hex.substring(2, 4), 16);
+      const b = parseInt(hex.substring(4, 6), 16);
+      const darkenedR = Math.floor(r * (1 - percent / 100));
+      const darkenedG = Math.floor(g * (1 - percent / 100));
+      const darkenedB = Math.floor(b * (1 - percent / 100));
+      return `#${darkenedR.toString(16).padStart(2, '0')}${darkenedG.toString(16).padStart(2, '0')}${darkenedB.toString(16).padStart(2, '0')}`;
+    };
+    
+    const backgroundColor = isHexColor ? lightenHexColor(eventColor, 30) : `var(--color-${eventColor}-500)`;
+    const textColor = isHexColor ? darkenHexColor(eventColor, 30) : `var(--color-${eventColor}-900)`;
+    const borderColor = textColor;
+    
     return (
       <div
         key={event.id}
@@ -369,18 +403,18 @@ const WeeklyView = () => {
           left: '2px',
           right: '2px',
           height: '32px', // 25% taller (was 24px equivalent)
-          backgroundColor: `var(--color-${eventColor}-500)`,
+          backgroundColor: backgroundColor,
           opacity: 0.8,
         }}
         onClick={() => openEventModal(event)}
       >
         <div 
           className="absolute left-0 top-0 bottom-0 w-1 rounded-l" 
-          style={{ backgroundColor: `var(--color-${eventColor}-900)` }}
+          style={{ backgroundColor: borderColor }}
         ></div>
         <span 
           className="ml-2 font-medium truncate"
-          style={{ color: `var(--color-${eventColor}-900)` }}
+          style={{ color: textColor }}
         >
           {event.title}
         </span>
@@ -430,8 +464,34 @@ const WeeklyView = () => {
           });
         },
         // Handle when a task is dragged over this cell
-        onAdd: function(evt) {
-          console.log('Task dropped on hour cell', evt.to.getAttribute('data-hour'));
+        onAdd: async function(evt) {
+          const taskId = evt.item.getAttribute('data-task-id') || evt.item.getAttribute('data-id');
+          const hour = parseInt(evt.to.getAttribute('data-hour'), 10);
+          const dateStr = evt.to.getAttribute('data-date');
+          
+          // Remove the CLONE safely - defer to avoid conflicts with React
+          setTimeout(() => {
+            try {
+              if (evt.item && evt.item.parentNode) {
+                evt.item.parentNode.removeChild(evt.item);
+              }
+            } catch (e) {
+              // Ignore - React may have already removed it
+            }
+          }, 0);
+          
+          if (taskId && !isNaN(hour) && dateStr) {
+            // Parse the date string properly to avoid timezone issues
+            const [year, month, day] = dateStr.split('-').map(Number);
+            const startDate = new Date(year, month - 1, day, hour, 0, 0, 0);
+            const endDate = new Date(year, month - 1, day, hour + 1, 0, 0, 0);
+            
+            try {
+              await convertTodoToEvent(taskId, startDate, endDate, false);
+            } catch (error) {
+              console.error('Failed to convert todo to event:', error);
+            }
+          }
         },
         sort: false, // Disable sorting within the cell
         delay: 0, // No delay for mobile
@@ -449,7 +509,7 @@ const WeeklyView = () => {
       });
       hourCellsRef.current = {};
     };
-  }, [days]); // Re-run when days change
+  }, [days, convertTodoToEvent]); // Re-run when days change
   
   // Initialize Sortable for droppable all-day cells
   useEffect(() => {
@@ -482,8 +542,32 @@ const WeeklyView = () => {
           });
         },
         // Handle when a task is dragged over this cell
-        onAdd: function(evt) {
-          console.log('Task dropped on all-day cell', evt.to.getAttribute('data-date'));
+        onAdd: async function(evt) {
+          const taskId = evt.item.getAttribute('data-task-id') || evt.item.getAttribute('data-id');
+          const dateStr = evt.to.getAttribute('data-date');
+          
+          // Remove the CLONE safely - defer to avoid conflicts with React
+          setTimeout(() => {
+            try {
+              if (evt.item && evt.item.parentNode) {
+                evt.item.parentNode.removeChild(evt.item);
+              }
+            } catch (e) {
+              // Ignore - React may have already removed it
+            }
+          }, 0);
+          
+          if (taskId && dateStr) {
+            const [year, month, day] = dateStr.split('-').map(Number);
+            const startDate = new Date(year, month - 1, day, 0, 0, 0, 0);
+            const endDate = new Date(year, month - 1, day + 1, 0, 0, 0, 0);
+            
+            try {
+              await convertTodoToEvent(taskId, startDate, endDate, true);
+            } catch (error) {
+              console.error('Failed to convert todo to event:', error);
+            }
+          }
         },
         sort: false, // Disable sorting within the cell
         delay: 0, // No delay for mobile
@@ -501,7 +585,7 @@ const WeeklyView = () => {
       });
       allDayCellsRef.current = {};
     };
-  }, [days]); // Re-run when days change
+  }, [days, convertTodoToEvent]); // Re-run when days change
   
   return (
     <div 

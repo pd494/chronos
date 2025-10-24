@@ -2,7 +2,6 @@ from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
 from uuid import UUID, uuid4
-from fastapi import Depends
 
 class Category(BaseModel):
     id: UUID = Field(default_factory=uuid4)
@@ -14,7 +13,15 @@ class CategoryUpdate(BaseModel):
     name: Optional[str] = None
     color: Optional[str] = None  
     order: Optional[int] = None
-    
+
+
+class CategoryOrderUpdate(BaseModel):
+    id: str
+    order: int
+
+
+class BatchCategoryReorder(BaseModel):
+    updates: List[CategoryOrderUpdate]
     
 class Todo(BaseModel):
     id: UUID = Field(default_factory=uuid4)
@@ -23,6 +30,7 @@ class Todo(BaseModel):
     date: Optional[datetime] = None
     category_id: Optional[UUID] = None
     category_name: Optional[str] = None
+    date: Optional[datetime] = None
     
 class TodoUpdate(BaseModel):
     content: Optional[str] = None
@@ -31,5 +39,5 @@ class TodoUpdate(BaseModel):
     order: Optional[int] = None
     category_id: Optional[UUID] = None
     category_name: Optional[str] = None
-
+    date: Optional[datetime] = None
 

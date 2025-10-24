@@ -19,7 +19,9 @@ import {
   subMonths,
 } from 'date-fns';
 import { useCalendar } from '../../context/CalendarContext';
+import { useTaskContext } from '../../context/TaskContext';
 import EventIndicator from '../events/EventIndicator';
+import Sortable from 'sortablejs';
 
 // ─── Constants ────────────────────────────────────────────────────────────
 const BUFFER_WEEKS     = 260; // ~5 years either side (10 years total range)
@@ -32,7 +34,12 @@ const DIRECTIONAL_MONTHS = 24; // prefetch 2 years in scroll direction
 const getStartOfWeekLocal = (date, weekStartsOn = 0) =>
   startOfWeek(date, { weekStartsOn });
 
-const formatDateKey = (date) => date.toISOString().split('T')[0];
+const formatDateKey = (date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 
 // ─── Component ────────────────────────────────────────────────────────────
 const MonthlyView = () => {
@@ -44,6 +51,8 @@ const MonthlyView = () => {
     fetchEventsForRange,
     initialLoading,
   } = useCalendar();
+
+  const { convertTodoToEvent } = useTaskContext();
 
   const [referenceDate] = useState(new Date());   // today, fixed
   const todayWeekIndex  = ABOVE + BUFFER_WEEKS;   // week offset to today
@@ -253,6 +262,61 @@ const MonthlyView = () => {
     requestedRangesRef.current.clear();
   }, []);
 
+  // Initialize Sortable for droppable day cells
+  useEffect(() => {
+    const dayCells = document.querySelectorAll('.calendar-day');
+    const sortableInstances = [];
+    
+    dayCells.forEach(cell => {
+      const sortable = Sortable.create(cell, {
+        group: {
+          name: 'tasks',
+          pull: false,
+          put: true
+        },
+        animation: 150,
+        ghostClass: 'sortable-ghost',
+        dragClass: 'sortable-drag-active',
+        onAdd: async function(evt) {
+          const taskId = evt.item.getAttribute('data-task-id') || evt.item.getAttribute('data-id');
+          const dateStr = evt.to.getAttribute('data-date');
+          
+          // Remove the CLONE safely - defer to avoid conflicts with React
+          setTimeout(() => {
+            try {
+              if (evt.item && evt.item.parentNode) {
+                evt.item.parentNode.removeChild(evt.item);
+              }
+            } catch (e) {
+              // Ignore - React may have already removed it
+            }
+          }, 0);
+          
+          if (taskId && dateStr) {
+            const [year, month, day] = dateStr.split('-').map(Number);
+            const startDate = new Date(year, month - 1, day, 0, 0, 0, 0);
+            const endDate = addDays(startDate, 1);
+            
+            try {
+              await convertTodoToEvent(taskId, startDate, endDate, true);
+            } catch (error) {
+              console.error('Failed to convert todo to event:', error);
+            }
+          }
+        },
+        sort: false
+      });
+      
+      sortableInstances.push(sortable);
+    });
+    
+    return () => {
+      sortableInstances.forEach(sortable => {
+        if (sortable && sortable.destroy) sortable.destroy();
+      });
+    };
+  }, [weeks, convertTodoToEvent]);
+
   const dayNames = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
   return (
@@ -297,6 +361,7 @@ const MonthlyView = () => {
                       onDoubleClick={() => selectDate(day)}
                       style={{ height: `${rowHeight}px`, boxSizing: 'border-box' }}
                       className="calendar-day bg-white dark:bg-gray-800 border-r border-b border-gray-100 dark:border-gray-800 relative p-1 flex flex-col group"
+                      data-date={formatDateKey(day)}
                     >
                       <div className="flex justify-between items-start text-xs mb-1">
                         {firstOfMonth && (

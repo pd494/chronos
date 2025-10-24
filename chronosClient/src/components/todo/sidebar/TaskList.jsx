@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Sortable from 'sortablejs';
 import { useTaskContext } from '../../../context/TaskContext';
+import TaskScheduledBadge from './TaskScheduledBadge';
 import './TaskList.css';
 
 const TaskItem = ({ task, onToggleComplete }) => {
@@ -38,7 +39,10 @@ const TaskItem = ({ task, onToggleComplete }) => {
       >
         {(task.completed || isChecking) ? <span>✓</span> : <span></span>}
       </div>
-      <div className="task-text">{task.content}</div>
+      <div className="task-content">
+        <TaskScheduledBadge task={task} />
+        <div className="task-text">{task.content}</div>
+      </div>
       <div className="task-drag-handle">
         <span>⋮⋮</span>
       </div>
@@ -52,6 +56,7 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
   const [newTaskText, setNewTaskText] = useState('');
   const newTaskInputRef = useRef(null);
   const tasksContainerRef = useRef(null);
+  const sortableRef = useRef(null);
   
   useEffect(() => {
     if (isEditingNewTask && newTaskInputRef.current) {
@@ -60,35 +65,51 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
   }, [isEditingNewTask]);
   
   useEffect(() => {
-    if (tasksContainerRef.current) {
-      const sortable = Sortable.create(tasksContainerRef.current, {
-        animation: 150,
-        handle: '.task-drag-handle',
-        group: {
-          name: 'tasks',
-          pull: 'clone',
-          put: false 
-        },
-        sort: false,
-        ghostClass: 'task-ghost',
-        chosenClass: 'task-chosen',
-        dragClass: 'task-drag',
-        onStart: function() {
-          document.body.classList.add('task-dragging');
-          document.documentElement.classList.add('dragging');
-        },
-        onEnd: function(evt) {
-          document.body.classList.remove('task-dragging');
-          document.documentElement.classList.remove('dragging');
-          
-        }
-      });
-      
-      return () => {
-        sortable.destroy();
-      };
+    if (!tasksContainerRef.current || isCollapsed) {
+      if (sortableRef.current) {
+        sortableRef.current.destroy();
+        sortableRef.current = null;
+      }
+      return;
     }
-  }, [tasks]);
+
+    const sortable = Sortable.create(tasksContainerRef.current, {
+      animation: 150,
+      handle: '.task-drag-handle',
+      filter: '.task-checkbox, .task-text, .task-scheduled-tag',
+      preventOnFilter: false,
+      group: {
+        name: 'tasks',
+        pull: 'clone',
+        put: false 
+      },
+      sort: false,
+      ghostClass: 'task-ghost',
+      chosenClass: 'task-chosen',
+      dragClass: 'task-drag',
+      onStart: function(evt) {
+        document.body.classList.add('task-dragging');
+        document.documentElement.classList.add('dragging');
+        if (evt.item) {
+          const taskId = evt.item.getAttribute('data-id');
+          evt.item.setAttribute('data-task-id', taskId);
+        }
+      },
+      onEnd: function() {
+        document.body.classList.remove('task-dragging');
+        document.documentElement.classList.remove('dragging');
+      }
+    });
+
+    sortableRef.current = sortable;
+
+    return () => {
+      if (sortableRef.current) {
+        sortableRef.current.destroy();
+        sortableRef.current = null;
+      }
+    };
+  }, [tasks, isCollapsed, category?.name]);
   
   const handleAddTask = () => {
     if (newTaskText.trim()) {
@@ -188,10 +209,49 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
 
 const TaskList = ({ tasks, onToggleComplete, activeCategory, categories }) => {
   const { addTask } = useTaskContext();
+  const regularTasksContainerRef = useRef(null);
   
   const handleAddTaskToCategory = (text, categoryName) => {
     addTask({ content: text, categoryName });
   };
+  
+  // Set up Sortable for regular (non-grouped) task list
+  useEffect(() => {
+    if (regularTasksContainerRef.current && activeCategory !== 'All') {
+      const sortable = Sortable.create(regularTasksContainerRef.current, {
+        animation: 150,
+        handle: '.task-drag-handle',
+        filter: '.task-checkbox, .task-text, .task-scheduled-tag',
+        preventOnFilter: false,
+        group: {
+          name: 'tasks',
+          pull: 'clone',
+          put: false 
+        },
+        sort: false,
+        ghostClass: 'task-ghost',
+        chosenClass: 'task-chosen',
+        dragClass: 'task-drag',
+        onStart: function(evt) {
+          document.body.classList.add('task-dragging');
+          document.documentElement.classList.add('dragging');
+          // Store the task data on the clone
+          if (evt.item) {
+            const taskId = evt.item.getAttribute('data-id');
+            evt.item.setAttribute('data-task-id', taskId);
+          }
+        },
+        onEnd: function(evt) {
+          document.body.classList.remove('task-dragging');
+          document.documentElement.classList.remove('dragging');
+        }
+      });
+      
+      return () => {
+        sortable.destroy();
+      };
+    }
+  }, [activeCategory]); // Only recreate when switching categories
   
   // If we're in the 'All' tab, group tasks by category
   if (activeCategory === 'All') {
@@ -265,7 +325,7 @@ const TaskList = ({ tasks, onToggleComplete, activeCategory, categories }) => {
   
   // Regular view for specific categories
   return (
-    <div className="task-list">
+    <div className="task-list" ref={regularTasksContainerRef}>
       {tasks.map(task => (
         <TaskItem
           key={task.id}

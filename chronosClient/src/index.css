@@ -331,3 +331,102 @@ body.task-dragging * {
 html.dragging .sortable-drag {
   z-index: 9999 !important;
 }
+
+/* Month view day cell drop zone styles */
+.calendar-day.sortable-dragover {
+  background-color: rgba(59, 130, 246, 0.15) !important;
+  outline: 2px dashed rgba(59, 130, 246, 0.5);
+  animation: month-cell-pulse 0.8s ease-in-out infinite alternate;
+  position: relative;
+}
+
+.calendar-day.sortable-dragover::after {
+  content: '📌';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 24px;
+  opacity: 0.6;
+  animation: pin-bounce 0.5s ease-in-out infinite alternate;
+  pointer-events: none;
+  z-index: 100;
+}
+
+@keyframes month-cell-pulse {
+  from {
+    background-color: rgba(59, 130, 246, 0.1);
+  }
+  to {
+    background-color: rgba(59, 130, 246, 0.25);
+  }
+}
+
+/* Day view hour cell drop zone styles */
+.day-hour-cell {
+  position: absolute;
+  left: 0;
+  right: 0;
+  cursor: default;
+  z-index: 2;
+  transition: background-color 0.2s ease;
+}
+
+.day-hour-cell.sortable-dragover {
+  background-color: rgba(59, 130, 246, 0.25) !important;
+  animation: day-cell-pulse 0.8s ease-in-out infinite alternate;
+}
+
+.day-hour-cell.sortable-dragover::after {
+  content: '📌';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 20px;
+  opacity: 0.6;
+  animation: pin-bounce 0.5s ease-in-out infinite alternate;
+  pointer-events: none;
+  z-index: 100;
+}
+
+@keyframes day-cell-pulse {
+  from {
+    background-color: rgba(59, 130, 246, 0.15);
+  }
+  to {
+    background-color: rgba(59, 130, 246, 0.35);
+  }
+}
+
+/* All-day section drop zone styles */
+.day-all-day-section.sortable-dragover {
+  background-color: rgba(59, 130, 246, 0.15) !important;
+  outline: 2px dashed rgba(59, 130, 246, 0.5);
+  position: relative;
+}
+
+.day-all-day-section.sortable-dragover::after {
+  content: '📌';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 24px;
+  opacity: 0.6;
+  animation: pin-bounce 0.5s ease-in-out infinite alternate;
+  pointer-events: none;
+  z-index: 100;
+}
+
+/* Pin bounce animation */
+@keyframes pin-bounce {
+  from {
+    transform: translate(-50%, -50%) scale(1);
+    opacity: 0.5;
+  }
+  to {
+    transform: translate(-50%, -50%) scale(1.15);
+    opacity: 0.8;
+  }
+}

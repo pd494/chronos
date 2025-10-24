@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import { todosApi } from '../lib/api';
 import { useAuth } from './AuthContext';
 
@@ -13,6 +13,38 @@ const SPECIAL_CATEGORY_COLORS = {
   Today: '#FF9500',
   Completed: '#34C759'
 };
+
+const ISO_DATE_ONLY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+
+const isDateOnlyString = (value) =>
+  typeof value === 'string' && ISO_DATE_ONLY_REGEX.test(value.trim());
+
+const toLocalDateOnlyString = (date) => {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '';
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const enhanceTaskWithSchedule = (task) => {
+  if (!task) return task;
+  const rawDate =
+    task.scheduled_date ||
+    task.scheduledDate ||
+    task.scheduled_at ||
+    task.date;
+
+  const derivedAllDay = rawDate ? isDateOnlyString(rawDate) : false;
+
+  if (task.scheduled_is_all_day === derivedAllDay) {
+    return task;
+  }
+
+  return { ...task, scheduled_is_all_day: derivedAllDay };
+};
+
+const enhanceTasks = (tasks = []) => tasks.map(enhanceTaskWithSchedule);
 
 const formatCategory = (category) => {
   if (!category?.name) return null;
@@ -53,6 +85,26 @@ export const TaskProvider = ({ children }) => {
   const [tasks, setTasks] = useState([]);
   const [categories, setCategories] = useState([ALL_CATEGORY]);
 
+  const categoryByName = useMemo(() => {
+    const lookup = new Map();
+    categories.forEach((category) => {
+      if (category && category.name) {
+        lookup.set(category.name, category);
+      }
+    });
+    return lookup;
+  }, [categories]);
+
+  const setTasksEnhanced = useCallback((updater) => {
+    setTasks(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      if (!Array.isArray(next)) {
+        return prev;
+      }
+      return enhanceTasks(next);
+    });
+  }, []);
+
   const resetState = useCallback(() => {
     setTasks([]);
     setCategories([ALL_CATEGORY]);
@@ -61,11 +113,11 @@ export const TaskProvider = ({ children }) => {
   const loadTasks = useCallback(async () => {
     try {
       const response = await todosApi.getTodos();
-      setTasks(response.data || []);
+      setTasksEnhanced(response.data || []);
     } catch (error) {
       console.error('Failed to fetch todos:', error);
     }
-  }, []);
+  }, [setTasksEnhanced]);
 
   const loadCategories = useCallback(async () => {
     try {
@@ -96,19 +148,17 @@ export const TaskProvider = ({ children }) => {
   const resolveCategory = useCallback(
     (categoryName) => {
       if (!categoryName || categoryName === 'All') {
-        return categories.find(cat => cat.name === 'Inbox')
+        return categoryByName.get('Inbox')
           || categories.find(cat => cat.id !== ALL_CATEGORY.id);
       }
       if (categoryName === 'Completed') {
-        return categories.find(cat => cat.name === 'Inbox')
+        return categoryByName.get('Inbox')
           || categories.find(cat => cat.id !== ALL_CATEGORY.id);
       }
-      return (
-        categories.find(cat => cat.name === categoryName)
-        || categories.find(cat => cat.id !== ALL_CATEGORY.id)
-      );
+      return categoryByName.get(categoryName)
+        || categories.find(cat => cat.id !== ALL_CATEGORY.id);
     },
-    [categories]
+    [categories, categoryByName]
   );
 
   const addTask = async ({ content, categoryName }) => {
@@ -133,7 +183,7 @@ export const TaskProvider = ({ children }) => {
         category_name: category.name
       };
 
-      setTasks(prev => [...prev, optimisticTask]);
+      setTasksEnhanced(prev => [...prev, optimisticTask]);
       optimisticAdded = true;
 
       const response = await todosApi.createTodo({
@@ -147,12 +197,12 @@ export const TaskProvider = ({ children }) => {
         category_name: response.data?.category_name || category.name
       };
 
-      setTasks(prev =>
+      setTasksEnhanced(prev =>
         prev.map(task => (task.id === optimisticId ? created : task))
       );
     } catch (error) {
       if (optimisticAdded) {
-        setTasks(prev => prev.filter(task => task.id !== optimisticId));
+        setTasksEnhanced(prev => prev.filter(task => task.id !== optimisticId));
       }
       console.error('Failed to create todo:', error);
     }
@@ -198,13 +248,13 @@ export const TaskProvider = ({ children }) => {
     if (!task) return;
 
     if (task.completed && task.category_name === 'Completed') {
-      setTasks(prev => prev.filter(t => t.id !== id));
+      setTasksEnhanced(prev => prev.filter(t => t.id !== id));
       
       try {
         await todosApi.deleteTodo(id);
       } catch (error) {
         console.error('Failed to delete todo:', error);
-        setTasks(prev => [...prev, task]);
+        setTasksEnhanced(prev => [...prev, task]);
       }
       return;
     }
@@ -219,18 +269,21 @@ export const TaskProvider = ({ children }) => {
           category_id: completedCategory.id
         };
         
-        setTasks(prev =>
+        setTasksEnhanced(prev =>
           prev.map(t =>
             t.id === id ? updatedTask : t
           )
         );
         
         try {
-          await todosApi.completeTodo(id, true);
-          await todosApi.updateTodo(id, { category_name: 'Completed', category_id: completedCategory.id });
+          await todosApi.updateTodo(id, {
+            completed: true,
+            category_name: 'Completed',
+            category_id: completedCategory.id
+          });
         } catch (error) {
           console.error('Failed to complete todo:', error);
-          setTasks(prev =>
+          setTasksEnhanced(prev =>
             prev.map(t =>
               t.id === id ? task : t
             )
@@ -243,17 +296,17 @@ export const TaskProvider = ({ children }) => {
         completed: false
       };
       
-      setTasks(prev =>
+      setTasksEnhanced(prev =>
         prev.map(t =>
           t.id === id ? updatedTask : t
         )
       );
       
       try {
-        await todosApi.completeTodo(id, false);
+        await todosApi.updateTodo(id, { completed: false });
       } catch (error) {
         console.error('Failed to uncomplete todo:', error);
-        setTasks(prev =>
+        setTasksEnhanced(prev =>
           prev.map(t =>
             t.id === id ? task : t
           )
@@ -265,7 +318,7 @@ export const TaskProvider = ({ children }) => {
   const deleteTask = async (id) => {
     try {
       await todosApi.deleteTodo(id);
-      setTasks(prev => prev.filter(task => task.id !== id));
+      setTasksEnhanced(prev => prev.filter(task => task.id !== id));
     } catch (error) {
       console.error('Failed to delete todo:', error);
     }
@@ -274,7 +327,7 @@ export const TaskProvider = ({ children }) => {
   const updateTask = async (id, updatedTask) => {
     try {
       await todosApi.updateTodo(id, updatedTask);
-      setTasks(prev => prev.map(task => (task.id === id ? { ...task, ...updatedTask } : task)));
+      setTasksEnhanced(prev => prev.map(task => (task.id === id ? { ...task, ...updatedTask } : task)));
     } catch (error) {
       console.error('Failed to update todo:', error);
     }
@@ -309,9 +362,7 @@ export const TaskProvider = ({ children }) => {
       });
 
       try {
-        for (const update of batchUpdates) {
-          await todosApi.updateCategory(update.id, { order: update.order });
-        }
+        await todosApi.batchReorderCategories(batchUpdates);
       } catch (error) {
         console.error('Failed to reorder categories:', error);
         await loadCategories();
@@ -319,6 +370,127 @@ export const TaskProvider = ({ children }) => {
     },
     [loadCategories]
   );
+
+  const convertTodoToEvent = async (todoId, startDate, endDate, isAllDay = false) => {
+    const task = tasks.find(t => t.id === todoId);
+    if (!task) {
+      throw new Error('Task not found');
+    }
+
+    // Find the category color for this task
+    const taskCategory = categories.find(cat => cat.name === task.category_name);
+    const categoryColor = taskCategory?.icon || '#3478F6'; // Default to blue if no category found
+
+    const isoStart = startDate.toISOString();
+    const isoEnd = endDate.toISOString();
+    const startDateOnly = toLocalDateOnlyString(startDate);
+    const endDateOnly = toLocalDateOnlyString(endDate);
+    const payloadStart = isAllDay ? startDateOnly : isoStart;
+    const payloadEnd = isAllDay
+      ? (endDateOnly && endDateOnly !== startDateOnly
+          ? endDateOnly
+          : toLocalDateOnlyString(new Date(startDate.getTime() + 24 * 60 * 60 * 1000)))
+      : isoEnd;
+
+    const previousSnapshot = {
+      date: task.date,
+      scheduled_date: task.scheduled_date,
+      scheduled_at: task.scheduled_at,
+      scheduled_is_all_day: task.scheduled_is_all_day
+    };
+
+    // Immediately reflect scheduled time in the sidebar
+    setTasksEnhanced(prev => prev.map(t => (
+      t.id === todoId
+        ? enhanceTaskWithSchedule({
+            ...t,
+            date: payloadStart,
+            scheduled_date: payloadStart,
+            scheduled_at: payloadStart,
+            scheduled_is_all_day: isAllDay
+          })
+        : t
+    )));
+
+    // Create optimistic event immediately with category color
+    const optimisticEventId = `temp-${Date.now()}`;
+    const optimisticEvent = {
+      id: optimisticEventId,
+      summary: task.content,
+      title: task.content,
+      start: isAllDay 
+        ? { date: startDateOnly }
+        : { dateTime: isoStart },
+      end: isAllDay
+        ? { date: payloadEnd }
+        : { dateTime: isoEnd },
+      calendar_id: 'primary',
+      isAllDay,
+      color: categoryColor
+    };
+
+    // Dispatch immediately for instant UI update
+    window.dispatchEvent(new CustomEvent('todoConvertedToEvent', {
+      detail: { 
+        eventData: optimisticEvent,
+        isOptimistic: true
+      }
+    }));
+
+    try {
+      // Call the backend API to create the actual event
+      const response = await todosApi.convertToEvent(todoId, {
+        start_date: payloadStart,
+        end_date: payloadEnd,
+        is_all_day: isAllDay,
+        category_color: categoryColor
+      });
+
+      const resolvedEvent = {
+        ...response.data,
+        title: response.data?.summary || task.content,
+        isAllDay,
+        color: categoryColor
+      };
+
+      // Update with real event data
+      window.dispatchEvent(new CustomEvent('todoConvertedToEvent', {
+        detail: { 
+          eventData: resolvedEvent,
+          isOptimistic: false,
+          replaceId: optimisticEventId, // Replace the optimistic event
+          todoId
+        }
+      }));
+
+      // Background refresh to ensure sidebar state stays in sync
+      try { await loadTasks(); } catch (_) {}
+
+      return resolvedEvent;
+    } catch (error) {
+      console.error('Failed to convert todo to event:', error);
+      
+      // Remove the optimistic event on failure
+      window.dispatchEvent(new CustomEvent('todoConversionFailed', {
+        detail: { eventId: optimisticEventId }
+      }));
+
+      // revert scheduled tag if backend failed
+      setTasksEnhanced(prev => prev.map(t => (
+        t.id === todoId
+          ? enhanceTaskWithSchedule({
+              ...t,
+              date: previousSnapshot.date,
+              scheduled_date: previousSnapshot.scheduled_date,
+              scheduled_at: previousSnapshot.scheduled_at,
+              scheduled_is_all_day: previousSnapshot.scheduled_is_all_day
+            })
+          : t
+      )));
+      
+      throw error;
+    }
+  };
 
   return (
     <TaskContext.Provider value={{ 
@@ -332,7 +504,8 @@ export const TaskProvider = ({ children }) => {
       updateCategory,
       deleteCategory,
       loadData,
-      reorderCategories
+      reorderCategories,
+      convertTodoToEvent
     }}>
       {children}
     </TaskContext.Provider>
