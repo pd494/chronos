@@ -204,6 +204,52 @@ export const todosApi = {
 
 // ----- Calendar API -----
 
+// Convert internal event shape to Google Calendar API event body
+function toGoogleEventBody(eventData) {
+  const body = {}
+
+  // Title/summary
+  if (eventData.title) body.summary = eventData.title
+  if (eventData.description) body.description = eventData.description
+  if (eventData.location) body.location = eventData.location
+
+  // Attendees from participants
+  if (Array.isArray(eventData.participants) && eventData.participants.length) {
+    body.attendees = eventData.participants.map((email) => ({ email }))
+  }
+
+  // Extended properties for category color
+  if (eventData.color) {
+    body.extendedProperties = body.extendedProperties || {}
+    body.extendedProperties.private = {
+      ...(body.extendedProperties.private || {}),
+      categoryColor: eventData.color
+    }
+  }
+
+  // Start/end boundaries
+  const tz = 'America/Los_Angeles'
+  const start = eventData.start instanceof Date ? eventData.start : new Date(eventData.start)
+  const end = eventData.end instanceof Date ? eventData.end : new Date(eventData.end)
+
+  if (eventData.isAllDay) {
+    // Use date format (yyyy-mm-dd) for all-day
+    const toYMD = (d) => {
+      const y = d.getFullYear()
+      const m = String(d.getMonth() + 1).padStart(2, '0')
+      const day = String(d.getDate()).padStart(2, '0')
+      return `${y}-${m}-${day}`
+    }
+    body.start = { date: toYMD(start) }
+    body.end = { date: toYMD(end) }
+  } else {
+    body.start = { dateTime: start.toISOString(), timeZone: tz }
+    body.end = { dateTime: end.toISOString(), timeZone: tz }
+  }
+
+  return body
+}
+
 export const calendarApi = {
   async saveCredentials(tokens){
     return postJson('/calendar/credentials', tokens)
@@ -226,20 +272,25 @@ export const calendarApi = {
     return get(`/calendar/events?${params.toString()}`)
   }, 
   
-  async createEvent(eventData){
-    return postJson('/calendar/events', eventData)
+  async createEvent(eventData, calendarId = 'primary'){
+    const payload = {
+      calendar_id: calendarId,
+      event_data: toGoogleEventBody(eventData)
+    }
+    return postJson('/calendar/events', payload)
   },
   
-  async updateEvent(eventId, eventData){
-    return putJson(`/calendar/events/${eventId}`, eventData)
+  async updateEvent(eventId, eventData, calendarId = 'primary'){
+    const payload = {
+      calendar_id: calendarId,
+      event_data: toGoogleEventBody(eventData)
+    }
+    return putJson(`/calendar/events/${eventId}`, payload)
   },
 
-  async patchEvent(eventId, eventData){
-    return patchJson(`/calendar/events/${eventId}`, eventData)
-  },
-
-  async deleteEvent(eventId){
-    return deleteRequest(`/calendar/events/${eventId}`)
+  async deleteEvent(eventId, calendarId = 'primary'){
+    const suffix = calendarId ? `?calendar_id=${encodeURIComponent(calendarId)}` : ''
+    return deleteRequest(`/calendar/events/${eventId}${suffix}`)
   }
 
 }

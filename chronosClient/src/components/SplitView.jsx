@@ -52,8 +52,8 @@ const SplitView = ({ sidebar, main, onSidebarWidthChange }) => {
         </div>
       )}
       
-      {/* Toggle button */}
-      <button
+      {/* Toggle button - commented out */}
+      {/* <button
         onClick={() => {
           const newVisibility = !sidebarVisible;
           setSidebarVisible(newVisibility);
@@ -66,7 +66,7 @@ const SplitView = ({ sidebar, main, onSidebarWidthChange }) => {
         aria-label={sidebarVisible ? 'Hide sidebar' : 'Show sidebar'}
       >
         {sidebarVisible ? <FiChevronsLeft /> : <FiChevronsRight />}
-      </button>
+      </button> */}
       
       {/* Main content */}
       <div className="flex-1 overflow-hidden flex flex-col">

@@ -20,7 +20,8 @@ const DailyView = () => {
     events,
     navigateToNext,
     navigateToPrevious,
-    openEventModal
+    openEventModal,
+    getEventsForDate
   } = useCalendar()
   
   const { convertTodoToEvent } = useTaskContext()
@@ -120,24 +121,19 @@ const DailyView = () => {
     hours.push(i)
   }
   
-  // Get events for this day
+  // Get events for this day using the cached day index for instant results
   const dayEvents = useMemo(() => {
-    return events
-      .map(event => ({
-        ...event,
-        start: event.start instanceof Date ? new Date(event.start) : new Date(event.start),
-        end: event.end instanceof Date ? new Date(event.end) : new Date(event.end),
-        isImported: Boolean(event.source)
-      }))
-      .filter(event => {
-        const eventDate = event.start
-        return (
-          eventDate.getFullYear() === currentDate.getFullYear() &&
-          eventDate.getMonth() === currentDate.getMonth() &&
-          eventDate.getDate() === currentDate.getDate()
-        )
-      })
-  }, [events, currentDate])
+    const fromCache = typeof getEventsForDate === 'function'
+      ? (getEventsForDate(currentDate) || [])
+      : []
+
+    return fromCache.map(ev => ({
+      ...ev,
+      start: ev.start instanceof Date ? ev.start : new Date(ev.start),
+      end: ev.end instanceof Date ? ev.end : new Date(ev.end),
+      isImported: Boolean(ev.source)
+    }))
+  }, [getEventsForDate, currentDate, events])
   
   // Split events into all-day and regular events
   const allDayEvents = dayEvents.filter(event => {

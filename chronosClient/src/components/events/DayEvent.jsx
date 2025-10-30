@@ -92,8 +92,8 @@ const DayEvent = ({ event, hourHeight, dayStartHour, position }) => {
 
   return (
     <div
-      className={`absolute rounded-lg p-2 overflow-hidden cursor-pointer
-                  text-sm z-10 group ${event.completed ? 'opacity-50 line-through' : ''}`}
+      className="absolute rounded-lg p-2 overflow-hidden cursor-pointer
+                  text-sm z-10 group"
       style={{
         top: `${top}px`,
         height: `${height}px`,

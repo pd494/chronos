@@ -93,8 +93,9 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, position }) => {
 
   return (
     <div
-      className={`absolute rounded-lg p-1 overflow-hidden cursor-default 
-                  text-sm z-10 group ${event.completed ? 'opacity-50 line-through' : ''}`}
+      className="absolute rounded-lg p-1 overflow-hidden cursor-pointer 
+                  text-sm z-10 group"
+      onClick={handleClick}
       style={{
         top: `${top}px`,
         height: `${height}px`,
@@ -104,7 +105,6 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, position }) => {
         backgroundColor: backgroundColor,
         zIndex: 20 + columnIndex
       }}
-      onClick={handleClick}
     >
       {/* Vertical line */}
       <div 

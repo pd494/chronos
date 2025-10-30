@@ -103,7 +103,7 @@ async def edit_todo(
     user: User = Depends(get_current_user)
 ) -> JSONResponse:
     
-    updates = todo_update.model_dump(exclude_unset=True, exclude_none=True)
+    updates = todo_update.model_dump(exclude_unset=True)
     
     if "category_id" in updates and updates["category_id"] is not None:
         updates["category_id"] = str(updates["category_id"])
@@ -438,15 +438,17 @@ async def convert_todo_to_event(
             "summary": todo.get("content", "Untitled Event"),
             "description": f"Converted from todo: {todo.get('content', '')}",
         }
-        
+
+        extended_props = event_data.get("extendedProperties", {}) or {}
+        private_props = extended_props.get("private", {}) or {}
+
+        # Always persist the originating todo id with the event
+        private_props["todoId"] = str(todo_id)
+
         # Store category color in extended properties if provided
         if category_color:
-            event_data["extendedProperties"] = {
-                "private": {
-                    "categoryColor": category_color
-                }
-            }
-            
+            private_props["categoryColor"] = category_color
+
             # Map hex color to Google Calendar colorId for better display in Google Calendar
             # Google Calendar supports colorIds 1-11
             color_mapping = {
@@ -459,13 +461,16 @@ async def convert_todo_to_event(
                 "#FFCC00": "5",  # Yellow
                 "#FF2D55": "4",  # Pink
             }
-            
+
             # Find closest colorId if exact match not found
             if category_color in color_mapping:
                 event_data["colorId"] = color_mapping[category_color]
             elif category_color.startswith('#'):
                 # Default to blue if no mapping found
                 event_data["colorId"] = "9"
+
+        extended_props["private"] = private_props
+        event_data["extendedProperties"] = extended_props
         
         # Handle all-day vs timed events
         if is_all_day:
@@ -499,12 +504,14 @@ async def convert_todo_to_event(
             "summary": created_event.get("summary"),
             "start": created_event.get("start"),
             "end": created_event.get("end"),
-            "calendar_id": "primary"
+            "calendar_id": "primary",
+            "todo_id": str(todo_id)
         }
 
         try:
             supabase.table("todos").update({
-                "date": start_date, 
+                "date": start_date,
+                "google_event_id": created_event.get("id")
             }).eq("id", todo_id).eq("user_id", str(user.id)).execute()
         except Exception as update_error:
             import logging

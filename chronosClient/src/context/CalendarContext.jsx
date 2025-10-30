@@ -25,6 +25,7 @@ const INITIAL_PAST_MONTHS = 3
 const INITIAL_FUTURE_MONTHS = 3
 const EXPANSION_MONTHS = 2
 const IDLE_PREFETCH_EXTRA_MONTHS = 12
+const RECENT_EVENT_SYNC_TTL_MS = 60 * 1000 // allow a short grace period for new events to appear in remote fetches
 
 const parseCalendarBoundary = (boundary) => {
   if (!boundary) return null
@@ -106,6 +107,7 @@ export const CalendarProvider = ({ children }) => {
   const eventToTodoRef = useRef(new Map())
   const suppressedEventIdsRef = useRef(new Set())
   const suppressedTodoIdsRef = useRef(new Set())
+  const pendingSyncEventIdsRef = useRef(new Map())
   const idlePrefetchCancelRef = useRef(null)
   const cacheTTLRef = useRef(24 * 60 * 60 * 1000) // 24h TTL
   const calHashRef = useRef('all')
@@ -131,14 +133,14 @@ export const CalendarProvider = ({ children }) => {
     }
   }, [])
 
-  const snapshotKey = (start, end) => {
+  const snapshotKey = useCallback((start, end, viewType = view) => {
     const u = user?.id || 'anon'
     const cal = calHashRef.current
-    const viewKey = view
+    const viewKey = viewType
     const startIso = safeToISOString(start) || 'invalid'
     const endIso = safeToISOString(end) || 'invalid'
     return `chronos:snap:v1:${u}:${cal}:${viewKey}:${startIso}:${endIso}`
-  }
+  }, [user?.id, view])
 
   const extendLoadedRange = useCallback((start, end) => {
     if (!(start instanceof Date) || !(end instanceof Date)) return
@@ -245,6 +247,88 @@ export const CalendarProvider = ({ children }) => {
       end: endOfWeek(endOfMonth(date))
     }
   }, [])
+  
+  const removeEventFromAllSnapshots = useCallback((eventId) => {
+    if (typeof window === 'undefined') return
+    
+    try {
+      const keys = Object.keys(window.sessionStorage)
+      keys.forEach(key => {
+        if (key.startsWith('chronos:snap:')) {
+          try {
+            const raw = window.sessionStorage.getItem(key)
+            const parsed = JSON.parse(raw)
+            if (parsed?.events) {
+              const filtered = parsed.events.filter(ev => ev.id !== eventId)
+              if (filtered.length !== parsed.events.length) {
+                window.sessionStorage.setItem(key, JSON.stringify({ events: filtered }))
+              }
+            }
+          } catch (e) {
+            // Ignore errors for individual keys
+          }
+        }
+      })
+    } catch (e) {
+      // Ignore storage errors
+    }
+  }, [])
+  
+  const saveSnapshotsForAllViews = useCallback((newEvent) => {
+    if (typeof window === 'undefined') return
+    
+    const eventStart = coerceDate(newEvent.start)
+    const eventEnd = coerceDate(newEvent.end)
+    if (!eventStart || !eventEnd) return
+    
+    const views = ['month', 'week', 'day']
+    
+    views.forEach(viewType => {
+      const range = getVisibleRange(currentDate, viewType)
+      
+      // Check if event is within this view's range
+      const eventStartTime = eventStart.getTime()
+      const eventEndTime = eventEnd.getTime()
+      const rangeStartTime = range.start.getTime()
+      const rangeEndTime = range.end.getTime()
+      
+      // Event must overlap with the range
+      const isInRange = eventStartTime <= rangeEndTime && eventEndTime >= rangeStartTime
+      
+      if (!isInRange) return
+      
+      const key = snapshotKey(range.start, range.end, viewType)
+      
+      try {
+        const existing = window.sessionStorage.getItem(key)
+        const parsed = existing ? JSON.parse(existing) : { events: [] }
+        let list = parsed.events || []
+        
+        // Add new event if not already in snapshot
+        if (!list.some(x => x.id === newEvent.id)) {
+          const startIso = safeToISOString(newEvent.start)
+          const endIso = safeToISOString(newEvent.end)
+          if (startIso && endIso) {
+            list.push({
+              id: newEvent.id,
+              title: newEvent.title,
+              start: startIso,
+              end: endIso,
+              color: newEvent.color,
+              calendar_id: newEvent.calendar_id,
+              todoId: newEvent.todoId,
+              isOptimistic: newEvent.isOptimistic,
+              isAllDay: newEvent.isAllDay,
+              isPendingSync: Boolean(newEvent.isPendingSync)
+            })
+            window.sessionStorage.setItem(key, JSON.stringify({ events: list }))
+          }
+        }
+      } catch (e) {
+        // Ignore storage errors
+      }
+    })
+  }, [currentDate, getVisibleRange])
 
   const hydrateFromSnapshot = useCallback(() => {
     try {
@@ -261,20 +345,28 @@ export const CalendarProvider = ({ children }) => {
         if (!eventIdsRef.current.has(ev.id)) {
           const todoId = ev.todoId || ev.todo_id
 
+          const isPendingSync = Boolean(ev.isPendingSync)
+
           const e = {
             id: ev.id,
             title: ev.title || 'Untitled',
             start: new Date(ev.start),
             end: new Date(ev.end),
             color: ev.color || 'blue',
-            isGoogleEvent: true,
+            isGoogleEvent: !ev.isOptimistic,
+            isOptimistic: ev.isOptimistic || false,
+            isAllDay: ev.isAllDay || false,
             calendar_id: ev.calendar_id,
-            todoId: todoId ? String(todoId) : undefined
+            todoId: todoId ? String(todoId) : undefined,
+            isPendingSync
           }
           if (todoId) {
             linkTodoEvent(todoId, ev.id)
           }
           toAdd.push(e)
+          if (isPendingSync) {
+            pendingSyncEventIdsRef.current.set(ev.id, Date.now())
+          }
         }
       }
       if (toAdd.length) {
@@ -466,6 +558,7 @@ export const CalendarProvider = ({ children }) => {
         const updatedEvents = []
         const newEvents = []
         const removedIds = []
+        const now = Date.now()
 
         setEvents(prev => {
           const next = []
@@ -476,13 +569,27 @@ export const CalendarProvider = ({ children }) => {
             if (evStart && !Number.isNaN(evTime) && evTime >= segmentStartMs && evTime <= segmentEndMs) {
               const replacement = incomingById.get(ev.id)
               if (replacement) {
-                next.push({ ...ev, ...replacement })
-                updatedEvents.push(replacement)
+                pendingSyncEventIdsRef.current.delete(ev.id)
+                const merged = { ...ev, ...replacement, isPendingSync: false }
+                next.push(merged)
+                updatedEvents.push(merged)
                 incomingById.delete(ev.id)
-              } else if (ev.isOptimistic) {
-                next.push(ev)
               } else {
-                removedIds.push(ev.id)
+                const pendingTimestamp = pendingSyncEventIdsRef.current.get(ev.id)
+                let isPendingSync = Boolean(ev.isPendingSync)
+                if (typeof pendingTimestamp === 'number') {
+                  if (now - pendingTimestamp > RECENT_EVENT_SYNC_TTL_MS) {
+                    pendingSyncEventIdsRef.current.delete(ev.id)
+                  } else {
+                    isPendingSync = true
+                  }
+                }
+                if (ev.isOptimistic || isPendingSync) {
+                  const carry = isPendingSync && !ev.isPendingSync ? { ...ev, isPendingSync: true } : ev
+                  next.push(carry)
+                } else {
+                  removedIds.push(ev.id)
+                }
               }
             } else {
               next.push(ev)
@@ -490,8 +597,10 @@ export const CalendarProvider = ({ children }) => {
           })
 
           incomingById.forEach(ev => {
-            newEvents.push(ev)
-            next.push(ev)
+            pendingSyncEventIdsRef.current.delete(ev.id)
+            const normalized = { ...ev, isPendingSync: false }
+            newEvents.push(normalized)
+            next.push(normalized)
           })
 
           return next
@@ -500,6 +609,7 @@ export const CalendarProvider = ({ children }) => {
         if (removedIds.length) {
           for (const id of removedIds) {
             eventIdsRef.current.delete(id)
+            pendingSyncEventIdsRef.current.delete(id)
             unlinkEvent(id)
             for (const [key, arr] of eventsByDayRef.current.entries()) {
               const filtered = arr.filter(ev => ev.id !== id)
@@ -514,6 +624,7 @@ export const CalendarProvider = ({ children }) => {
         if (toReindex.length) {
           for (const ev of toReindex) {
             eventIdsRef.current.add(ev.id)
+            pendingSyncEventIdsRef.current.delete(ev.id)
             for (const [key, arr] of eventsByDayRef.current.entries()) {
               const filtered = arr.filter(item => item.id !== ev.id)
               if (filtered.length !== arr.length) {
@@ -611,12 +722,66 @@ export const CalendarProvider = ({ children }) => {
     }
   }, [user, selectedCalendars, extendLoadedRange, linkTodoEvent])
 
-  const dateKey = (d) => {
+  const dateKey = useCallback((d) => {
     const y = d.getFullYear()
     const m = (d.getMonth() + 1).toString().padStart(2, '0')
     const day = d.getDate().toString().padStart(2, '0')
     return `${y}-${m}-${day}`
-  }
+  }, [])
+
+  const rebuildEventsByDayIndex = useCallback((eventList) => {
+    const next = new Map()
+
+    for (const ev of eventList) {
+      if (!ev || !ev.id) continue
+      if (suppressedEventIdsRef.current.has(ev.id)) continue
+      const todoKey = ev.todoId ? String(ev.todoId) : null
+      if (todoKey && suppressedTodoIdsRef.current.has(todoKey)) continue
+
+      const startValue = coerceDate(ev.start)
+      const endValue = coerceDate(ev.end)
+      if (!startValue || !endValue) continue
+
+      let cursor = startOfDay(new Date(startValue))
+      let last = startOfDay(new Date(endValue))
+
+      if (ev.isAllDay) {
+        last = addDays(last, -1)
+      }
+
+      if (last < cursor) {
+        last = cursor
+      }
+
+      for (let day = new Date(cursor); day <= last; day = addDays(day, 1)) {
+        const key = dateKey(day)
+        const arr = next.get(key) || []
+        arr.push(ev)
+        next.set(key, arr)
+      }
+    }
+
+    next.forEach((arr, key) => {
+      arr.sort((a, b) => {
+        const weight = (event) => {
+          if (event.isOptimistic) return -2
+          if (event.isPendingSync) return -1
+          return 0
+        }
+        const weightDiff = weight(a) - weight(b)
+        if (weightDiff !== 0) return weightDiff
+
+        const aStart = coerceDate(a.start)?.getTime() ?? 0
+        const bStart = coerceDate(b.start)?.getTime() ?? 0
+        if (aStart !== bStart) return aStart - bStart
+
+        return (a.title || '').localeCompare(b.title || '')
+      })
+      next.set(key, arr)
+    })
+
+    eventsByDayRef.current = next
+  }, [dateKey])
 
   const indexEventByDays = useCallback((ev) => {
     const startValue = coerceDate(ev.start)
@@ -644,7 +809,21 @@ export const CalendarProvider = ({ children }) => {
         eventsByDayRef.current.set(key, arr)
       }
     }
-  }, [])
+  }, [dateKey])
+
+  useEffect(() => {
+    rebuildEventsByDayIndex(events)
+  }, [events, rebuildEventsByDayIndex])
+
+  useEffect(() => {
+    const ids = new Set()
+    for (const ev of events) {
+      if (ev && ev.id) {
+        ids.add(ev.id)
+      }
+    }
+    eventIdsRef.current = ids
+  }, [events])
 
   const buildBufferedRange = useCallback((start, end, pastMonths = INITIAL_PAST_MONTHS, futureMonths = INITIAL_FUTURE_MONTHS) => {
     if (!(start instanceof Date) || !(end instanceof Date)) {
@@ -779,6 +958,7 @@ export const CalendarProvider = ({ children }) => {
       prefetchedRangesRef.current.clear()
       eventsByDayRef.current = new Map()
       eventIdsRef.current = new Set()
+      pendingSyncEventIdsRef.current = new Map()
       todoToEventRef.current = new Map()
       eventToTodoRef.current = new Map()
       activeForegroundRequestsRef.current = 0
@@ -851,7 +1031,7 @@ export const CalendarProvider = ({ children }) => {
         window.sessionStorage.setItem(key, JSON.stringify({ events: list }))
       } catch (_) {}
     }, 200) // debounce
-  }, [currentDate, view, initialLoading, events])
+  }, [currentDate, view, initialLoading, events, getVisibleRange, dateKey, snapshotKey])
 
   const refreshEvents = useCallback(() => {
     if (!user) return
@@ -1140,8 +1320,23 @@ export const CalendarProvider = ({ children }) => {
       return true
     })
 
-    return filtered
-  }, [])
+    // Sort by time: earliest events first
+    return filtered.sort((a, b) => {
+      const weight = (event) => {
+        if (event.isOptimistic) return -2
+        if (event.isPendingSync) return -1
+        return 0
+      }
+      const weightDiff = weight(a) - weight(b)
+      if (weightDiff !== 0) return weightDiff
+
+      const aStart = coerceDate(a.start)?.getTime() ?? 0
+      const bStart = coerceDate(b.start)?.getTime() ?? 0
+      if (aStart !== bStart) return aStart - bStart
+
+      return (a.title || '').localeCompare(b.title || '')
+    })
+  }, [dateKey])
 
   const createEvent = useCallback(async (eventData) => {
     // Ensure dates are proper Date objects
@@ -1176,6 +1371,9 @@ export const CalendarProvider = ({ children }) => {
     setEvents(prev => [...prev, newEvent])
     eventIdsRef.current.add(newEvent.id)
     indexEventByDays(newEvent)
+    
+    // Force immediate snapshot save for all views
+    saveSnapshotsForAllViews(newEvent)
     
     try {
       const calendarId = processedData.calendar_id || processedData.calendarId || 'primary'
@@ -1217,8 +1415,11 @@ export const CalendarProvider = ({ children }) => {
         return normalizedEvent
       }
 
+      pendingSyncEventIdsRef.current.set(normalizedEvent.id, Date.now())
+      const normalizedWithPending = { ...normalizedEvent, isPendingSync: true }
+
       setEvents(prev =>
-        prev.map(event => event.id === newEvent.id ? normalizedEvent : event)
+        prev.map(event => event.id === newEvent.id ? normalizedWithPending : event)
       )
       eventIdsRef.current.delete(newEvent.id)
       eventIdsRef.current.add(normalizedEvent.id)
@@ -1229,20 +1430,25 @@ export const CalendarProvider = ({ children }) => {
           eventsByDayRef.current.set(key, filtered)
         }
       }
-      indexEventByDays(normalizedEvent)
+      indexEventByDays(normalizedWithPending)
+      
+      // Remove optimistic event from all snapshots and add real event
+      removeEventFromAllSnapshots(newEvent.id)
+      saveSnapshotsForAllViews(normalizedWithPending)
 
-      return normalizedEvent
+      return normalizedWithPending
     } catch (error) {
       console.error('Failed to create event:', error)
       setEvents(prev => prev.filter(event => event.id !== newEvent.id))
       eventIdsRef.current.delete(newEvent.id)
+      removeEventFromAllSnapshots(newEvent.id)
       for (const [key, arr] of eventsByDayRef.current.entries()) {
         const filtered = arr.filter(event => event.id !== newEvent.id)
         eventsByDayRef.current.set(key, filtered)
       }
       throw error
     }
-  }, [indexEventByDays])
+  }, [indexEventByDays, saveSnapshotsForAllViews, removeEventFromAllSnapshots])
 
   const updateEvent = useCallback(async (id, updatedData) => {
     // Ensure dates are proper Date objects
@@ -1294,6 +1500,12 @@ export const CalendarProvider = ({ children }) => {
     }
     indexEventByDays(updated)
     
+    // Update snapshots for all views
+    const fullEvent = events.find(e => e.id === id)
+    if (fullEvent) {
+      saveSnapshotsForAllViews({ ...fullEvent, ...processedData })
+    }
+    
     // Re-render happens from setEvents; avoid date jank that triggers heavy reloads
     // Call backend API to persist changes
     try {
@@ -1305,13 +1517,11 @@ export const CalendarProvider = ({ children }) => {
       console.error('Failed to update event:', error);
       // Could revert optimistic update here if needed
     }
-  }, [indexEventByDays, events])
+  }, [indexEventByDays, events, saveSnapshotsForAllViews])
 
   const deleteEvent = useCallback(async (event) => {
-    if (!event || !event.id) return
-
-    const eventId = event.id
-    const calendarId = event.calendar_id || 'primary'
+    const eventId = event?.id || event
+    const calendarId = event?.calendar_id || 'primary'
     const isOptimistic = Boolean(event.isOptimistic) || (typeof eventId === 'string' && eventId.startsWith('temp-'))
     const snapshot = {
       ...event,
@@ -1319,8 +1529,10 @@ export const CalendarProvider = ({ children }) => {
       end: coerceDate(event.end) || new Date()
     }
 
+    // Remove from ALL data structures immediately
     setEvents(prev => prev.filter(e => e.id !== eventId))
     eventIdsRef.current.delete(eventId)
+    pendingSyncEventIdsRef.current.delete(eventId)
     unlinkEvent(eventId)
     for (const [key, arr] of eventsByDayRef.current.entries()) {
       const next = arr.filter(e => e.id !== eventId)
@@ -1328,6 +1540,9 @@ export const CalendarProvider = ({ children }) => {
         eventsByDayRef.current.set(key, next)
       }
     }
+
+    // Remove from ALL snapshots immediately (month, week, day)
+    removeEventFromAllSnapshots(eventId)
 
     // Track locally deleted IDs/todos to prevent stale rehydration
     suppressedEventIdsRef.current.add(eventId)
@@ -1338,29 +1553,30 @@ export const CalendarProvider = ({ children }) => {
     try {
       if (!isOptimistic) {
         await calendarApi.deleteEvent(eventId, calendarId)
-        suppressedEventIdsRef.current.delete(eventId)
       }
     } catch (error) {
       const message = typeof error?.message === 'string' ? error.message : ''
-      // If the event was already gone remotely, treat as success
-      if (/not found/i.test(message) || /failed to delete event/i.test(message)) {
-        suppressedEventIdsRef.current.add(eventId)
+      // If the event was already gone remotely (deleted/not found), treat as success
+      if (/not found/i.test(message) || /deleted/i.test(message) || /Resource has been deleted/i.test(message)) {
+        // Keep it suppressed - event is gone from Google
         return
       }
 
       console.error('Failed to delete event:', error)
+      // Only restore if it wasn't a "already deleted" error
       setEvents(prev => [...prev, snapshot])
       eventIdsRef.current.add(eventId)
       if (snapshot.todoId) {
         linkTodoEvent(snapshot.todoId, eventId)
       }
       indexEventByDays(snapshot)
+      saveSnapshotsForAllViews(snapshot)
       suppressedEventIdsRef.current.delete(eventId)
       if (snapshot.todoId) {
         suppressedTodoIdsRef.current.delete(String(snapshot.todoId))
       }
     }
-  }, [unlinkEvent, linkTodoEvent, indexEventByDays])
+  }, [unlinkEvent, linkTodoEvent, indexEventByDays, removeEventFromAllSnapshots, saveSnapshotsForAllViews])
 
   const openEventModal = useCallback((event = null, isNewEvent = false) => {
     // If this is a new drag-created event
@@ -1458,6 +1674,7 @@ export const CalendarProvider = ({ children }) => {
     navigateToPrevious,
     navigateToNext,
     changeView,
+    setView: changeView, // Alias for backward compatibility
     selectDate,
     getEventsForDate,
     createEvent,

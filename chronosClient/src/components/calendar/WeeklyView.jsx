@@ -30,7 +30,8 @@ const WeeklyView = () => {
     navigateToNext,
     navigateToPrevious,
     selectDate,
-    openEventModal
+    openEventModal,
+    getEventsForDate
   } = useCalendar()
   
   const { convertTodoToEvent } = useTaskContext()
@@ -325,31 +326,34 @@ const WeeklyView = () => {
     openEventModal(newEvent, true);
   };
   
-  // Get events for this week - ensure we're using proper Date objects and filter to week window
+  // Get events for this week using the day-index cache for instant availability
   const weekEvents = useMemo(() => {
-    if (!Array.isArray(events) || events.length === 0) return []
-    const startOfWeekDate = days[0]
-    const endOfWeekDate = days[6]
-    const weekStartMs = new Date(startOfWeekDate.getFullYear(), startOfWeekDate.getMonth(), startOfWeekDate.getDate(), 0, 0, 0, 0).getTime()
-    const weekEndMs = new Date(endOfWeekDate.getFullYear(), endOfWeekDate.getMonth(), endOfWeekDate.getDate(), 23, 59, 59, 999).getTime()
+    if (!Array.isArray(days) || days.length === 0) return []
 
-    return events
-      .filter(ev => {
-        const s = ev.start instanceof Date ? ev.start : new Date(ev.start)
-        const e = ev.end instanceof Date ? ev.end : new Date(ev.end)
-        const sMs = s.getTime()
-        const eMs = e.getTime()
-        if (Number.isNaN(sMs) || Number.isNaN(eMs)) return false
-        // overlap check: event intersects the week window
-        return eMs >= weekStartMs && sMs <= weekEndMs
-      })
-      .map(event => {
-        const start = event.start instanceof Date ? event.start : new Date(event.start)
-        const end = event.end instanceof Date ? event.end : new Date(event.end)
-        const isImported = Boolean(event.source)
-        return { ...event, start, end, isImported }
-      })
-  }, [events, days])
+    const collected = new Map()
+
+    for (const day of days) {
+      const dailyEvents = typeof getEventsForDate === 'function'
+        ? (getEventsForDate(day) || [])
+        : []
+
+      for (const ev of dailyEvents) {
+        if (!ev || !ev.id) continue
+        if (!collected.has(ev.id)) {
+          const start = ev.start instanceof Date ? ev.start : new Date(ev.start)
+          const end = ev.end instanceof Date ? ev.end : new Date(ev.end)
+          collected.set(ev.id, {
+            ...ev,
+            start,
+            end,
+            isImported: Boolean(ev.source)
+          })
+        }
+      }
+    }
+
+    return Array.from(collected.values())
+  }, [days, getEventsForDate, events])
   
   // Split events into all-day and regular events
   const allDayEvents = useMemo(() => weekEvents.filter(event => {
@@ -439,7 +443,10 @@ const WeeklyView = () => {
           opacity: 0.85,
           marginBottom: `${ALL_DAY_EVENT_GAP}px`,
         }}
-        onClick={() => openEventModal(event)}
+        onClick={(e) => {
+          e.stopPropagation();
+          openEventModal(event);
+        }}
       >
         <span 
           className="font-medium truncate"

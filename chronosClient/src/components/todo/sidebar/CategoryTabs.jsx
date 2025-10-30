@@ -297,8 +297,15 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, isCollapse
            <button
              onClick={async () => {
                try {
+                 // Check if deleting the active category
+                 const isDeletingActive = contextMenu.category.name === activeCategory;
                  await deleteCategory(contextMenu.category.id);
                  setContextMenu(null);
+                 
+                 // Switch to "All" if we deleted the active category
+                 if (isDeletingActive) {
+                   onCategoryChange('All');
+                 }
                } catch (error) {
                  console.error('Failed to delete category:', error);
                }

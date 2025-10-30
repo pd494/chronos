@@ -140,7 +140,7 @@ export const AuthProvider = ({ children }) => {
         scopes: 'https://www.googleapis.com/auth/calendar',
         queryParams: {
           access_type: 'offline',
-          prompt: 'consent'
+          // prompt: 'consent'
         }
       }
     })
@@ -156,7 +156,7 @@ export const AuthProvider = ({ children }) => {
         .filter((k) => k.startsWith('sb-'))
         .forEach((k) => window.localStorage.removeItem(k))
       Object.keys(window.sessionStorage)
-        .filter((k) => k.startsWith('sb-'))
+        .filter((k) => k.startsWith('sb-') || k.startsWith('chronos:'))
         .forEach((k) => window.sessionStorage.removeItem(k))
     } catch (e) {
     }

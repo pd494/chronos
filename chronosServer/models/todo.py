@@ -30,7 +30,7 @@ class Todo(BaseModel):
     date: Optional[datetime] = None
     category_id: Optional[UUID] = None
     category_name: Optional[str] = None
-    date: Optional[datetime] = None
+    google_event_id: Optional[str] = None
     
 class TodoUpdate(BaseModel):
     content: Optional[str] = None
@@ -39,5 +39,4 @@ class TodoUpdate(BaseModel):
     order: Optional[int] = None
     category_id: Optional[UUID] = None
     category_name: Optional[str] = None
-    date: Optional[datetime] = None
-
+    google_event_id: Optional[str] = None

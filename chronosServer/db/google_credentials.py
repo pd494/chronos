@@ -154,9 +154,16 @@ class GoogleCalendarService:
                 eventId=event_id
             ).execute()
         except HttpError as error:
+            status_code = getattr(getattr(error, "resp", None), "status", None)
+            try:
+                status_code = int(status_code)
+            except (TypeError, ValueError):
+                status_code = None
+            if status_code in (404, 410):
+                logger.info("Event %s already removed from calendar %s", event_id, calendar_id)
+                return
             logger.error(f"Error deleting event: {error}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to delete event"
             )
-

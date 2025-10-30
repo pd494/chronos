@@ -113,7 +113,53 @@ export const TaskProvider = ({ children }) => {
   const loadTasks = useCallback(async () => {
     try {
       const response = await todosApi.getTodos();
-      setTasksEnhanced(response.data || []);
+      const fetched = Array.isArray(response.data) ? response.data : [];
+
+      setTasksEnhanced(prev => {
+        if (!Array.isArray(prev) || prev.length === 0) {
+          if (fetched.length === 0) {
+            return fetched;
+          }
+
+          const sortedByCreatedAt = [...fetched].sort((a, b) => {
+            const aCreated = a?.created_at ? new Date(a.created_at).getTime() : Number.MAX_SAFE_INTEGER;
+            const bCreated = b?.created_at ? new Date(b.created_at).getTime() : Number.MAX_SAFE_INTEGER;
+            if (aCreated === bCreated) {
+              return 0;
+            }
+            return aCreated - bCreated;
+          });
+
+          return sortedByCreatedAt;
+        }
+
+        const previousOrder = new Map(prev.map((task, index) => [task?.id, index]));
+        let nextPosition = prev.length;
+
+        const decorated = fetched.map(task => {
+          const existingOrder = task?.id !== undefined ? previousOrder.get(task.id) : undefined;
+          const createdAt = task?.created_at ? new Date(task.created_at).getTime() : Number.MAX_SAFE_INTEGER;
+
+          if (existingOrder !== undefined) {
+            return { task, position: existingOrder, createdAt };
+          }
+
+          const position = nextPosition++;
+          return { task, position, createdAt };
+        });
+
+        decorated.sort((a, b) => {
+          if (a.position !== b.position) {
+            return a.position - b.position;
+          }
+          if (a.createdAt === b.createdAt) {
+            return 0;
+          }
+          return a.createdAt - b.createdAt;
+        });
+
+        return decorated.map(item => item.task);
+      });
     } catch (error) {
       console.error('Failed to fetch todos:', error);
     }
@@ -235,11 +281,28 @@ export const TaskProvider = ({ children }) => {
   };
 
   const deleteCategory = async (id) => {
+    if (!id) return;
+
+    const categoryToDelete = categories.find(cat => cat.id === id);
+    const previousCategories = categories;
+    const previousTasks = tasks;
+
+    setCategories(prev => prev.filter(cat => cat.id !== id));
+    setTasksEnhanced(prev =>
+      prev.filter(task =>
+        task.category_id !== id &&
+        task.category_name !== categoryToDelete?.name
+      )
+    );
+
     try {
       await todosApi.deleteCategory(id);
-      await loadCategories();
+      loadCategories().catch(() => {});
+      loadTasks().catch(() => {});
     } catch (error) {
       console.error('Failed to delete category:', error);
+      setCategories(previousCategories);
+      setTasksEnhanced(previousTasks);
     }
   };
 
@@ -396,7 +459,8 @@ export const TaskProvider = ({ children }) => {
       date: task.date,
       scheduled_date: task.scheduled_date,
       scheduled_at: task.scheduled_at,
-      scheduled_is_all_day: task.scheduled_is_all_day
+      scheduled_is_all_day: task.scheduled_is_all_day,
+      google_event_id: task.google_event_id
     };
 
     // Immediately reflect scheduled time in the sidebar
@@ -426,14 +490,16 @@ export const TaskProvider = ({ children }) => {
         : { dateTime: isoEnd },
       calendar_id: 'primary',
       isAllDay,
-      color: categoryColor
+      color: categoryColor,
+      todoId
     };
 
     // Dispatch immediately for instant UI update
     window.dispatchEvent(new CustomEvent('todoConvertedToEvent', {
       detail: { 
         eventData: optimisticEvent,
-        isOptimistic: true
+        isOptimistic: true,
+        todoId
       }
     }));
 
@@ -450,8 +516,18 @@ export const TaskProvider = ({ children }) => {
         ...response.data,
         title: response.data?.summary || task.content,
         isAllDay,
-        color: categoryColor
+        color: categoryColor,
+        todoId
       };
+
+      setTasksEnhanced(prev => prev.map(t => (
+        t.id === todoId
+          ? {
+              ...t,
+              google_event_id: resolvedEvent.id
+            }
+          : t
+      )))
 
       // Update with real event data
       window.dispatchEvent(new CustomEvent('todoConvertedToEvent', {
@@ -483,7 +559,8 @@ export const TaskProvider = ({ children }) => {
               date: previousSnapshot.date,
               scheduled_date: previousSnapshot.scheduled_date,
               scheduled_at: previousSnapshot.scheduled_at,
-              scheduled_is_all_day: previousSnapshot.scheduled_is_all_day
+              scheduled_is_all_day: previousSnapshot.scheduled_is_all_day,
+              google_event_id: previousSnapshot.google_event_id
             })
           : t
       )));
@@ -491,6 +568,69 @@ export const TaskProvider = ({ children }) => {
       throw error;
     }
   };
+
+  useEffect(() => {
+    const handleCalendarSync = (event) => {
+      const todoIds = Array.isArray(event.detail?.todoIds)
+        ? event.detail.todoIds.map(id => String(id))
+        : null;
+      if (!todoIds) return;
+      const activeTodoIds = new Set(todoIds);
+      const cleared = [];
+
+      setTasksEnhanced(prev => {
+        if (!Array.isArray(prev) || prev.length === 0) {
+          return prev;
+        }
+
+        let mutated = false;
+        const next = prev.map(task => {
+          if (!task) {
+            return task;
+          }
+          const taskId = String(task.id);
+          const hasScheduleMetadata = Boolean(
+            task.google_event_id ||
+            task.date ||
+            task.scheduled_date ||
+            task.scheduled_at
+          );
+          if (!hasScheduleMetadata) {
+            return task;
+          }
+          if (activeTodoIds.has(taskId)) {
+            return task;
+          }
+          mutated = true;
+          cleared.push(taskId);
+          return {
+            ...task,
+            date: null,
+            scheduled_date: null,
+            scheduled_at: null,
+            scheduled_is_all_day: false,
+            google_event_id: null
+          };
+        });
+
+        return mutated ? next : prev;
+      });
+
+      if (cleared.length) {
+        const uniqueIds = Array.from(new Set(cleared));
+        Promise.allSettled(
+          uniqueIds.map(id =>
+            todosApi.updateTodo(id, { date: null, google_event_id: null })
+          )
+        ).catch(() => {});
+      }
+    };
+
+    window.addEventListener('calendarTodoEventsSynced', handleCalendarSync);
+    return () => {
+      window.removeEventListener('calendarTodoEventsSynced', handleCalendarSync);
+    };
+  }, [setTasksEnhanced]);
 
   return (
     <TaskContext.Provider value={{ 

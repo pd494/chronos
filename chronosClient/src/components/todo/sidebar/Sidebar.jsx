@@ -56,11 +56,16 @@ const Sidebar = ({ activeCategory, isSidebarCollapsed, sidebarWidth, sidebarVisi
     return renderCategoryIcon();
   };
   
-  const filteredTasks = tasks.filter(task => {
-    if (activeCategory === 'All') return true;
-    if (activeCategory === 'Completed') return task.completed;
-    return task.category_name === activeCategory;
-  });
+  const filteredTasks = tasks
+    .filter((task) => {
+      if (activeCategory === 'All') return true;
+      if (activeCategory === 'Completed') return task.completed;
+      return task.category_name === activeCategory;
+    })
+    .sort((a, b) => {
+      // Keep original order, don't separate completed from incomplete
+      return 0;
+    });
 
   return (
     <div 
@@ -110,9 +115,10 @@ const Sidebar = ({ activeCategory, isSidebarCollapsed, sidebarWidth, sidebarVisi
           />
         </>
       )}
-      <div className="sidebar-toggle" onClick={toggleSidebar}>
+      {/* Sidebar toggle commented out */}
+      {/* <div className="sidebar-toggle" onClick={toggleSidebar}>
         <div className="sidebar-toggle-icon"></div>
-      </div>
+      </div> */}
     </div>
   );
 };
