@@ -50,6 +50,8 @@ const MonthlyView = () => {
     setHeaderDisplayDate,
     fetchEventsForRange,
     initialLoading,
+    openEventModal,
+    setView,
   } = useCalendar();
 
   const { convertTodoToEvent } = useTaskContext();
@@ -185,6 +187,7 @@ const MonthlyView = () => {
               const newKey = `${newHeaderDate.getFullYear()}-${newHeaderDate.getMonth()}`;
               if (lastHeaderMonthRef.current !== newKey) {
                 lastHeaderMonthRef.current = newKey;
+                setDisplayMonthDate(newHeaderDate);
                 setHeaderDisplayDate(newHeaderDate);
               }
             }
@@ -257,6 +260,17 @@ const MonthlyView = () => {
       requestedRangesRef.current.clear();
     }
   }, [initialLoading]);
+
+  useEffect(() => {
+    if (!displayMonthDate || initialLoading) return;
+    const yearPrefetchStart = startOfWeek(startOfMonth(subMonths(displayMonthDate, 12)));
+    const yearPrefetchEnd = endOfWeek(endOfMonth(addMonths(displayMonthDate, 12)));
+    const key = `year_${yearPrefetchStart.getTime()}_${yearPrefetchEnd.getTime()}`;
+    if (!requestedRangesRef.current.has(key)) {
+      requestedRangesRef.current.add(key);
+      fetchEventsForRange(yearPrefetchStart, yearPrefetchEnd, true).catch(() => {});
+    }
+  }, [displayMonthDate, initialLoading, fetchEventsForRange]);
 
   useEffect(() => () => {
     requestedRangesRef.current.clear();
@@ -335,7 +349,7 @@ const MonthlyView = () => {
           className="overflow-y-auto flex-grow relative bg-white dark:bg-gray-800"
           style={{ 
             height: 'calc(100% - 60px)', 
-            scrollbarWidth: 'thin'
+            scrollbarWidth: 'none'
           }}
         >
           <div className="relative" style={{ height: `${weeks.length * rowHeight}px` }}>
@@ -358,9 +372,22 @@ const MonthlyView = () => {
                   return (
                     <div
                       key={formatDateKey(day)}
-                      onDoubleClick={() => selectDate(day)}
+                      onDoubleClick={() => {
+                        // Double-click opens event modal prefilled for the specific day
+                        const startDate = new Date(day);
+                        startDate.setHours(12, 0, 0, 0);
+                        const endDate = new Date(day);
+                        endDate.setHours(13, 0, 0, 0);
+
+                        openEventModal({
+                          start: startDate,
+                          end: endDate,
+                          title: 'New Event',
+                          color: '#3478F6'
+                        }, true);
+                      }}
                       style={{ height: `${rowHeight}px`, boxSizing: 'border-box' }}
-                      className="calendar-day bg-white dark:bg-gray-800 border-r border-b border-gray-100 dark:border-gray-800 relative p-1 flex flex-col group"
+                      className="calendar-day bg-white dark:bg-gray-800 border-r border-b border-gray-100 dark:border-gray-800 relative p-1 flex flex-col"
                       data-date={formatDateKey(day)}
                     >
                       <div className="flex justify-between items-start text-xs mb-1">
@@ -371,9 +398,15 @@ const MonthlyView = () => {
                         )}
                         <span className="flex-grow" />
                         <div
-                          className={`h-6 w-6 flex items-center justify-center rounded-full text-sm font-medium
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            selectDate(day);
+                            setView('day');
+                          }}
+                          className={`h-6 w-6 flex items-center justify-center rounded-full text-sm font-medium cursor-pointer transition-colors
                             ${isTodayDate ? 'bg-purple-200 text-purple-800' : 'text-gray-500 dark:text-gray-400'}
-                            ${isSelected && !isTodayDate ? 'bg-gray-100 dark:bg-gray-700' : ''}`}
+                            ${isSelected && !isTodayDate ? 'bg-gray-100 dark:bg-gray-700' : ''}
+                            ${!isTodayDate ? 'hover:bg-gray-200 dark:hover:bg-gray-600' : ''}`}
                         >
                           {format(day, 'd')}
                         </div>

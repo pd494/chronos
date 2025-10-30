@@ -1,15 +1,19 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
 import { format, isSameDay, isToday, getHours, getMinutes, getDay, addDays } from 'date-fns'
 import { useCalendar } from '../../context/CalendarContext'
 import { useTaskContext } from '../../context/TaskContext'
 import WeekEvent from '../events/WeekEvent'
 import Sortable from 'sortablejs'
 import './WeeklyView.css'
+import { calculateTimeGridLayout } from '../../lib/eventLayout'
 
 const HOUR_HEIGHT = 60 // Height of one hour in pixels
 const DAY_START_HOUR = 0 // Start displaying from 12 AM
 const DAY_END_HOUR = 23 // End displaying at 11 PM
 const ALL_DAY_SECTION_HEIGHT = 40 // Height of the all-day events section
+const ALL_DAY_EVENT_HEIGHT = 30
+const ALL_DAY_EVENT_GAP = 4
+const TIMED_EVENT_GAP = 4
 // This offset fixes the day alignment issue when dragging
 // The offset is +1 to shift events one day forward (compensating for the one-day-behind issue)
 // When integrating with external calendars (Google, Outlook, etc.):
@@ -167,14 +171,28 @@ const WeeklyView = () => {
 
   const handleGridMouseUp = () => {
     if (!isDragging) return;
+    
+    // Reset drag state immediately to prevent scroll issues
+    const wasDragging = hasDraggedRef.current;
+    const savedDragDay = dragDay;
+    const savedDragStart = dragStart;
+    const savedDragEnd = dragEnd;
+    const savedDragInitial = dragInitialDayHourRef.current;
+    
+    setIsDragging(false);
+    setDragStart(null);
+    setDragEnd(null);
+    setDragDay(null);
+    hasDraggedRef.current = false;
+    dragInitialDayHourRef.current = null;
 
-    if (hasDraggedRef.current) {
+    if (wasDragging) {
       // It's a drag operation
-      const startVal = Math.min(dragStart, dragEnd);
-      let endVal = Math.max(dragStart, dragEnd);
+      const startVal = Math.min(savedDragStart, savedDragEnd);
+      let endVal = Math.max(savedDragStart, savedDragEnd);
       if (endVal === startVal) endVal = startVal + 0.5; // Default 30 min duration for tiny drag
 
-      const eventStartDay = dragDay; 
+      const eventStartDay = savedDragDay; 
       const eventStartHour = Math.floor(startVal);
       const eventStartMinute = Math.floor((startVal - eventStartHour) * 60);
       const eventEndHour = Math.floor(endVal);
@@ -204,12 +222,24 @@ const WeeklyView = () => {
         endDate: endDate.toLocaleTimeString()
       });
       
+      // Store drag position for inline modal (relative to viewport, not scroll)
+      if (savedDragInitial) {
+        const cellElement = document.querySelector(`[data-hour="${savedDragInitial.rawHour}"][data-day="${format(savedDragDay, 'yyyy-MM-dd')}"]`);
+        if (cellElement) {
+          const rect = cellElement.getBoundingClientRect();
+          window.lastDragPosition = {
+            top: rect.top,
+            left: rect.right + 10
+          };
+        }
+      }
+      
       // Store the exact times for the modal to use
       window.prefilledEventDates = {
         startDate,
         endDate,
         title: 'New Event',
-        color: 'blue'
+        color: '#3478F6'
       };
       
       openEventModal(newEvent, true);
@@ -219,13 +249,6 @@ const WeeklyView = () => {
       // as double-click will handle event creation from a click.
       console.log('Click detected on hour cell, no action taken (awaiting double-click implementation).');
     }
-
-    setIsDragging(false);
-    setDragStart(null);
-    setDragEnd(null);
-    setDragDay(null);
-    hasDraggedRef.current = false;
-    dragInitialDayHourRef.current = null;
   };
   
   const handleCellDoubleClick = (e, day, hour) => {
@@ -251,12 +274,19 @@ const WeeklyView = () => {
       color: 'blue'
     };
     
+    // Store position for inline modal
+    const rect = e.currentTarget.getBoundingClientRect();
+    window.lastDragPosition = {
+      top: rect.top,
+      left: rect.right + 10
+    };
+    
     // Store the exact times for the modal to use
     window.prefilledEventDates = {
       startDate,
       endDate,
       title: 'New Event',
-      color: 'blue'
+      color: '#3478F6'
     };
 
     console.log('Opening modal for DOUBLE-CLICK event:', {
@@ -295,28 +325,34 @@ const WeeklyView = () => {
     openEventModal(newEvent, true);
   };
   
-  // Get events for this week - ensure we're using proper Date objects
-  // Process events to ensure all date objects are properly instantiated
-  const weekEvents = events.map(event => {
-    // Create proper Date objects from event dates
-    const start = event.start instanceof Date ? event.start : new Date(event.start)
-    const end = event.end instanceof Date ? event.end : new Date(event.end)
+  // Get events for this week - ensure we're using proper Date objects and filter to week window
+  const weekEvents = useMemo(() => {
+    if (!Array.isArray(events) || events.length === 0) return []
+    const startOfWeekDate = days[0]
+    const endOfWeekDate = days[6]
+    const weekStartMs = new Date(startOfWeekDate.getFullYear(), startOfWeekDate.getMonth(), startOfWeekDate.getDate(), 0, 0, 0, 0).getTime()
+    const weekEndMs = new Date(endOfWeekDate.getFullYear(), endOfWeekDate.getMonth(), endOfWeekDate.getDate(), 23, 59, 59, 999).getTime()
 
-    // If this is an imported event (has a source property), we don't apply the offset
-    // This allows external calendar events to display correctly
-    const isImported = Boolean(event.source) // Sources can be 'google', 'outlook', etc.
-
-    return {
-      ...event,
-      start,
-      end,
-      // Flag to track if the event is imported - useful for future features
-      isImported
-    }
-  })
+    return events
+      .filter(ev => {
+        const s = ev.start instanceof Date ? ev.start : new Date(ev.start)
+        const e = ev.end instanceof Date ? ev.end : new Date(ev.end)
+        const sMs = s.getTime()
+        const eMs = e.getTime()
+        if (Number.isNaN(sMs) || Number.isNaN(eMs)) return false
+        // overlap check: event intersects the week window
+        return eMs >= weekStartMs && sMs <= weekEndMs
+      })
+      .map(event => {
+        const start = event.start instanceof Date ? event.start : new Date(event.start)
+        const end = event.end instanceof Date ? event.end : new Date(event.end)
+        const isImported = Boolean(event.source)
+        return { ...event, start, end, isImported }
+      })
+  }, [events, days])
   
   // Split events into all-day and regular events
-  const allDayEvents = weekEvents.filter(event => {
+  const allDayEvents = useMemo(() => weekEvents.filter(event => {
     // Check if explicitly marked as all-day
     if (event.isAllDay) return true;
     
@@ -332,9 +368,9 @@ const WeeklyView = () => {
     if (durationHours >= 23) return true;
     
     return false;
-  })
+  }), [weekEvents])
   
-  const regularEvents = weekEvents.filter(event => {
+  const regularEvents = useMemo(() => weekEvents.filter(event => {
     // Check if explicitly marked as all-day
     if (event.isAllDay) return false;
     
@@ -350,7 +386,7 @@ const WeeklyView = () => {
     if (durationHours >= 23) return false;
     
     return true;
-  })
+  }), [weekEvents])
   
   // Generate time slots
   const hours = []
@@ -359,7 +395,7 @@ const WeeklyView = () => {
   }
   
   // Function to render an all-day event
-  const renderAllDayEvent = (event, dayIndex) => {
+  const renderAllDayEvent = (event, indexKey) => {
     // Ensure event has a color, default to blue if not present
     const eventColor = event.color || 'blue';
     
@@ -392,28 +428,21 @@ const WeeklyView = () => {
     
     const backgroundColor = isHexColor ? lightenHexColor(eventColor, 30) : `var(--color-${eventColor}-500)`;
     const textColor = isHexColor ? darkenHexColor(eventColor, 30) : `var(--color-${eventColor}-900)`;
-    const borderColor = textColor;
     
     return (
       <div
-        key={event.id}
-        className="absolute truncate rounded px-2 cursor-pointer text-xs z-10 flex items-center"
+        key={event.id || `${event.start.getTime()}-${event.title}-${indexKey}`}
+        className="truncate rounded px-2 cursor-pointer text-xs flex items-center mb-1"
         style={{
-          top: '3px',
-          left: '2px',
-          right: '2px',
-          height: '32px', // 25% taller (was 24px equivalent)
+          height: `${ALL_DAY_EVENT_HEIGHT}px`,
           backgroundColor: backgroundColor,
-          opacity: 0.8,
+          opacity: 0.85,
+          marginBottom: `${ALL_DAY_EVENT_GAP}px`,
         }}
         onClick={() => openEventModal(event)}
       >
-        <div 
-          className="absolute left-0 top-0 bottom-0 w-1 rounded-l" 
-          style={{ backgroundColor: borderColor }}
-        ></div>
         <span 
-          className="ml-2 font-medium truncate"
+          className="font-medium truncate"
           style={{ color: textColor }}
         >
           {event.title}
@@ -421,17 +450,6 @@ const WeeklyView = () => {
       </div>
     );
   };
-  
-  // Log events for debugging
-  console.log('Week days:', days.map(day => format(day, 'yyyy-MM-dd')));
-  console.log('Regular events:', regularEvents.map(e => ({ 
-    id: e.id,
-    title: e.title,
-    start: e.start.toISOString(),
-    end: e.end.toISOString(),
-    color: e.color,
-    isImported: e.isImported
-  })));
   
   // Initialize Sortable for droppable hour cells
   useEffect(() => {
@@ -625,29 +643,34 @@ const WeeklyView = () => {
           All-day
         </div>
         <div className="flex flex-1">
-          {days.map((day, dayIndex) => (
-            <div 
-              key={dayIndex}
-              className="flex-1 relative border-r border-gray-200 dark:border-gray-700 droppable-cell"
-              data-date={format(day, 'yyyy-MM-dd')}
-              data-all-day="true"
-              style={{ minHeight: `${ALL_DAY_SECTION_HEIGHT}px`, padding: '2px' }}
-              onClick={() => handleAllDayCellClick(day)}
-            >
-              {allDayEvents
-                .filter(event => {
-                  // Similar logic as regular events to handle day offset
-                  if (!event.isImported && DAY_OFFSET !== 0) {
-                    const adjustedDay = new Date(day);
-                    adjustedDay.setDate(adjustedDay.getDate() - DAY_OFFSET);
-                    return isSameDay(event.start, adjustedDay);
-                  }
-                  return isSameDay(event.start, day);
-                })
-                .map(event => renderAllDayEvent(event, dayIndex))
+          {days.map((day, dayIndex) => {
+            const eventsForDay = allDayEvents.filter(event => {
+              if (!event.isImported && DAY_OFFSET !== 0) {
+                const adjustedDay = new Date(day);
+                adjustedDay.setDate(adjustedDay.getDate() - DAY_OFFSET);
+                return isSameDay(event.start, adjustedDay);
               }
-            </div>
-          ))}
+              return isSameDay(event.start, day);
+            });
+
+            const requiredHeight = Math.max(
+              ALL_DAY_SECTION_HEIGHT,
+              Math.max(1, eventsForDay.length) * (ALL_DAY_EVENT_HEIGHT + ALL_DAY_EVENT_GAP) - ALL_DAY_EVENT_GAP
+            );
+
+            return (
+              <div 
+                key={dayIndex}
+                className="flex-1 relative border-r border-gray-200 dark:border-gray-700 droppable-cell"
+                data-date={format(day, 'yyyy-MM-dd')}
+                data-all-day="true"
+                style={{ minHeight: `${requiredHeight}px`, padding: '4px' }}
+                onClick={() => handleAllDayCellClick(day)}
+              >
+                {eventsForDay.map((event, idx) => renderAllDayEvent(event, idx))}
+              </div>
+            );
+          })}
         </div>
       </div>
       
@@ -686,7 +709,11 @@ const WeeklyView = () => {
           )}
           
           {/* Day columns */}
-          <div className="grid grid-cols-7 h-full" onMouseUp={handleGridMouseUp}>
+          <div 
+            className="grid grid-cols-7 h-full" 
+            onMouseUp={handleGridMouseUp}
+            onMouseLeave={handleGridMouseUp}
+          >
             {days.map((day, dayIndex) => (
               <div 
                 key={dayIndex}
@@ -730,15 +757,9 @@ const WeeklyView = () => {
                 )}
                 
                 {/* Regular events for this day */}
-                {regularEvents
-                  .filter(event => {
-                    // Check if this is the day we're looking for
-                    const isMay14 = format(day, 'yyyy-MM-dd') === '2025-05-14';
-                    if (isMay14) {
-                      console.log('May 14 day:', format(day, 'yyyy-MM-dd'));
-                      console.log('Event checking for May 14:', event.title, event.start, event.color);
-                    }
-                    
+                {(() => {
+                  const dayEvents = regularEvents
+                    .filter(event => {
                     // For manual events (with offset), we need to adjust the comparison
                     // by comparing the day minus the offset to find events for the correct day
                     if (!event.isImported && DAY_OFFSET !== 0) {
@@ -748,20 +769,23 @@ const WeeklyView = () => {
                     }
                     // For imported events, no adjustment needed
                     return isSameDay(event.start, day);
-                  })
-                  .map(event => (
-                    <WeekEvent 
-                      key={event.id} 
+                  });
+
+                  const layouts = calculateTimeGridLayout(dayEvents);
+
+                  return layouts.map(({ event, column, columns }) => (
+                    <WeekEvent
+                      key={event.id || `${(event.start instanceof Date ? event.start : new Date(event.start)).getTime()}-${column}-${columns}`}
                       event={{
                         ...event,
-                        // Ensure color is always set
                         color: event.color || 'blue'
-                      }} 
+                      }}
                       hourHeight={HOUR_HEIGHT}
                       dayStartHour={DAY_START_HOUR}
+                      position={{ column, columns, gap: TIMED_EVENT_GAP }}
                     />
-                  ))
-                }
+                  ));
+                })()}
               </div>
             ))}
           </div>

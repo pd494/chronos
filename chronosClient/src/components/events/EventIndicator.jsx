@@ -77,10 +77,12 @@ const EventIndicator = ({ event, isMonthView }) => {
   const textStyle = isHexColor ? {
     color: darkenHexColor(eventColor, 40)
   } : {};
+
+  const completionClass = event.completed ? 'opacity-50 line-through' : '';
   
   return (
     <div
-      className={`text-xs mb-1 flex items-center space-x-1 px-1 py-0.5 cursor-pointer overflow-hidden ${isMonthView ? (isHexColor ? (event.isAllDay ? 'rounded-md' : '') : `${event.isAllDay ? getBgColorClass(eventColor) + ' bg-opacity-70' : ''} ${event.isAllDay ? 'rounded-md' : ''}`) : ''}`}
+      className={`text-xs mb-1 flex items-center space-x-1 px-1 py-0.5 cursor-pointer overflow-hidden ${completionClass} ${isMonthView ? (isHexColor ? (event.isAllDay ? 'rounded-md' : '') : `${event.isAllDay ? getBgColorClass(eventColor) + ' bg-opacity-70' : ''} ${event.isAllDay ? 'rounded-md' : ''}`) : ''}`}
       onClick={handleClick}
       style={{ 
         maxWidth: '100%', 

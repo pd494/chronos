@@ -1,7 +1,7 @@
 import { format, differenceInMinutes } from 'date-fns'
 import { useCalendar } from '../../context/CalendarContext'
 
-const WeekEvent = ({ event, hourHeight, dayStartHour }) => {
+const WeekEvent = ({ event, hourHeight, dayStartHour, position }) => {
   const { openEventModal } = useCalendar()
   
   // Ensure we're working with proper Date objects
@@ -78,15 +78,31 @@ const WeekEvent = ({ event, hourHeight, dayStartHour }) => {
   const textColor = isHexColor ? darkenHexColor(eventColor, 30) : getColorVar(eventColor, '900')
   const borderColor = textColor
   
+  const columns = position?.columns || 1
+  const columnIndex = position?.column || 0
+  const gap = position?.gap ?? 0
+  const widthPercent = 100 / columns
+  const leftPercent = widthPercent * columnIndex
+  const totalGap = gap * (columns - 1)
+  const widthCalc = columns > 1
+    ? `calc(${widthPercent}% - ${(totalGap) / columns}px)`
+    : `calc(${widthPercent}% - 2px)`
+  const leftCalc = columns > 1
+    ? `calc(${leftPercent}% + ${columnIndex * gap}px)`
+    : '2px'
+
   return (
     <div
-      className={`absolute left-1 right-1 rounded-lg p-1 overflow-hidden cursor-default 
+      className={`absolute rounded-lg p-1 overflow-hidden cursor-default 
                   text-sm z-10 group ${event.completed ? 'opacity-50 line-through' : ''}`}
       style={{
         top: `${top}px`,
         height: `${height}px`,
         minHeight: '20px',
+        left: leftCalc,
+        width: widthCalc,
         backgroundColor: backgroundColor,
+        zIndex: 20 + columnIndex
       }}
       onClick={handleClick}
     >

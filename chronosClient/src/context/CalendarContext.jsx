@@ -62,6 +62,26 @@ const resolveIsAllDay = (startBoundary, eventMeta) => {
   return false
 }
 
+const isValidDate = (value) => value instanceof Date && !Number.isNaN(value.getTime())
+
+const coerceDate = (value) => {
+  if (!value) return null
+  if (value instanceof Date) {
+    return isValidDate(value) ? new Date(value.getTime()) : null
+  }
+  const boundary = parseCalendarBoundary(value)
+  if (boundary && !Number.isNaN(boundary.getTime())) {
+    return boundary
+  }
+  const direct = new Date(value)
+  return Number.isNaN(direct.getTime()) ? null : direct
+}
+
+const safeToISOString = (value) => {
+  const date = coerceDate(value)
+  return date ? date.toISOString() : null
+}
+
 
 export const CalendarProvider = ({ children }) => {
   const { user } = useAuth()
@@ -82,6 +102,10 @@ export const CalendarProvider = ({ children }) => {
   const activeForegroundRequestsRef = useRef(0)
   const activeBackgroundRequestsRef = useRef(0)
   const hasLoadedInitialRef = useRef(false)
+  const todoToEventRef = useRef(new Map())
+  const eventToTodoRef = useRef(new Map())
+  const suppressedEventIdsRef = useRef(new Set())
+  const suppressedTodoIdsRef = useRef(new Set())
   const idlePrefetchCancelRef = useRef(null)
   const cacheTTLRef = useRef(24 * 60 * 60 * 1000) // 24h TTL
   const calHashRef = useRef('all')
@@ -89,11 +113,31 @@ export const CalendarProvider = ({ children }) => {
   const inFlightMonthsRef = useRef(new Set())
   const snapshotSaveTimerRef = useRef(null)
 
+  const linkTodoEvent = useCallback((todoId, eventId) => {
+    if (!todoId || !eventId) return
+    const todoKey = String(todoId)
+    const eventKey = String(eventId)
+    todoToEventRef.current.set(todoKey, eventKey)
+    eventToTodoRef.current.set(eventKey, todoKey)
+  }, [])
+
+  const unlinkEvent = useCallback((eventId) => {
+    if (!eventId) return
+    const eventKey = String(eventId)
+    const todoKey = eventToTodoRef.current.get(eventKey)
+    if (todoKey) {
+      eventToTodoRef.current.delete(eventKey)
+      todoToEventRef.current.delete(todoKey)
+    }
+  }, [])
+
   const snapshotKey = (start, end) => {
     const u = user?.id || 'anon'
     const cal = calHashRef.current
     const viewKey = view
-    return `chronos:snap:v1:${u}:${cal}:${viewKey}:${start.toISOString()}:${end.toISOString()}`
+    const startIso = safeToISOString(start) || 'invalid'
+    const endIso = safeToISOString(end) || 'invalid'
+    return `chronos:snap:v1:${u}:${cal}:${viewKey}:${startIso}:${endIso}`
   }
 
   const extendLoadedRange = useCallback((start, end) => {
@@ -215,6 +259,8 @@ export const CalendarProvider = ({ children }) => {
       const toAdd = []
       for (const ev of parsed.events) {
         if (!eventIdsRef.current.has(ev.id)) {
+          const todoId = ev.todoId || ev.todo_id
+
           const e = {
             id: ev.id,
             title: ev.title || 'Untitled',
@@ -222,7 +268,11 @@ export const CalendarProvider = ({ children }) => {
             end: new Date(ev.end),
             color: ev.color || 'blue',
             isGoogleEvent: true,
-            calendar_id: ev.calendar_id
+            calendar_id: ev.calendar_id,
+            todoId: todoId ? String(todoId) : undefined
+          }
+          if (todoId) {
+            linkTodoEvent(todoId, ev.id)
           }
           toAdd.push(e)
         }
@@ -242,7 +292,7 @@ export const CalendarProvider = ({ children }) => {
       }
     } catch (_) {}
     return false
-  }, [currentDate, view, getVisibleRange, extendLoadedRange])
+  }, [currentDate, view, getVisibleRange, extendLoadedRange, linkTodoEvent])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -309,16 +359,19 @@ export const CalendarProvider = ({ children }) => {
             // row.events are serialized minimal events with iso strings
             for (const ev of row.events || []) {
               if (!eventIdsRef.current.has(ev.id)) {
-              cachedEvents.push({
-                id: ev.id,
-                title: ev.title || ev.summary || 'Untitled',
-                start: new Date(ev.start),
-                end: new Date(ev.end),
-                color: ev.color || 'blue',
-                isGoogleEvent: true,
-                calendar_id: ev.calendar_id,
-                isAllDay: Boolean(ev.isAllDay)
-              })
+                const todoId = ev.todoId || ev.todo_id
+
+                cachedEvents.push({
+                  id: ev.id,
+                  title: ev.title || ev.summary || 'Untitled',
+                  start: new Date(ev.start),
+                  end: new Date(ev.end),
+                  color: ev.color || 'blue',
+                  isGoogleEvent: true,
+                  calendar_id: ev.calendar_id,
+                  isAllDay: Boolean(ev.isAllDay),
+                  todoId: todoId ? String(todoId) : undefined
+                })
               }
             }
           })
@@ -330,6 +383,9 @@ export const CalendarProvider = ({ children }) => {
                 if (!eventIdsRef.current.has(ev.id)) {
                   merged.push(ev)
                   eventIdsRef.current.add(ev.id)
+                  if (ev.todoId) {
+                    linkTodoEvent(ev.todoId, ev.id)
+                  }
                   indexEventByDays(ev)
                 }
               }
@@ -372,45 +428,128 @@ export const CalendarProvider = ({ children }) => {
           segEnd.toISOString(),
           selectedCalendars
         )
-        const googleEvents = response.events.map(event => {
-          const isAllDay = resolveIsAllDay(event.start, event)
-          const start = parseCalendarBoundary(event.start) || new Date(event.start.dateTime || event.start.date)
-          const end = parseCalendarBoundary(event.end) || new Date(event.end.dateTime || event.end.date)
-          // Extract category color from extended properties if available
-          const categoryColor = event.extendedProperties?.private?.categoryColor
-          return {
-            id: event.id,
-            title: event.summary || 'Untitled',
-            start,
-            end,
-            color: categoryColor || 'blue',
-            isGoogleEvent: true,
-            calendar_id: event.calendar_id,
-            isAllDay
-          }
+        const googleEvents = response.events
+          .map(event => {
+            if (event.status && event.status.toLowerCase() === 'cancelled') {
+              return null
+            }
+            const isAllDay = resolveIsAllDay(event.start, event)
+            const start = parseCalendarBoundary(event.start) || new Date(event.start.dateTime || event.start.date)
+            const end = parseCalendarBoundary(event.end) || new Date(event.end.dateTime || event.end.date)
+            // Extract category color from extended properties if available
+            const privateExtendedProps = { ...(event.extendedProperties?.private || {}) }
+            const categoryColor = privateExtendedProps.categoryColor
+            const todoId = privateExtendedProps.todoId
+
+            return {
+              id: event.id,
+              title: event.summary || 'Untitled',
+              start,
+              end,
+              color: categoryColor || 'blue',
+              isGoogleEvent: true,
+              calendar_id: event.calendar_id,
+              isAllDay,
+              todoId: todoId ? String(todoId) : undefined
+            }
+          })
+          .filter(ev => {
+            if (!ev) return false
+            if (suppressedEventIdsRef.current.has(ev.id)) return false
+            if (ev.todoId && suppressedTodoIdsRef.current.has(ev.todoId)) return false
+            return true
+          })
+        const segmentStartMs = segStart.getTime()
+        const segmentEndMs = segEnd.getTime()
+        const incomingById = new Map()
+        googleEvents.forEach(ev => incomingById.set(ev.id, ev))
+        const updatedEvents = []
+        const newEvents = []
+        const removedIds = []
+
+        setEvents(prev => {
+          const next = []
+          prev.forEach(ev => {
+            const evStartRaw = ev.start instanceof Date ? ev.start : new Date(ev.start)
+            const evStart = coerceDate(evStartRaw)
+            const evTime = evStart.getTime()
+            if (evStart && !Number.isNaN(evTime) && evTime >= segmentStartMs && evTime <= segmentEndMs) {
+              const replacement = incomingById.get(ev.id)
+              if (replacement) {
+                next.push({ ...ev, ...replacement })
+                updatedEvents.push(replacement)
+                incomingById.delete(ev.id)
+              } else if (ev.isOptimistic) {
+                next.push(ev)
+              } else {
+                removedIds.push(ev.id)
+              }
+            } else {
+              next.push(ev)
+            }
+          })
+
+          incomingById.forEach(ev => {
+            newEvents.push(ev)
+            next.push(ev)
+          })
+
+          return next
         })
-        const newEvents = googleEvents.filter(e => !eventIdsRef.current.has(e.id))
-        if (newEvents.length) {
-          setEvents(prev => [...prev, ...newEvents])
-          for (const ev of newEvents) {
+
+        if (removedIds.length) {
+          for (const id of removedIds) {
+            eventIdsRef.current.delete(id)
+            unlinkEvent(id)
+            for (const [key, arr] of eventsByDayRef.current.entries()) {
+              const filtered = arr.filter(ev => ev.id !== id)
+              if (filtered.length !== arr.length) {
+                eventsByDayRef.current.set(key, filtered)
+              }
+            }
+          }
+        }
+
+        const toReindex = [...updatedEvents, ...newEvents]
+        if (toReindex.length) {
+          for (const ev of toReindex) {
             eventIdsRef.current.add(ev.id)
+            for (const [key, arr] of eventsByDayRef.current.entries()) {
+              const filtered = arr.filter(item => item.id !== ev.id)
+              if (filtered.length !== arr.length) {
+                eventsByDayRef.current.set(key, filtered)
+              }
+            }
+            if (ev.todoId) {
+              linkTodoEvent(ev.todoId, ev.id)
+            }
             indexEventByDays(ev)
           }
 
-          // cache by month
           try {
             const byMonth = new Map()
-            for (const ev of newEvents) {
-              const m = cacheMonthKey(ev.start)
+            for (const ev of toReindex) {
+              const normalizedStart = coerceDate(ev.start)
+              const normalizedEnd = coerceDate(ev.end)
+              if (!normalizedStart || !normalizedEnd) {
+                continue
+              }
+              const m = cacheMonthKey(normalizedStart)
               const arr = byMonth.get(m) || []
+              const startIso = safeToISOString(normalizedStart)
+              const endIso = safeToISOString(normalizedEnd)
+              if (!startIso || !endIso) {
+                continue
+              }
               arr.push({
                 id: ev.id,
                 title: ev.title,
-                start: ev.start.toISOString(),
-                end: ev.end.toISOString(),
+                start: startIso,
+                end: endIso,
                 color: ev.color,
                 calendar_id: ev.calendar_id,
-                isAllDay: ev.isAllDay
+                isAllDay: ev.isAllDay,
+                todoId: ev.todoId
               })
               byMonth.set(m, arr)
             }
@@ -470,7 +609,7 @@ export const CalendarProvider = ({ children }) => {
         }
       }
     }
-  }, [user, selectedCalendars, extendLoadedRange])
+  }, [user, selectedCalendars, extendLoadedRange, linkTodoEvent])
 
   const dateKey = (d) => {
     const y = d.getFullYear()
@@ -479,9 +618,9 @@ export const CalendarProvider = ({ children }) => {
     return `${y}-${m}-${day}`
   }
 
-  const indexEventByDays = (ev) => {
-    const startValue = ev.start instanceof Date ? ev.start : parseCalendarBoundary(ev.start)
-    const endValue = ev.end instanceof Date ? ev.end : parseCalendarBoundary(ev.end)
+  const indexEventByDays = useCallback((ev) => {
+    const startValue = coerceDate(ev.start)
+    const endValue = coerceDate(ev.end)
     if (!startValue || !endValue) return
 
     let s = startOfDay(new Date(startValue))
@@ -496,11 +635,16 @@ export const CalendarProvider = ({ children }) => {
       const key = dateKey(d)
       const arr = eventsByDayRef.current.get(key) || []
       if (!arr.some(item => item.id === ev.id)) {
-        arr.push(ev)
+        // Place optimistic, just-created events at the front so they are visible
+        if (ev.isOptimistic) {
+          arr.unshift(ev)
+        } else {
+          arr.push(ev)
+        }
         eventsByDayRef.current.set(key, arr)
       }
     }
-  }
+  }, [])
 
   const buildBufferedRange = useCallback((start, end, pastMonths = INITIAL_PAST_MONTHS, futureMonths = INITIAL_FUTURE_MONTHS) => {
     if (!(start instanceof Date) || !(end instanceof Date)) {
@@ -635,6 +779,8 @@ export const CalendarProvider = ({ children }) => {
       prefetchedRangesRef.current.clear()
       eventsByDayRef.current = new Map()
       eventIdsRef.current = new Set()
+      todoToEventRef.current = new Map()
+      eventToTodoRef.current = new Map()
       activeForegroundRequestsRef.current = 0
       activeBackgroundRequestsRef.current = 0
       hasLoadedInitialRef.current = false
@@ -646,6 +792,12 @@ export const CalendarProvider = ({ children }) => {
 
     try {
       await ensureRangeLoaded(start, end, background, reset)
+      if (typeof window !== 'undefined') {
+        const todoIds = Array.from(todoToEventRef.current.keys())
+        window.dispatchEvent(new CustomEvent('calendarTodoEventsSynced', {
+          detail: { todoIds }
+        }))
+      }
     } catch (error) {
       if (!background) {
         console.error('Failed to load calendar events:', error)
@@ -673,13 +825,19 @@ export const CalendarProvider = ({ children }) => {
       for (const ev of dayEvents) {
         // ensure unique id in snapshot
         if (!list.some(x => x.id === ev.id)) {
+          const startIso = safeToISOString(ev.start)
+          const endIso = safeToISOString(ev.end)
+          if (!startIso || !endIso) {
+            continue
+          }
           list.push({
             id: ev.id,
             title: ev.title,
-            start: (ev.start instanceof Date ? ev.start : new Date(ev.start)).toISOString(),
-            end: (ev.end instanceof Date ? ev.end : new Date(ev.end)).toISOString(),
+            start: startIso,
+            end: endIso,
             color: ev.color,
-            calendar_id: ev.calendar_id
+            calendar_id: ev.calendar_id,
+            todoId: ev.todoId
           })
           if (list.length >= max) break
         }
@@ -732,51 +890,111 @@ export const CalendarProvider = ({ children }) => {
       const eventData = e.detail?.eventData
       const isOptimistic = e.detail?.isOptimistic
       const replaceId = e.detail?.replaceId
-      
+      const todoId = e.detail?.todoId || eventData?.todoId
+     
       if (eventData) {
         // Create the event in the same format as Google Calendar events
         const isAllDay = resolveIsAllDay(eventData.start, eventData)
-        const startBound = parseCalendarBoundary(eventData.start) || new Date(eventData.start.dateTime || eventData.start.date)
-        const endBound = parseCalendarBoundary(eventData.end) || new Date(eventData.end.dateTime || eventData.end.date)
+        const startBound = coerceDate(eventData.start?.dateTime || eventData.start)
+        const endBound = coerceDate(eventData.end?.dateTime || eventData.end)
+        if (!startBound) {
+          return
+        }
+        const safeEndBound = endBound && endBound > startBound ? endBound : new Date(startBound.getTime() + 30 * 60 * 1000)
         const newEvent = {
           id: eventData.id,
           title: eventData.title || eventData.summary || 'Untitled',
           start: startBound,
-          end: endBound,
+          end: safeEndBound,
           color: eventData.color || 'blue',
           isGoogleEvent: true,
           calendar_id: eventData.calendar_id || 'primary',
           isOptimistic: isOptimistic || false,
-          isAllDay
+          isAllDay,
+          todoId: todoId ? String(todoId) : undefined
         }
-        
+
+        if (todoId && isOptimistic) {
+          suppressedTodoIdsRef.current.delete(String(todoId))
+        }
+
         if (replaceId) {
+          if (todoId && suppressedTodoIdsRef.current.has(String(todoId)) && !isOptimistic) {
+            suppressedEventIdsRef.current.add(newEvent.id)
+            const calendarIdForCleanup = newEvent.calendar_id || 'primary'
+            calendarApi.deleteEvent(newEvent.id, calendarIdForCleanup).catch(() => {})
+            return
+          }
+          if (suppressedEventIdsRef.current.has(replaceId)) {
+            suppressedEventIdsRef.current.delete(replaceId)
+            if (!isOptimistic) {
+              const calendarIdForCleanup = newEvent.calendar_id || 'primary'
+              suppressedEventIdsRef.current.add(newEvent.id)
+              calendarApi.deleteEvent(newEvent.id, calendarIdForCleanup)
+                .catch(() => {})
+                .finally(() => suppressedEventIdsRef.current.delete(newEvent.id))
+            }
+            return
+          }
+
           // Replace optimistic event with real one
           setEvents(prev => {
             const filtered = prev.filter(e => e.id !== replaceId)
             if (!eventIdsRef.current.has(newEvent.id)) {
               eventIdsRef.current.delete(replaceId)
               eventIdsRef.current.add(newEvent.id)
+              unlinkEvent(replaceId)
+              if (newEvent.todoId) {
+                linkTodoEvent(newEvent.todoId, newEvent.id)
+              }
               
               // Remove old event from day index
               for (const [key, arr] of eventsByDayRef.current.entries()) {
-                const filtered = arr.filter(e => e.id !== replaceId)
-                if (filtered.length !== arr.length) {
-                  eventsByDayRef.current.set(key, filtered)
+                const filteredArr = arr.filter(e => e.id !== replaceId)
+                if (filteredArr.length !== arr.length) {
+                  eventsByDayRef.current.set(key, filteredArr)
                 }
               }
               
               indexEventByDays(newEvent)
+              suppressedEventIdsRef.current.delete(newEvent.id)
+              if (newEvent.todoId) {
+                suppressedTodoIdsRef.current.delete(String(newEvent.todoId))
+              }
               return [...filtered, newEvent]
             }
             return prev
           })
         } else {
+          if (todoId && suppressedTodoIdsRef.current.has(String(todoId)) && !isOptimistic) {
+            suppressedEventIdsRef.current.add(newEvent.id)
+            const calendarIdForCleanup = newEvent.calendar_id || 'primary'
+            calendarApi.deleteEvent(newEvent.id, calendarIdForCleanup).catch(() => {})
+            return
+          }
+          if (suppressedEventIdsRef.current.has(newEvent.id)) {
+            suppressedEventIdsRef.current.delete(newEvent.id)
+            if (!isOptimistic) {
+              const calendarIdForCleanup = newEvent.calendar_id || 'primary'
+              suppressedEventIdsRef.current.add(newEvent.id)
+              calendarApi.deleteEvent(newEvent.id, calendarIdForCleanup)
+                .catch(() => {})
+                .finally(() => suppressedEventIdsRef.current.delete(newEvent.id))
+            }
+            return
+          }
           // Add new event (optimistic or real)
           if (!eventIdsRef.current.has(newEvent.id)) {
             setEvents(prev => [...prev, newEvent])
             eventIdsRef.current.add(newEvent.id)
+            if (newEvent.todoId) {
+              linkTodoEvent(newEvent.todoId, newEvent.id)
+            }
             indexEventByDays(newEvent)
+            suppressedEventIdsRef.current.delete(newEvent.id)
+            if (newEvent.todoId) {
+              suppressedTodoIdsRef.current.delete(String(newEvent.todoId))
+            }
           }
         }
       }
@@ -793,6 +1011,7 @@ export const CalendarProvider = ({ children }) => {
         // Remove the optimistic event
         setEvents(prev => prev.filter(ev => ev.id !== eventId))
         eventIdsRef.current.delete(eventId)
+        unlinkEvent(eventId)
         
         // Remove from day index
         for (const [key, arr] of eventsByDayRef.current.entries()) {
@@ -810,7 +1029,7 @@ export const CalendarProvider = ({ children }) => {
       window.removeEventListener('todoConvertedToEvent', handleTodoConverted)
       window.removeEventListener('todoConversionFailed', handleTodoConversionFailed)
     }
-  }, [fetchGoogleEvents])
+  }, [fetchGoogleEvents, linkTodoEvent, unlinkEvent])
 
   useEffect(() => {
     if (initialLoading) {
@@ -911,19 +1130,30 @@ export const CalendarProvider = ({ children }) => {
 
   const getEventsForDate = useCallback((date) => {
     const key = dateKey(startOfDay(date))
-    return eventsByDayRef.current.get(key) || []
+    const list = eventsByDayRef.current.get(key) || []
+    if (!list.length) return list
+
+    const filtered = list.filter(ev => {
+      if (!ev || !ev.id) return false
+      if (suppressedEventIdsRef.current.has(ev.id)) return false
+      if (ev.todoId && suppressedTodoIdsRef.current.has(String(ev.todoId))) return false
+      return true
+    })
+
+    return filtered
   }, [])
 
-  const createEvent = useCallback((eventData) => {
+  const createEvent = useCallback(async (eventData) => {
     // Ensure dates are proper Date objects
-    const start =
-      eventData.start instanceof Date
-        ? eventData.start
-        : parseCalendarBoundary(eventData.start) || new Date(eventData.start)
-    const end =
-      eventData.end instanceof Date
-        ? eventData.end
-        : parseCalendarBoundary(eventData.end) || new Date(eventData.end)
+    let start = coerceDate(eventData.start)
+    let end = coerceDate(eventData.end)
+
+    if (!start) {
+      start = new Date()
+    }
+    if (!end || end <= start) {
+      end = new Date(start.getTime() + 30 * 60 * 1000)
+    }
     const isAllDay =
       typeof eventData.isAllDay === 'boolean'
         ? eventData.isAllDay
@@ -935,30 +1165,97 @@ export const CalendarProvider = ({ children }) => {
       end,
       color: eventData.color || 'blue',
       isAllDay
-    };
-    
+    }
+
     const newEvent = {
       id: uuidv4(),
-      ...processedData
+      ...processedData,
+      isOptimistic: true
     }
-    
-    setEvents(prev => [...prev, newEvent]);
+
+    setEvents(prev => [...prev, newEvent])
     eventIdsRef.current.add(newEvent.id)
     indexEventByDays(newEvent)
     
-    return newEvent
-  }, [])
+    try {
+      const calendarId = processedData.calendar_id || processedData.calendarId || 'primary'
+      const response = await calendarApi.createEvent(processedData, calendarId)
+      const created = response?.event || response
 
-  const updateEvent = useCallback((id, updatedData) => {
+      const createdStart = coerceDate(created?.start?.dateTime || created?.start?.date || created?.start) || start
+      const createdEndRaw = coerceDate(created?.end?.dateTime || created?.end?.date || created?.end)
+      const createdEnd = createdEndRaw && createdEndRaw > createdStart
+        ? createdEndRaw
+        : new Date(createdStart.getTime() + 30 * 60 * 1000)
+
+      const createdColor =
+        created?.extendedProperties?.private?.categoryColor ||
+        created?.color ||
+        processedData.color ||
+        'blue'
+
+      const normalizedEvent = {
+        id: created?.id || newEvent.id,
+        title: created?.summary || created?.title || processedData.title || 'New Event',
+        start: createdStart,
+        end: createdEnd,
+        color: createdColor,
+        isAllDay: resolveIsAllDay(created?.start, created) || processedData.isAllDay,
+        calendar_id: created?.organizer?.email || created?.calendar_id || calendarId,
+        isOptimistic: false,
+        location: created?.location || processedData.location,
+        participants: processedData.participants,
+        todoId: processedData.todoId || processedData.todo_id || undefined
+      }
+
+      if (!eventIdsRef.current.has(newEvent.id)) {
+        suppressedEventIdsRef.current.add(normalizedEvent.id)
+        if (normalizedEvent.todoId) {
+          suppressedTodoIdsRef.current.add(String(normalizedEvent.todoId))
+        }
+        calendarApi.deleteEvent(normalizedEvent.id, normalizedEvent.calendar_id || 'primary').catch(() => {})
+        return normalizedEvent
+      }
+
+      setEvents(prev =>
+        prev.map(event => event.id === newEvent.id ? normalizedEvent : event)
+      )
+      eventIdsRef.current.delete(newEvent.id)
+      eventIdsRef.current.add(normalizedEvent.id)
+
+      for (const [key, arr] of eventsByDayRef.current.entries()) {
+        const filtered = arr.filter(event => event.id !== newEvent.id)
+        if (filtered.length !== arr.length) {
+          eventsByDayRef.current.set(key, filtered)
+        }
+      }
+      indexEventByDays(normalizedEvent)
+
+      return normalizedEvent
+    } catch (error) {
+      console.error('Failed to create event:', error)
+      setEvents(prev => prev.filter(event => event.id !== newEvent.id))
+      eventIdsRef.current.delete(newEvent.id)
+      for (const [key, arr] of eventsByDayRef.current.entries()) {
+        const filtered = arr.filter(event => event.id !== newEvent.id)
+        eventsByDayRef.current.set(key, filtered)
+      }
+      throw error
+    }
+  }, [indexEventByDays])
+
+  const updateEvent = useCallback(async (id, updatedData) => {
     // Ensure dates are proper Date objects
-    const start =
-      updatedData.start instanceof Date
-        ? updatedData.start
-        : parseCalendarBoundary(updatedData.start) || new Date(updatedData.start)
-    const end =
-      updatedData.end instanceof Date
-        ? updatedData.end
-        : parseCalendarBoundary(updatedData.end) || new Date(updatedData.end)
+    let start = coerceDate(updatedData.start)
+    let end = coerceDate(updatedData.end)
+
+    if (!start) {
+      const existing = events.find(e => e.id === id)
+      start = coerceDate(existing?.start) || new Date()
+    }
+    if (!end || end <= start) {
+      end = new Date(start.getTime() + 30 * 60 * 1000)
+    }
     const isAllDay =
       typeof updatedData.isAllDay === 'boolean'
         ? updatedData.isAllDay
@@ -972,14 +1269,22 @@ export const CalendarProvider = ({ children }) => {
     if (typeof isAllDay === 'boolean') {
       processedData.isAllDay = isAllDay
     }
-    
+
+    // Optimistically update local state
     setEvents(prev => 
-      prev.map(event => 
-        event.id === id ? { ...event, ...processedData } : event
-      )
+      prev.map(event => {
+        if (event.id !== id) return event
+        return {
+          ...event,
+          ...processedData
+        }
+      })
     );
     // Re-index the updated event
-    const updated = { id, ...processedData }
+    const updated = {
+      id,
+      ...processedData
+    }
     // Remove old entries for this id
     for (const [key, arr] of eventsByDayRef.current.entries()) {
       const next = arr.filter(e => e.id !== id)
@@ -989,44 +1294,73 @@ export const CalendarProvider = ({ children }) => {
     }
     indexEventByDays(updated)
     
-    // Force a re-render by updating the current date slightly
-    setCurrentDate(current => {
-      // Create a completely new date object that's guaranteed to trigger a re-render
-      const newDate = new Date(current.getTime() + 1);
-      setTimeout(() => {
-        // Reset it back after forcing the re-render
-        setCurrentDate(new Date(current.getTime()));
-      }, 10);
-      return newDate;
-    });
-  }, [])
+    // Re-render happens from setEvents; avoid date jank that triggers heavy reloads
+    // Call backend API to persist changes
+    try {
+      // Find existing event to get its calendar id
+      const existing = events.find(e => e.id === id)
+      const calendarId = existing?.calendar_id || 'primary'
+      await calendarApi.updateEvent(id, processedData, calendarId)
+    } catch (error) {
+      console.error('Failed to update event:', error);
+      // Could revert optimistic update here if needed
+    }
+  }, [indexEventByDays, events])
 
-  const deleteEvent = useCallback((id) => {
-    setEvents(prev => prev.filter(event => event.id !== id))
-    // Remove from id set and day index
-    eventIdsRef.current.delete(id)
+  const deleteEvent = useCallback(async (event) => {
+    if (!event || !event.id) return
+
+    const eventId = event.id
+    const calendarId = event.calendar_id || 'primary'
+    const isOptimistic = Boolean(event.isOptimistic) || (typeof eventId === 'string' && eventId.startsWith('temp-'))
+    const snapshot = {
+      ...event,
+      start: coerceDate(event.start) || new Date(),
+      end: coerceDate(event.end) || new Date()
+    }
+
+    setEvents(prev => prev.filter(e => e.id !== eventId))
+    eventIdsRef.current.delete(eventId)
+    unlinkEvent(eventId)
     for (const [key, arr] of eventsByDayRef.current.entries()) {
-      const next = arr.filter(e => e.id !== id)
+      const next = arr.filter(e => e.id !== eventId)
       if (next.length !== arr.length) {
         eventsByDayRef.current.set(key, next)
       }
     }
-  }, [])
 
-  const toggleEventComplete = useCallback((id) => {
-    setEvents(prev => {
-      const updatedEvents = prev.map(event => 
-        event.id === id ? { ...event, completed: !event.completed } : event
-      );
-      
-      // If the currently selected event is being toggled, update it
-      if (selectedEvent && selectedEvent.id === id) {
-        setSelectedEvent(prev => ({ ...prev, completed: !prev.completed }));
+    // Track locally deleted IDs/todos to prevent stale rehydration
+    suppressedEventIdsRef.current.add(eventId)
+    if (snapshot.todoId) {
+      suppressedTodoIdsRef.current.add(String(snapshot.todoId))
+    }
+
+    try {
+      if (!isOptimistic) {
+        await calendarApi.deleteEvent(eventId, calendarId)
+        suppressedEventIdsRef.current.delete(eventId)
       }
-      
-      return updatedEvents;
-    });
-  }, [selectedEvent]);
+    } catch (error) {
+      const message = typeof error?.message === 'string' ? error.message : ''
+      // If the event was already gone remotely, treat as success
+      if (/not found/i.test(message) || /failed to delete event/i.test(message)) {
+        suppressedEventIdsRef.current.add(eventId)
+        return
+      }
+
+      console.error('Failed to delete event:', error)
+      setEvents(prev => [...prev, snapshot])
+      eventIdsRef.current.add(eventId)
+      if (snapshot.todoId) {
+        linkTodoEvent(snapshot.todoId, eventId)
+      }
+      indexEventByDays(snapshot)
+      suppressedEventIdsRef.current.delete(eventId)
+      if (snapshot.todoId) {
+        suppressedTodoIdsRef.current.delete(String(snapshot.todoId))
+      }
+    }
+  }, [unlinkEvent, linkTodoEvent, indexEventByDays])
 
   const openEventModal = useCallback((event = null, isNewEvent = false) => {
     // If this is a new drag-created event
@@ -1053,7 +1387,7 @@ export const CalendarProvider = ({ children }) => {
         endDate: exactEndDate,
         title: event.title || 'New Event',
         color: event.color || 'blue',
-        noAutoFocus: true // Add flag to prevent auto-focusing
+        fromDayClick: true // Flag to indicate this came from day/calendar interaction
       };
     } else if (event) {
       // Normal event editing
@@ -1076,7 +1410,8 @@ export const CalendarProvider = ({ children }) => {
         startDate,
         endDate,
         title: 'New Event',
-        color: 'blue'
+        color: 'blue',
+        fromEventButton: true // Flag to indicate this came from + Event button
       };
       
       console.log('Opening new event modal from button:', {
@@ -1128,7 +1463,6 @@ export const CalendarProvider = ({ children }) => {
     createEvent,
     updateEvent,
     deleteEvent,
-    toggleEventComplete,
     openEventModal,
     closeEventModal,
     formatDateHeader,

@@ -1,14 +1,18 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
 import { format, getHours, getMinutes, addDays } from 'date-fns'
 import { useCalendar } from '../../context/CalendarContext'
 import { useTaskContext } from '../../context/TaskContext'
-  import DayEvent from '../events/DayEvent'
+import DayEvent from '../events/DayEvent'
 import Sortable from 'sortablejs'
+import { calculateTimeGridLayout } from '../../lib/eventLayout'
 
 const HOUR_HEIGHT = 60 // Height of one hour in pixels
 const DAY_START_HOUR = 0 // Start displaying from 12 AM
 const DAY_END_HOUR = 23 // End displaying at 11 PM
 const ALL_DAY_SECTION_HEIGHT = 40 // Height of the all-day events section
+const ALL_DAY_EVENT_HEIGHT = 30
+const ALL_DAY_EVENT_GAP = 4
+const TIMED_EVENT_GAP = 4
 
 const DailyView = () => {
   const {
@@ -117,14 +121,23 @@ const DailyView = () => {
   }
   
   // Get events for this day
-  const dayEvents = events.filter(event => {
-    const eventDate = new Date(event.start)
-    return (
-      eventDate.getFullYear() === currentDate.getFullYear() &&
-      eventDate.getMonth() === currentDate.getMonth() &&
-      eventDate.getDate() === currentDate.getDate()
-    )
-  })
+  const dayEvents = useMemo(() => {
+    return events
+      .map(event => ({
+        ...event,
+        start: event.start instanceof Date ? new Date(event.start) : new Date(event.start),
+        end: event.end instanceof Date ? new Date(event.end) : new Date(event.end),
+        isImported: Boolean(event.source)
+      }))
+      .filter(event => {
+        const eventDate = event.start
+        return (
+          eventDate.getFullYear() === currentDate.getFullYear() &&
+          eventDate.getMonth() === currentDate.getMonth() &&
+          eventDate.getDate() === currentDate.getDate()
+        )
+      })
+  }, [events, currentDate])
   
   // Split events into all-day and regular events
   const allDayEvents = dayEvents.filter(event => {
@@ -196,25 +209,20 @@ const DailyView = () => {
     
     const backgroundColor = isHexColor ? lightenHexColor(eventColor, 30) : `var(--color-${eventColor}-500)`;
     const textColor = isHexColor ? darkenHexColor(eventColor, 30) : `var(--color-${eventColor}-900)`;
-    const borderColor = textColor;
-    
     return (
       <div
         key={event.id}
-        className="truncate rounded px-2 cursor-pointer text-xs mb-1 relative flex items-center"
+        className="truncate rounded px-2 cursor-pointer text-xs relative flex items-center"
         style={{
-          height: '32px', // 25% taller
+          height: `${ALL_DAY_EVENT_HEIGHT}px`,
+          marginBottom: `${ALL_DAY_EVENT_GAP}px`,
           backgroundColor: backgroundColor,
-          opacity: 0.8,
+          opacity: 0.85,
         }}
         onClick={() => openEventModal(event)}
       >
-        <div 
-          className="absolute left-0 top-0 bottom-0 w-1 rounded-l" 
-          style={{ backgroundColor: borderColor }}
-        ></div>
         <span 
-          className="ml-2 font-medium truncate"
+          className="font-medium truncate"
           style={{ color: textColor }}
         >
           {event.title}
@@ -351,7 +359,10 @@ const DailyView = () => {
         <div className="w-16 flex-shrink-0 text-center py-2 text-xs text-gray-500 border-r border-gray-200 dark:border-gray-700">
           All-day
         </div>
-        <div className="flex-1 p-2 day-all-day-section" style={{ minHeight: `${ALL_DAY_SECTION_HEIGHT + 10}px` }}>
+        <div
+          className="flex-1 p-2 day-all-day-section"
+          style={{ minHeight: `${Math.max(ALL_DAY_SECTION_HEIGHT, Math.max(1, allDayEvents.length) * (ALL_DAY_EVENT_HEIGHT + ALL_DAY_EVENT_GAP) - ALL_DAY_EVENT_GAP)}px` }}
+        >
           {allDayEvents.map(event => renderAllDayEvent(event))}
           {allDayEvents.length === 0 && (
             <div className="text-xs text-gray-400 italic">Drop tasks here for all-day events</div>
@@ -414,12 +425,13 @@ const DailyView = () => {
             ))}
             
             {/* Events for this day (only regular events, not all-day) */}
-            {regularEvents.map(event => (
+            {calculateTimeGridLayout(regularEvents).map(({ event, column, columns }) => (
               <DayEvent 
-                key={event.id} 
+                key={event.id || `${(event.start instanceof Date ? event.start : new Date(event.start)).getTime()}-${column}-${columns}`} 
                 event={event} 
-                hourHeight={HOUR_HEIGHT}
+                hourHeight={HOUR_HEIGHT} 
                 dayStartHour={DAY_START_HOUR}
+                position={{ column, columns, gap: TIMED_EVENT_GAP }}
               />
             ))}
           </div>
