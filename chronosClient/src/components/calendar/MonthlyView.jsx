@@ -22,6 +22,7 @@ import { useCalendar } from '../../context/CalendarContext';
 import { useTaskContext } from '../../context/TaskContext';
 import EventIndicator from '../events/EventIndicator';
 import Sortable from 'sortablejs';
+import './MonthlyView.css';
 
 // ─── Constants ────────────────────────────────────────────────────────────
 const BUFFER_WEEKS     = 260; // ~5 years either side (10 years total range)
@@ -52,6 +53,7 @@ const MonthlyView = () => {
     initialLoading,
     openEventModal,
     setView,
+    updateEvent,
   } = useCalendar();
 
   const { convertTodoToEvent } = useTaskContext();
@@ -276,6 +278,50 @@ const MonthlyView = () => {
     requestedRangesRef.current.clear();
   }, []);
 
+  // Handle event drop for dragging events to different days
+  const handleEventDrop = useCallback((e, targetDate) => {
+    e.preventDefault()
+    e.stopPropagation()
+    
+    const eventData = e.dataTransfer.getData('event')
+    if (!eventData) return
+    
+    try {
+      const draggedEvent = JSON.parse(eventData)
+      const oldStart = new Date(draggedEvent.start)
+      const oldEnd = new Date(draggedEvent.end)
+      
+      // Calculate time difference
+      const timeDiff = targetDate.getTime() - new Date(oldStart.getFullYear(), oldStart.getMonth(), oldStart.getDate()).getTime()
+      
+      // Create new start and end dates
+      const newStart = new Date(oldStart.getTime() + timeDiff)
+      const newEnd = new Date(oldEnd.getTime() + timeDiff)
+      
+      // Update the event
+      updateEvent(draggedEvent.id, {
+        ...draggedEvent,
+        start: newStart,
+        end: newEnd
+      })
+    } catch (error) {
+      console.error('Error dropping event:', error)
+    }
+    
+    // Remove dragover class
+    e.currentTarget.classList.remove('event-dragover')
+  }, [updateEvent])
+
+  const handleDragOver = useCallback((e) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    e.currentTarget.classList.add('event-dragover')
+  }, [])
+
+  const handleDragLeave = useCallback((e) => {
+    e.currentTarget.classList.remove('event-dragover')
+  }, [])
+
   // Initialize Sortable for droppable day cells
   useEffect(() => {
     const dayCells = document.querySelectorAll('.calendar-day');
@@ -291,7 +337,17 @@ const MonthlyView = () => {
         animation: 150,
         ghostClass: 'sortable-ghost',
         dragClass: 'sortable-drag-active',
+        draggable: '.task-item',
         onAdd: async function(evt) {
+          if (evt.pullMode && evt.pullMode !== 'clone') {
+            return
+          }
+          if (evt.item?.dataset?.converted === 'true') {
+            return
+          }
+          if (evt.item) {
+            evt.item.dataset.converted = 'true'
+          }
           const taskId = evt.item.getAttribute('data-task-id') || evt.item.getAttribute('data-id');
           const dateStr = evt.to.getAttribute('data-date');
           
@@ -305,6 +361,9 @@ const MonthlyView = () => {
               // Ignore - React may have already removed it
             }
           }, 0);
+          if (evt.clone && evt.clone.parentNode) {
+            evt.clone.parentNode.removeChild(evt.clone)
+          }
           
           if (taskId && dateStr) {
             const [year, month, day] = dateStr.split('-').map(Number);
@@ -389,6 +448,9 @@ const MonthlyView = () => {
                       style={{ height: `${rowHeight}px`, boxSizing: 'border-box' }}
                       className="calendar-day bg-white dark:bg-gray-800 border-r border-b border-gray-100 dark:border-gray-800 relative p-1 flex flex-col"
                       data-date={formatDateKey(day)}
+                      onDrop={(e) => handleEventDrop(e, day)}
+                      onDragOver={handleDragOver}
+                      onDragLeave={handleDragLeave}
                     >
                       <div className="flex justify-between items-start text-xs mb-1">
                         {firstOfMonth && (

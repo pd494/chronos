@@ -1,8 +1,29 @@
 import { format, differenceInMinutes } from 'date-fns'
+import { useState, useEffect } from 'react'
 import { useCalendar } from '../../context/CalendarContext'
+import { getEventColors } from '../../lib/eventColors'
 
 const WeekEvent = ({ event, hourHeight, dayStartHour, position }) => {
-  const { openEventModal } = useCalendar()
+  const { openEventModal, selectedEvent, updateEvent } = useCalendar()
+  const [isDragging, setIsDragging] = useState(false)
+  const [shouldBounce, setShouldBounce] = useState(false)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    let timeoutId = null
+    const handleBounce = (evt) => {
+      if (evt?.detail?.eventId === event.id) {
+        setShouldBounce(true)
+        if (timeoutId) clearTimeout(timeoutId)
+        timeoutId = setTimeout(() => setShouldBounce(false), 600)
+      }
+    }
+    window.addEventListener('chronos:event-bounce', handleBounce)
+    return () => {
+      window.removeEventListener('chronos:event-bounce', handleBounce)
+      if (timeoutId) clearTimeout(timeoutId)
+    }
+  }, [event.id])
   
   // Ensure we're working with proper Date objects
   const startDate = event.start instanceof Date ? event.start : new Date(event.start)
@@ -17,10 +38,76 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, position }) => {
   const top = (startHour - dayStartHour) * hourHeight + (startMinute / 60) * hourHeight
   const duration = differenceInMinutes(endDate, startDate)
   const height = (duration / 60) * hourHeight
-  
+  const isSelected = selectedEvent?.id === event.id
+
   const handleClick = (e) => {
+    if (isDragging) return
     e.stopPropagation()
+
+    const rect = e.currentTarget.getBoundingClientRect()
+    const scrollTop = window.pageYOffset || document.documentElement.scrollTop
+    const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft
+
+    window.lastClickedEvent = e.currentTarget
+    window.lastClickedEventId = event.id
+    window.lastClickedCalendarDay = null
+    window.lastCalendarAnchorRect = {
+      top: rect.top + scrollTop,
+      bottom: rect.bottom + scrollTop,
+      left: rect.left + scrollLeft,
+      right: rect.right + scrollLeft,
+      width: rect.width,
+      height: rect.height,
+      eventId: event.id
+    }
+
     openEventModal(event)
+  }
+
+  const handleDragStart = (e) => {
+    e.stopPropagation()
+    setIsDragging(true)
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('event', JSON.stringify(event))
+    e.dataTransfer.setData('eventId', event.id)
+    // Some browsers require a plain text payload to initiate drag
+    try { e.dataTransfer.setData('text/plain', ' '); } catch (_) {}
+    
+    // Mark this specific element as being dragged
+    e.currentTarget.setAttribute('data-dragging', 'true')
+    
+    // Create custom drag preview that keeps calendar dimensions
+    const rect = e.currentTarget.getBoundingClientRect()
+    const dragPreview = e.currentTarget.cloneNode(true)
+    dragPreview.style.opacity = '0.85'
+    dragPreview.style.position = 'absolute'
+    dragPreview.style.top = '-1000px'
+    dragPreview.style.left = '-1000px'
+    dragPreview.style.width = `${rect.width}px`
+    dragPreview.style.height = `${Math.max(rect.height, 20)}px`
+    dragPreview.style.boxSizing = 'border-box'
+    dragPreview.style.pointerEvents = 'none'
+    document.body.appendChild(dragPreview)
+    const rawOffsetX = (e.clientX ?? rect.left) - rect.left
+    const rawOffsetY = (e.clientY ?? rect.top) - rect.top
+    const offsetX = Math.max(1, Math.min(rect.width - 1, rawOffsetX))
+    const offsetY = Math.max(1, Math.min(rect.height - 1, rawOffsetY))
+    try { e.dataTransfer.setDragImage(dragPreview, offsetX, offsetY) } catch (_) {}
+    setTimeout(() => {
+      if (dragPreview.parentNode) {
+        dragPreview.parentNode.removeChild(dragPreview)
+      }
+    }, 0)
+  }
+
+  const handleDragEnd = (e) => {
+    setIsDragging(false)
+    // Remove dragging marker
+    e.currentTarget.removeAttribute('data-dragging')
+    // Remove all dragover classes
+    document.querySelectorAll('.event-dragover').forEach(el => {
+      el.classList.remove('event-dragover')
+    })
   }
   
   // Format time for display - restore 12-hour format
@@ -28,89 +115,52 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, position }) => {
     return format(date, 'h:mm a')
   }
   
-  // Get event color or default to blue
-  const eventColor = event.color || 'blue'
-  
-  // Check if color is a hex code (starts with #)
-  const isHexColor = eventColor.startsWith('#')
-  
-  // Function to darken a hex color for text/border
-  const darkenHexColor = (hex, percent = 40) => {
-    // Remove # if present
-    hex = hex.replace('#', '')
-    
-    // Parse RGB
-    const r = parseInt(hex.substring(0, 2), 16)
-    const g = parseInt(hex.substring(2, 4), 16)
-    const b = parseInt(hex.substring(4, 6), 16)
-    
-    // Darken
-    const darkenedR = Math.floor(r * (1 - percent / 100))
-    const darkenedG = Math.floor(g * (1 - percent / 100))
-    const darkenedB = Math.floor(b * (1 - percent / 100))
-    
-    // Convert back to hex
-    return `#${darkenedR.toString(16).padStart(2, '0')}${darkenedG.toString(16).padStart(2, '0')}${darkenedB.toString(16).padStart(2, '0')}`
-  }
-  
-  // Map color names to CSS variable names
-  const getColorVar = (color, shade) => {
-    if (color === 'purple') return `var(--color-violet-${shade})`;
-    if (color === 'red') return `var(--color-rose-${shade})`;
-    if (color === 'green') return `var(--color-emerald-${shade})`;
-    return `var(--color-${color}-${shade})`;
-  }
-  
-  // Function to lighten a hex color for better appearance
-  const lightenHexColor = (hex, percent = 30) => {
-    hex = hex.replace('#', '')
-    const r = parseInt(hex.substring(0, 2), 16)
-    const g = parseInt(hex.substring(2, 4), 16)
-    const b = parseInt(hex.substring(4, 6), 16)
-    const lightenedR = Math.min(255, Math.floor(r + (255 - r) * (percent / 100)))
-    const lightenedG = Math.min(255, Math.floor(g + (255 - g) * (percent / 100)))
-    const lightenedB = Math.min(255, Math.floor(b + (255 - b) * (percent / 100)))
-    return `#${lightenedR.toString(16).padStart(2, '0')}${lightenedG.toString(16).padStart(2, '0')}${lightenedB.toString(16).padStart(2, '0')}`
-  }
-  
-  // Get the background and text colors
-  const backgroundColor = isHexColor ? lightenHexColor(eventColor, 30) : getColorVar(eventColor, '500')
-  const textColor = isHexColor ? darkenHexColor(eventColor, 30) : getColorVar(eventColor, '900')
-  const borderColor = textColor
+  // Get standardized colors
+  const colors = getEventColors(event.color || 'blue')
   
   const columns = position?.columns || 1
   const columnIndex = position?.column || 0
-  const gap = position?.gap ?? 0
+  // Provide consistent horizontal spacing within a day column and between adjacent days
+  const baseInset = 4 // px inset from day column borders
+  const gap = position?.gap ?? 6 // px gap between overlapping events in the same day
   const widthPercent = 100 / columns
   const leftPercent = widthPercent * columnIndex
-  const totalGap = gap * (columns - 1)
+  const totalGap = gap * Math.max(0, columns - 1)
+  const horizontalPadding = baseInset * 2
   const widthCalc = columns > 1
-    ? `calc(${widthPercent}% - ${(totalGap) / columns}px)`
-    : `calc(${widthPercent}% - 2px)`
+    ? `calc(${widthPercent}% - ${(totalGap / columns) + horizontalPadding}px)`
+    : `calc(${widthPercent}% - ${horizontalPadding}px)`
   const leftCalc = columns > 1
-    ? `calc(${leftPercent}% + ${columnIndex * gap}px)`
-    : '2px'
+    ? `calc(${leftPercent}% + ${columnIndex * gap + baseInset}px)`
+    : `${baseInset}px`
 
   return (
     <div
-      className="absolute rounded-lg p-1 overflow-hidden cursor-pointer 
-                  text-sm z-10 group"
+      draggable="true"
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+      className={`absolute rounded-lg p-1 overflow-hidden text-sm z-10 group event-draggable ${shouldBounce ? 'event-bounce' : ''}`}
       onClick={handleClick}
+      data-event-id={event.id}
+      data-active={isSelected ? 'true' : 'false'}
       style={{
+        cursor: isDragging ? 'grabbing' : 'pointer',
         top: `${top}px`,
         height: `${height}px`,
         minHeight: '20px',
         left: leftCalc,
         width: widthCalc,
-        backgroundColor: backgroundColor,
-        zIndex: 20 + columnIndex
+        backgroundColor: colors.background,
+        zIndex: 20 + columnIndex,
+        boxShadow: isSelected ? '0 0 0 2px rgba(52, 120, 246, 0.6)' : undefined,
+        opacity: isDragging ? 0.25 : 1
       }}
     >
       {/* Vertical line */}
       <div 
         className="absolute left-0 top-0 bottom-0 w-1" 
         style={{ 
-          backgroundColor: borderColor,
+          backgroundColor: colors.border,
         }}
       ></div>
       
@@ -118,7 +168,7 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, position }) => {
         <div 
           className="font-medium truncate mb-0.5" 
           style={{ 
-            color: textColor // Darker version of the event color
+            color: colors.text
           }}
         >
           {event.title}
@@ -126,7 +176,7 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, position }) => {
         <div 
           className="text-xs"
           style={{ 
-            color: textColor // Darker version of the event color
+            color: colors.text
           }}
         >
           {formatTime(startDate)}

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { format, parse } from 'date-fns'
 import { 
-  FiX, FiTrash2, FiUsers, FiMapPin, FiClock, FiCalendar, FiChevronDown, FiPlus
+  FiX, FiTrash2, FiUsers, FiMapPin, FiClock, FiCalendar, FiChevronDown, FiPlus, FiCheck
 } from 'react-icons/fi'
 import { useCalendar } from '../../context/CalendarContext'
 
@@ -39,9 +39,25 @@ const getInitials = (email) => {
   return name.charAt(0).toUpperCase();
 };
 
-// Helper to get color for participant avatar
+// Helper to get display name like @Name from email
+const getHandle = (email) => {
+  const local = (email || '').split('@')[0] || ''
+  if (!local) return ''
+  return `@${local.charAt(0).toUpperCase()}${local.slice(1)}`
+}
+
+// Helper to get color for participant avatar - using our color palette
 const getParticipantColor = (email) => {
-  const colors = ['bg-purple-500', 'bg-blue-500', 'bg-green-500', 'bg-yellow-500', 'bg-pink-500', 'bg-indigo-500'];
+  const colors = [
+    '#3478F6',  // blue
+    '#FF3B30',  // red
+    '#34C759',  // green
+    '#FF9500',  // orange
+    '#AF52DE',  // purple
+    '#FFD60A',  // yellow
+    '#00C7BE',  // teal
+    '#FF2D55'   // pink
+  ];
   const index = email.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0) % colors.length;
   return colors[index];
 };
@@ -50,88 +66,85 @@ const getParticipantColor = (email) => {
 const getModalPosition = (view) => {
   const modalWidth = 400;
   const modalHeight = 500;
-  
-  // For weekly/daily views, position inline where dragged
-  if (view === 'week' || view === 'day') {
-    const dragPosition = window.lastDragPosition;
-    if (dragPosition) {
-      // Center vertically in viewport
-      const viewportHeight = window.innerHeight;
-      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-      const centerY = scrollTop + (viewportHeight / 2) - (modalHeight / 2);
-      
-      // Calculate left/right position
-      const spaceOnRight = window.innerWidth - dragPosition.left;
-      let left, pointerSide;
-      
-      if (spaceOnRight >= modalWidth + 20) {
-        left = dragPosition.left;
-        pointerSide = 'left';
-      } else {
-        left = dragPosition.left - modalWidth - 10;
-        pointerSide = 'right';
-      }
-      
-      // Ensure modal stays within horizontal bounds
-      if (left + modalWidth > window.innerWidth) {
-        left = window.innerWidth - modalWidth - 20;
-        pointerSide = 'right';
-      }
-      if (left < 20) {
-        left = 20;
-        pointerSide = 'left';
-      }
-      
-      return { 
-        top: `${Math.max(20, centerY)}px`, 
-        left: `${left}px`,
-        pointerSide
+  const viewportHeight = window.innerHeight;
+  const viewportWidth = window.innerWidth;
+  const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+  const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+  const margin = 20;
+  const sideOffset = 12;
+
+  const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+
+  let anchorRect = null;
+
+  if (window.lastCalendarAnchorRect && Number.isFinite(window.lastCalendarAnchorRect.top)) {
+    anchorRect = window.lastCalendarAnchorRect;
+  } else {
+    const fallbackElement = window.lastClickedEvent || window.lastClickedCalendarDay;
+    if (fallbackElement) {
+      const rect = fallbackElement.getBoundingClientRect();
+      anchorRect = {
+        top: rect.top + scrollTop,
+        bottom: rect.bottom + scrollTop,
+        left: rect.left + scrollLeft,
+        right: rect.right + scrollLeft,
+        width: rect.width,
+        height: rect.height
       };
     }
   }
-  
-  // For monthly view, position next to clicked day
-  const clickedElement = window.lastClickedCalendarDay;
-  if (!clickedElement) {
-    return { top: '50%', left: '50%', transform: 'translate(-50%, -50%)', pointerSide: 'left' };
+
+  if (!anchorRect) {
+    return { top: '50%', left: '50%', transform: 'translate(-50%, -50%)', pointerSide: 'left', pointerOffset: 24 };
   }
-  
-  const rect = clickedElement.getBoundingClientRect();
-  
-  // Calculate if modal should be on left or right
-  const spaceOnRight = window.innerWidth - rect.right;
-  const spaceOnLeft = rect.left;
-  
-  let left, pointerSide;
-  
-  if (spaceOnRight >= modalWidth + 20) {
-    // Position on right
-    left = rect.right + 10;
+
+  const anchorTop = anchorRect.top;
+  const anchorBottom = anchorRect.bottom ?? (anchorTop + (anchorRect.height ?? 0));
+  const anchorHeight = anchorRect.height ?? Math.max(anchorBottom - anchorTop, 1);
+  const anchorLeft = anchorRect.left;
+  const anchorRight = anchorRect.right ?? (anchorLeft + (anchorRect.width ?? 0));
+  const anchorCenterY = anchorTop + anchorHeight / 2;
+
+  const spaceOnRight = (viewportWidth + scrollLeft) - anchorRight;
+  const spaceOnLeft = anchorLeft - scrollLeft;
+
+  let pointerSide = 'left';
+  let left;
+
+  if (spaceOnRight >= modalWidth + margin) {
+    left = anchorRight + sideOffset;
     pointerSide = 'left';
-  } else if (spaceOnLeft >= modalWidth + 20) {
-    // Position on left
-    left = rect.left - modalWidth - 10;
+  } else if (spaceOnLeft >= modalWidth + margin) {
+    left = anchorLeft - modalWidth - sideOffset;
     pointerSide = 'right';
   } else {
-    // Not enough space, position on left side
-    left = rect.left - modalWidth - 10;
-    pointerSide = 'right';
+    const preferredLeft = anchorRight + sideOffset;
+    const preferredRight = anchorLeft - modalWidth - sideOffset;
+    const canFitRight = preferredLeft + modalWidth <= scrollLeft + viewportWidth - margin;
+    const canFitLeft = preferredRight >= scrollLeft + margin;
+
+    if (canFitRight || (!canFitLeft && preferredLeft >= preferredRight)) {
+      left = preferredLeft;
+      pointerSide = 'left';
+    } else {
+      left = preferredRight;
+      pointerSide = 'right';
+    }
   }
-  
-  // Ensure modal stays within horizontal bounds
-  if (left + modalWidth > window.innerWidth) {
-    left = window.innerWidth - modalWidth - 20;
-  }
-  if (left < 20) {
-    left = 20;
-  }
-  
-  // Center vertically in viewport
-  const viewportHeight = window.innerHeight;
-  const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-  const centerY = scrollTop + (viewportHeight / 2) - (modalHeight / 2);
-  
-  return { top: `${Math.max(20, centerY)}px`, left: `${left}px`, pointerSide };
+
+  left = clamp(left, scrollLeft + margin, scrollLeft + viewportWidth - modalWidth - margin);
+
+  let top = anchorCenterY - modalHeight / 2;
+  top = clamp(top, scrollTop + margin, scrollTop + viewportHeight - modalHeight - margin);
+
+  const pointerOffset = clamp(anchorCenterY - top - 8, 16, modalHeight - 40);
+
+  return {
+    top: `${top}px`,
+    left: `${left}px`,
+    pointerSide,
+    pointerOffset
+  };
 };
 
 const EventModal = () => {
@@ -153,6 +166,9 @@ const EventModal = () => {
   const [location, setLocation] = useState('')
   const [internalVisible, setInternalVisible] = useState(false)
   const [participants, setParticipants] = useState([])
+  const [isAddingParticipant, setIsAddingParticipant] = useState(false)
+  const [expandedChips, setExpandedChips] = useState(new Set())
+  const [timeError, setTimeError] = useState('')
   const [participantEmail, setParticipantEmail] = useState('')
   const [showNotifyMembers, setShowNotifyMembers] = useState(false)
   const [showColorPicker, setShowColorPicker] = useState(false)
@@ -162,14 +178,17 @@ const EventModal = () => {
   const titleInputRef = useRef(null)
   const modalRef = useRef(null)
   const colorPickerRef = useRef(null)
+  const participantInputRef = useRef(null)
   const initialValuesRef = useRef({})
 
   useEffect(() => {
-    // Set modal position and animate in when the component is mounted
+    // Set modal position and animate in when the component is mounted or event changes
     setModalPosition(getModalPosition(view));
-    requestAnimationFrame(() => {
-      setInternalVisible(true);
-    });
+    if (!internalVisible) {
+      requestAnimationFrame(() => {
+        setInternalVisible(true);
+      });
+    }
     
     // Prevent horizontal scrolling
     document.body.style.overflowX = 'hidden';
@@ -177,7 +196,7 @@ const EventModal = () => {
     return () => {
       document.body.style.overflowX = '';
     };
-  }, [view]);
+  }, [view, selectedEvent]);
   
   // Update position when window resizes
   useEffect(() => {
@@ -202,11 +221,46 @@ const EventModal = () => {
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
   }, [showColorPicker]);
+  
+  // Close modal when clicking outside (but not on events)
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      // Check if clicking on an event element (don't close if so)
+      const clickedOnEvent = event.target.closest('[data-event-id]') || 
+                            event.target.closest('.event-draggable') ||
+                            event.target.closest('.event-indicator');
+      
+      if (modalRef.current && !modalRef.current.contains(event.target) && !clickedOnEvent) {
+        setInternalVisible(false);
+        setTimeout(() => {
+          window.prefilledEventDates = null;
+          window.lastCalendarAnchorRect = null;
+          window.lastClickedEvent = null;
+          window.lastClickedCalendarDay = null;
+          window.lastClickedEventId = null;
+          setExpandedChips(new Set())
+          setIsAddingParticipant(false)
+          setParticipantEmail('')
+          contextCloseEventModal();
+        }, 300);
+      }
+    };
+    
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [contextCloseEventModal]);
 
   const closeAndAnimateOut = useCallback(() => {
     setInternalVisible(false);
     setTimeout(() => {
       window.prefilledEventDates = null; // Clear prefilled dates on close
+      window.lastCalendarAnchorRect = null;
+      window.lastClickedEvent = null;
+      window.lastClickedCalendarDay = null;
+      window.lastClickedEventId = null;
+      setExpandedChips(new Set())
+      setIsAddingParticipant(false)
+      setParticipantEmail('')
       contextCloseEventModal();
     }, 300); // Match animation duration
   }, [contextCloseEventModal]);
@@ -298,6 +352,7 @@ const EventModal = () => {
     setLocation(initialLocation);
     
     // Store initial values for change detection
+    const initialParticipants = selectedEvent?.participants || [];
     initialValuesRef.current = {
       eventName: initialEventName,
       eventDate: initialEventDate,
@@ -305,10 +360,14 @@ const EventModal = () => {
       timeEnd: initialTimeEnd,
       color: initialColor,
       isAllDay: initialIsAllDay,
-      location: initialLocation
+      location: initialLocation,
+      participants: initialParticipants
     };
     setHasChanges(false);
-    setParticipants(selectedEvent?.participants || []);
+    setParticipants(initialParticipants);
+    setExpandedChips(new Set())
+    setIsAddingParticipant(false)
+    setParticipantEmail('')
 
   }, [selectedEvent])
 
@@ -319,6 +378,12 @@ const EventModal = () => {
       titleInputRef.current.select()
     }
   }, [internalVisible])
+
+  useEffect(() => {
+    if (isAddingParticipant && participantInputRef.current) {
+      participantInputRef.current.focus({ preventScroll: true })
+    }
+  }, [isAddingParticipant])
   
   // Detect changes
   useEffect(() => {
@@ -328,6 +393,9 @@ const EventModal = () => {
     }
     
     const initial = initialValuesRef.current;
+    const participantsChanged = 
+      JSON.stringify(participants.sort()) !== JSON.stringify((initial.participants || []).sort());
+    
     const changed = 
       eventName !== initial.eventName ||
       eventDate !== initial.eventDate ||
@@ -335,10 +403,28 @@ const EventModal = () => {
       timeEnd !== initial.timeEnd ||
       color !== initial.color ||
       isAllDay !== initial.isAllDay ||
-      location !== initial.location;
+      location !== initial.location ||
+      participantsChanged;
     
     setHasChanges(changed);
-  }, [selectedEvent, eventName, eventDate, timeStart, timeEnd, color, isAllDay, location]);
+    
+    // Auto-enable notifications when meaningful fields change (not color)
+    // This matches Google Calendar behavior
+    if (selectedEvent && participants.length > 0) {
+      const meaningfulChange = 
+        eventName !== initial.eventName ||
+        eventDate !== initial.eventDate ||
+        timeStart !== initial.timeStart ||
+        timeEnd !== initial.timeEnd ||
+        isAllDay !== initial.isAllDay ||
+        location !== initial.location ||
+        participantsChanged;
+      
+      if (meaningfulChange) {
+        setShowNotifyMembers(true);
+      }
+    }
+  }, [selectedEvent, eventName, eventDate, timeStart, timeEnd, color, isAllDay, location, participants]);
   
   const buildDateWithTime = useCallback((dateStr, timeStr) => {
     if (!dateStr || typeof dateStr !== 'string') return null
@@ -370,7 +456,8 @@ const EventModal = () => {
       finalStartDateTime = buildDateWithTime(eventDate, timeStart) || new Date()
       finalEndDateTime = buildDateWithTime(eventDate, timeEnd)
       if (!finalEndDateTime || finalEndDateTime <= finalStartDateTime) {
-        finalEndDateTime = new Date(finalStartDateTime.getTime() + 30 * 60 * 1000)
+        setTimeError('End time must be after start time')
+        return
       }
     }
 
@@ -381,7 +468,8 @@ const EventModal = () => {
       color,
       isAllDay,
       location,
-      participants
+      participants,
+      sendNotifications: showNotifyMembers && participants.length > 0
     };
         
     const action = selectedEvent
@@ -394,6 +482,21 @@ const EventModal = () => {
       console.error('Failed to save event:', error);
     });
   };
+
+  // Validate times whenever inputs change
+  useEffect(() => {
+    if (isAllDay) {
+      setTimeError('')
+      return
+    }
+    const start = buildDateWithTime(eventDate, timeStart)
+    const end = buildDateWithTime(eventDate, timeEnd)
+    if (!start || !end) {
+      setTimeError('')
+      return
+    }
+    setTimeError(end <= start ? 'End time must be after start time' : '')
+  }, [eventDate, timeStart, timeEnd, isAllDay, buildDateWithTime])
   
   const handleDelete = () => { // Ensure this is a stable function if used in useEffect deps
     if (selectedEvent) {
@@ -425,12 +528,28 @@ const EventModal = () => {
     if (email && email.includes('@') && !participants.includes(email)) {
       setParticipants([...participants, email]);
       setParticipantEmail('');
+      setIsAddingParticipant(false);
+      setExpandedChips(new Set())
     }
   };
-  
+
   const handleRemoveParticipant = (email) => {
     setParticipants(participants.filter(p => p !== email));
+    setExpandedChips(prev => {
+      const next = new Set(prev)
+      next.delete(email)
+      return next
+    })
   };
+  
+  const toggleChip = (email) => {
+    setExpandedChips(prev => {
+      const next = new Set(prev)
+      if (next.has(email)) next.delete(email)
+      else next.add(email)
+      return next
+    })
+  }
   
   const handleParticipantKeyDown = (e) => {
     if (e.key === 'Enter') {
@@ -451,10 +570,10 @@ const EventModal = () => {
         style={{
           ...modalPosition,
           width: '400px',
-          maxHeight: '500px',
+          maxHeight: '90vh',
           border: '1px solid #e5e7eb',
           borderRadius: '16px',
-          overflowY: 'hidden',
+          overflowY: 'auto',
           overflowX: 'visible'
         }}
       >
@@ -465,7 +584,7 @@ const EventModal = () => {
               className="absolute w-0 h-0 z-10"
               style={{
                 left: '-8px',
-                top: '24px',
+                top: `${modalPosition.pointerOffset ?? 24}px`,
                 borderTop: '8px solid transparent',
                 borderBottom: '8px solid transparent',
                 borderRight: '8px solid #e5e7eb'
@@ -475,7 +594,7 @@ const EventModal = () => {
               className="absolute w-0 h-0 z-10"
               style={{
                 left: '-7px',
-                top: '24px',
+                top: `${modalPosition.pointerOffset ?? 24}px`,
                 borderTop: '8px solid transparent',
                 borderBottom: '8px solid transparent',
                 borderRight: '8px solid white'
@@ -490,7 +609,7 @@ const EventModal = () => {
               className="absolute w-0 h-0 z-10"
               style={{
                 right: '-8px',
-                top: '24px',
+                top: `${modalPosition.pointerOffset ?? 24}px`,
                 borderTop: '8px solid transparent',
                 borderBottom: '8px solid transparent',
                 borderLeft: '8px solid #e5e7eb'
@@ -500,7 +619,7 @@ const EventModal = () => {
               className="absolute w-0 h-0 z-10"
               style={{
                 right: '-7px',
-                top: '24px',
+                top: `${modalPosition.pointerOffset ?? 24}px`,
                 borderTop: '8px solid transparent',
                 borderBottom: '8px solid transparent',
                 borderLeft: '8px solid white'
@@ -543,40 +662,79 @@ const EventModal = () => {
             <div>
               <label className="block text-xs font-medium text-gray-700 mb-1">Event Name</label>
               <input
-                ref={titleInputRef}
                 type="text"
                 value={eventName}
                 onChange={(e) => setEventName(e.target.value)}
-                placeholder="TreeDocs Team Sync"
-                className="w-full px-3 py-1.5 text-sm text-gray-900 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                placeholder="Event name"
+                className="w-full px-3 py-2 text-base text-gray-900 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent truncate"
+                ref={titleInputRef}
               />
             </div>
             
-            {/* Date */}
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">Date</label>
-              {(isFromDayClick && !selectedEvent) ? (
-                // Static date display when created from day click (new event only)
-                <div className="flex items-center px-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg">
-                  <FiCalendar className="text-gray-500 mr-2" size={14} />
-                  <span className="flex-grow text-sm text-gray-900">{formatDateForDisplay(eventDate)}</span>
-                </div>
-              ) : (
-                // Date picker when editing existing event or from + Event button
-                <div className="relative">
-                  <div className="flex items-center px-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-100 transition-colors">
+            {/* Date and Color Row */}
+            <div className="grid grid-cols-[1.7fr_1fr] gap-2">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Date</label>
+                {(isFromDayClick && !selectedEvent) ? (
+                  // Static date display when created from day click (new event only)
+                  <div className="flex items-center px-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg">
                     <FiCalendar className="text-gray-500 mr-2" size={14} />
-                    <span className="flex-grow text-sm text-gray-900">{formatDateForDisplay(eventDate)}</span>
-                    <FiChevronDown className="text-gray-400" size={14} />
+                    <span className="flex-grow text-sm text-gray-900 truncate">{formatDateForDisplay(eventDate)}</span>
                   </div>
-                  <input
-                    type="date"
-                    value={eventDate}
-                    onChange={(e) => setEventDate(e.target.value)}
-                    className="absolute inset-0 opacity-0 cursor-pointer"
-                  />
+                ) : (
+                  // Date picker when editing existing event or from + Event button
+                  <div className="relative">
+                    <div className="flex items-center px-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-100 transition-colors">
+                      <FiCalendar className="text-gray-500 mr-2" size={14} />
+                      <span className="flex-grow text-sm text-gray-900 truncate">{formatDateForDisplay(eventDate)}</span>
+                      <FiChevronDown className="text-gray-400" size={14} />
+                    </div>
+                    <input
+                      type="date"
+                      value={eventDate}
+                      onChange={(e) => setEventDate(e.target.value)}
+                      className="absolute inset-0 opacity-0 cursor-pointer"
+                    />
+                  </div>
+                )}
+              </div>
+              
+              {/* Color Picker */}
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Color</label>
+                <div className="relative" ref={colorPickerRef}>
+                  <button
+                    type="button"
+                    onClick={() => setShowColorPicker(!showColorPicker)}
+                    className="flex items-center justify-center px-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg hover:bg-gray-100 transition-colors w-full"
+                  >
+                    <div 
+                      className="w-5 h-5 rounded-full" 
+                      style={{ backgroundColor: color }}
+                    />
+                  </button>
+                  {showColorPicker && (
+                    <div className="absolute z-50 mt-1 p-2 bg-white rounded-lg shadow-lg border border-gray-200">
+                      <div className="grid grid-cols-4 gap-2">
+                        {CATEGORY_COLORS.map((colorOption) => (
+                          <button
+                            key={colorOption}
+                            type="button"
+                            onClick={() => {
+                              setColor(colorOption);
+                              setShowColorPicker(false);
+                            }}
+                            className={`w-8 h-8 rounded-full transition-all hover:scale-110 ${
+                              color === colorOption ? 'ring-2 ring-offset-2 ring-gray-400' : ''
+                            }`}
+                            style={{ backgroundColor: colorOption }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
-              )}
+              </div>
             </div>
             
             {/* Time Start/End */}
@@ -603,93 +761,114 @@ const EventModal = () => {
                 />
               </div>
             </div>
-            
-            {/* Color Picker */}
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">Color</label>
-              <div className="relative" ref={colorPickerRef}>
-                <button
-                  type="button"
-                  onClick={() => setShowColorPicker(!showColorPicker)}
-                  className="flex items-center px-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg hover:bg-gray-100 transition-colors w-full"
-                >
-                  <div 
-                    className="w-5 h-5 rounded-full" 
-                    style={{ backgroundColor: color }}
-                  />
-                </button>
-                {showColorPicker && (
-                  <div className="absolute z-50 mt-1 p-2 bg-white rounded-lg shadow-lg border border-gray-200">
-                    <div className="grid grid-cols-4 gap-2">
-                      {CATEGORY_COLORS.map((colorOption) => (
-                        <button
-                          key={colorOption}
-                          type="button"
-                          onClick={() => {
-                            setColor(colorOption);
-                            setShowColorPicker(false);
-                          }}
-                          className={`w-8 h-8 rounded-full transition-all hover:scale-110 ${
-                            color === colorOption ? 'ring-2 ring-offset-2 ring-gray-400' : ''
-                          }`}
-                          style={{ backgroundColor: colorOption }}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
+            {!isAllDay && timeError && (
+              <div className="text-xs text-red-600">{timeError}</div>
+            )}
             
             {/* Participants */}
             <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="block text-xs font-medium text-gray-700">Participants</label>
-                {participants.length > 0 && (
-                  <span className="text-xs text-gray-500">{participants.length}</span>
-                )}
-              </div>
-              
-              {/* Participant Avatars */}
-              {participants.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 mb-1.5">
-                  {participants.map((email) => (
-                    <div key={email} className="flex items-center space-x-1 bg-gray-100 rounded-full px-2 py-0.5">
-                      <div className={`w-4 h-4 rounded-full ${getParticipantColor(email)} flex items-center justify-center text-white text-xs font-medium`}>
-                        {getInitials(email)}
-                      </div>
-                      <span className="text-xs text-gray-700">{email.split('@')[0]}</span>
+              <div className="flex items-center gap-2 mb-2 flex-wrap">
+                <div className="flex items-center gap-1">
+                  <label className="text-xs font-medium text-gray-700">Participants</label>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-gray-100 text-gray-600">{participants.length}</span>
+                </div>
+                <div className="flex flex-1 items-center gap-2 min-h-[32px]">
+                  {isAddingParticipant ? (
+                    <div className="flex items-center gap-1.5 flex-1">
+                      <input
+                        ref={participantInputRef}
+                        type="email"
+                        value={participantEmail}
+                        onChange={(e) => setParticipantEmail(e.target.value)}
+                        onKeyDown={handleParticipantKeyDown}
+                        placeholder="Add email address"
+                        className="flex-1 min-w-[240px] px-3 py-1.5 h-8 text-sm text-gray-900 bg-gray-50 border border-blue-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
                       <button
                         type="button"
-                        onClick={() => handleRemoveParticipant(email)}
-                        className="text-gray-400 hover:text-gray-600"
+                        onClick={handleAddParticipant}
+                        className="h-8 w-8 flex items-center justify-center bg-green-500 text-white rounded-md hover:bg-green-600 transition-colors"
+                        aria-label="Save participant"
                       >
-                        <FiX size={10} />
+                        <FiCheck size={16} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setParticipantEmail('')
+                          setIsAddingParticipant(false)
+                        }}
+                        className="h-8 w-8 flex items-center justify-center bg-gray-200 text-gray-600 rounded-md hover:bg-gray-300 transition-colors"
+                        aria-label="Cancel add participant"
+                      >
+                        <FiX size={14} />
                       </button>
                     </div>
-                  ))}
+                  ) : (
+                    <div className="flex items-center gap-2 flex-1">
+                      <div
+                        className={`flex gap-1.5 flex-1 items-center ${participants.length >= 5 ? 'overflow-x-auto' : 'flex-wrap overflow-visible'}`}
+                      >
+                        {participants.map((email) => {
+                          const bgColor = getParticipantColor(email);
+                          const expanded = expandedChips.has(email)
+                          return (
+                            <div
+                              key={email}
+                              className="group inline-flex items-center h-8 rounded-full flex-shrink-0 cursor-default select-none px-3"
+                              style={{ backgroundColor: bgColor + '26' }}
+                              title={email}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => toggleChip(email)}
+                                className="w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-semibold flex-shrink-0 focus:outline-none"
+                                style={{ backgroundColor: bgColor, color: 'white' }}
+                                aria-label={`Toggle ${email}`}
+                              >
+                                {getInitials(email)}
+                              </button>
+                              <div
+                                className="ml-2 inline-flex items-center gap-1 transition-all duration-150"
+                                style={{
+                                  color: bgColor,
+                                  maxWidth: expanded ? 200 : 0,
+                                  opacity: expanded ? 1 : 0,
+                                  overflow: 'hidden'
+                                }}
+                              >
+                                <span className="text-xs font-medium whitespace-nowrap">{getHandle(email)}</span>
+                                <button
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); handleRemoveParticipant(email) }}
+                                  className="transition-opacity opacity-0 group-hover:opacity-100 flex-shrink-0"
+                                  style={{ color: bgColor }}
+                                  aria-label={`Remove ${email}`}
+                                >
+                                  <FiX size={12} />
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAddingParticipant(true)
+                          setExpandedChips(new Set())
+                          setParticipantEmail('')
+                        }}
+                        className="h-8 w-8 flex items-center justify-center bg-[#3478F6] text-white rounded-md hover:bg-[#2868E6] transition-colors flex-shrink-0"
+                        aria-label="Add participant"
+                      >
+                        <FiPlus size={16} />
+                      </button>
+                    </div>
+                  )}
                 </div>
-              )}
-              
-              {/* Add Participant Input */}
-              <div className="flex items-center space-x-1.5">
-                <input
-                  type="email"
-                  value={participantEmail}
-                  onChange={(e) => setParticipantEmail(e.target.value)}
-                  onKeyDown={handleParticipantKeyDown}
-                  placeholder="Add email address"
-                  className="flex-1 px-3 py-1.5 text-sm text-gray-900 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
-                <button
-                  type="button"
-                  onClick={handleAddParticipant}
-                  className="p-1.5 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"
-                >
-                  <FiPlus size={14} />
-                </button>
               </div>
-              
+
               {/* Notify Members Checkbox */}
               {participants.length > 0 && (
                 <div className="flex items-center mt-1.5">
@@ -719,9 +898,9 @@ const EventModal = () => {
               )}
               <button 
                 type="submit"
-                disabled={selectedEvent && !hasChanges}
+                disabled={(selectedEvent && !hasChanges) || (!!timeError && !isAllDay)}
                 className={`px-6 py-2 rounded-lg transition-colors font-medium ${
-                  selectedEvent && !hasChanges
+                  (selectedEvent && !hasChanges) || (!!timeError && !isAllDay)
                     ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
                     : 'bg-green-600 text-white hover:bg-green-700'
                 }`}

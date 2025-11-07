@@ -3,6 +3,7 @@ import { format, isSameDay, isToday, getHours, getMinutes, getDay, addDays } fro
 import { useCalendar } from '../../context/CalendarContext'
 import { useTaskContext } from '../../context/TaskContext'
 import WeekEvent from '../events/WeekEvent'
+import AllDayEvent from '../events/AllDayEvent'
 import Sortable from 'sortablejs'
 import './WeeklyView.css'
 import { calculateTimeGridLayout } from '../../lib/eventLayout'
@@ -14,6 +15,7 @@ const ALL_DAY_SECTION_HEIGHT = 40 // Height of the all-day events section
 const ALL_DAY_EVENT_HEIGHT = 30
 const ALL_DAY_EVENT_GAP = 4
 const TIMED_EVENT_GAP = 4
+const DRAG_DISTANCE_THRESHOLD = 0.12 // ~7 minutes of travel before drag activates
 // This offset fixes the day alignment issue when dragging
 // The offset is +1 to shift events one day forward (compensating for the one-day-behind issue)
 // When integrating with external calendars (Google, Outlook, etc.):
@@ -21,6 +23,25 @@ const TIMED_EVENT_GAP = 4
 // 2. You may need to set this to 0 if imported events already show on the correct day
 // 3. If you change timezone handling, review this offset
 const DAY_OFFSET = 0
+
+const SNAP_INTERVAL_MINUTES = 30
+const MAX_SNAP_MINUTES = (DAY_END_HOUR * 60) + SNAP_INTERVAL_MINUTES
+const clampSnapMinutes = (minutes) => Math.max(0, Math.min(minutes, MAX_SNAP_MINUTES))
+const snapMinutesToLatestHalfHour = (totalMinutes) => {
+  if (!Number.isFinite(totalMinutes) || totalMinutes <= 0) return 0
+  return clampSnapMinutes(Math.floor(totalMinutes / SNAP_INTERVAL_MINUTES) * SNAP_INTERVAL_MINUTES)
+}
+const snapHourValue = (hourValue) => {
+  if (hourValue == null) return null
+  const totalMinutes = Math.max(0, hourValue) * 60
+  return snapMinutesToLatestHalfHour(totalMinutes) / 60
+}
+const snapHourMinutePair = (hour, minutes = 0) => {
+  const snappedMinutes = snapMinutesToLatestHalfHour((hour * 60) + minutes)
+  const snappedHour = Math.floor(snappedMinutes / 60)
+  const snappedMinute = snappedMinutes % 60
+  return { hour: snappedHour, minutes: snappedMinute }
+}
 
 const WeeklyView = () => {
   const {
@@ -31,7 +52,8 @@ const WeeklyView = () => {
     navigateToPrevious,
     selectDate,
     openEventModal,
-    getEventsForDate
+    getEventsForDate,
+    updateEvent
   } = useCalendar()
   
   const { convertTodoToEvent } = useTaskContext()
@@ -51,9 +73,12 @@ const WeeklyView = () => {
   
   const hasDraggedRef = useRef(false)
   const dragInitialDayHourRef = useRef(null)
+  const dragTimeoutRef = useRef(null)
   
   const hourCellsRef = useRef({});
   const allDayCellsRef = useRef({});
+  const dragColumnRef = useRef(null);
+  const dragStartCellRef = useRef(null);
   
   useEffect(() => {
     setDays(getDaysInWeek(currentDate))
@@ -144,41 +169,83 @@ const WeeklyView = () => {
   
   const handleCellMouseDown = (e, day, hour) => {
     if (e.button !== 0) return
+
+    dragColumnRef.current = e.currentTarget.closest('.week-day-column');
+    dragStartCellRef.current = e.currentTarget;
+    window.lastClickedCalendarDay = e.currentTarget;
+    window.lastClickedEvent = null;
+    window.lastClickedEventId = null;
     
     const rect = e.currentTarget.getBoundingClientRect()
     const relativeY = e.clientY - rect.top
     const minutePercentage = (relativeY % HOUR_HEIGHT) / HOUR_HEIGHT
     const minutes = Math.floor(minutePercentage * 60)
     const preciseHour = hour + (minutes / 60)
+    const snappedHour = snapHourValue(preciseHour)
 
-    setIsDragging(true)
+    // Store drag info but don't show preview yet
     setDragDay(day)
-    setDragStart(preciseHour)
-    setDragEnd(preciseHour)
+    setDragStart(snappedHour)
+    setDragEnd(snappedHour)
     hasDraggedRef.current = false
-    dragInitialDayHourRef.current = { day, hour: preciseHour, rawHour: hour, rawMinutes: minutes }
+    dragInitialDayHourRef.current = { day, rawHour: preciseHour }
+    
+    // Delay showing drag preview by 500ms
+    dragTimeoutRef.current = setTimeout(() => {
+      setIsDragging(true)
+    }, 500)
   }
 
   const handleCellMouseMove = (e, day, hour) => {
-    if (!isDragging) return
-    hasDraggedRef.current = true
+    if (!dragDay || dragStart === null) return
 
     const rect = e.currentTarget.getBoundingClientRect()
     const relativeY = e.clientY - rect.top
     const minutePercentage = (relativeY % HOUR_HEIGHT) / HOUR_HEIGHT
     const minutes = Math.floor(minutePercentage * 60)
-    setDragEnd(hour + (minutes / 60))
+    const preciseHour = hour + (minutes / 60)
+    const snappedHour = snapHourValue(preciseHour)
+
+    const movedToDifferentDay = !isSameDay(dragDay, day)
+    const startRaw = dragInitialDayHourRef.current?.rawHour ?? dragStart ?? preciseHour
+    const distanceMoved = Math.abs((preciseHour ?? 0) - startRaw)
+
+    const shouldActivateDrag =
+      isDragging ||
+      movedToDifferentDay ||
+      distanceMoved >= DRAG_DISTANCE_THRESHOLD
+
+    if (!isDragging && shouldActivateDrag) {
+      if (dragTimeoutRef.current) {
+        clearTimeout(dragTimeoutRef.current)
+        dragTimeoutRef.current = null
+      }
+      setIsDragging(true)
+    }
+
+    if (shouldActivateDrag) {
+      hasDraggedRef.current = true
+      if (movedToDifferentDay) {
+        setDragDay(day)
+      }
+      setDragEnd(snappedHour)
+    }
   }
 
   const handleGridMouseUp = () => {
-    if (!isDragging) return;
+    // Clear the timeout if mouse up happens before drag starts
+    if (dragTimeoutRef.current) {
+      clearTimeout(dragTimeoutRef.current)
+      dragTimeoutRef.current = null
+    }
+    
+    if (!isDragging && !dragDay && !hasDraggedRef.current) return;
     
     // Reset drag state immediately to prevent scroll issues
     const wasDragging = hasDraggedRef.current;
     const savedDragDay = dragDay;
     const savedDragStart = dragStart;
     const savedDragEnd = dragEnd;
-    const savedDragInitial = dragInitialDayHourRef.current;
     
     setIsDragging(false);
     setDragStart(null);
@@ -222,18 +289,48 @@ const WeeklyView = () => {
         startDate: startDate.toLocaleTimeString(),
         endDate: endDate.toLocaleTimeString()
       });
-      
-      // Store drag position for inline modal (relative to viewport, not scroll)
-      if (savedDragInitial) {
-        const cellElement = document.querySelector(`[data-hour="${savedDragInitial.rawHour}"][data-day="${format(savedDragDay, 'yyyy-MM-dd')}"]`);
-        if (cellElement) {
-          const rect = cellElement.getBoundingClientRect();
-          window.lastDragPosition = {
-            top: rect.top,
-            left: rect.right + 10
-          };
-        }
+
+      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+      const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+      const columnEl = dragColumnRef.current;
+
+      if (columnEl) {
+        const columnRect = columnEl.getBoundingClientRect();
+        const columnTop = columnRect.top + scrollTop;
+        const columnLeft = columnRect.left + scrollLeft;
+        const startValue = Math.min(savedDragStart, savedDragEnd);
+        const endValue = Math.max(savedDragStart, savedDragEnd);
+        const startOffset = Math.max(0, (startValue - DAY_START_HOUR) * HOUR_HEIGHT);
+        const endOffset = Math.max(startOffset + 1, (endValue - DAY_START_HOUR) * HOUR_HEIGHT);
+        const height = Math.max(endOffset - startOffset, HOUR_HEIGHT / 2);
+        
+        window.lastCalendarAnchorRect = {
+          top: columnTop + startOffset,
+          bottom: columnTop + startOffset + height,
+          left: columnLeft,
+          right: columnLeft + columnRect.width,
+          width: columnRect.width,
+          height,
+          eventId: newEvent.id
+        };
+      } else if (dragStartCellRef.current) {
+        const rect = dragStartCellRef.current.getBoundingClientRect();
+        window.lastCalendarAnchorRect = {
+          top: rect.top + scrollTop,
+          bottom: rect.bottom + scrollTop,
+          left: rect.left + scrollLeft,
+          right: rect.right + scrollLeft,
+          width: rect.width,
+          height: rect.height,
+          eventId: newEvent.id
+        };
+      } else {
+        window.lastCalendarAnchorRect = null;
       }
+      window.lastClickedCalendarDay = null;
+      window.lastClickedEvent = null;
+      window.lastClickedEventId = newEvent.id;
+      window.lastDragPosition = null;
       
       // Store the exact times for the modal to use
       window.prefilledEventDates = {
@@ -250,6 +347,9 @@ const WeeklyView = () => {
       // as double-click will handle event creation from a click.
       console.log('Click detected on hour cell, no action taken (awaiting double-click implementation).');
     }
+
+    dragColumnRef.current = null;
+    dragStartCellRef.current = null;
   };
   
   const handleCellDoubleClick = (e, day, hour) => {
@@ -275,12 +375,47 @@ const WeeklyView = () => {
       color: 'blue'
     };
     
-    // Store position for inline modal
-    const rect = e.currentTarget.getBoundingClientRect();
-    window.lastDragPosition = {
-      top: rect.top,
-      left: rect.right + 10
-    };
+    const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+    const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+    const columnEl = e.currentTarget.closest('.week-day-column');
+
+    if (columnEl) {
+      const columnRect = columnEl.getBoundingClientRect();
+      const columnTop = columnRect.top + scrollTop;
+      const columnLeft = columnRect.left + scrollLeft;
+      const startValue = startHour + (startMinute / 60);
+      const endValue = endHour + (endMinute / 60);
+      const startOffset = Math.max(0, (startValue - DAY_START_HOUR) * HOUR_HEIGHT);
+      const endOffset = Math.max(startOffset + 1, (endValue - DAY_START_HOUR) * HOUR_HEIGHT);
+      const height = Math.max(endOffset - startOffset, HOUR_HEIGHT / 2);
+
+      window.lastCalendarAnchorRect = {
+        top: columnTop + startOffset,
+        bottom: columnTop + startOffset + height,
+        left: columnLeft,
+        right: columnLeft + columnRect.width,
+        width: columnRect.width,
+        height,
+        eventId: newEvent.id
+      };
+      window.lastClickedCalendarDay = columnEl;
+    } else {
+      const rect = e.currentTarget.getBoundingClientRect();
+      window.lastCalendarAnchorRect = {
+        top: rect.top + scrollTop,
+        bottom: rect.bottom + scrollTop,
+        left: rect.left + scrollLeft,
+        right: rect.right + scrollLeft,
+        width: rect.width,
+        height: rect.height,
+        eventId: newEvent.id
+      };
+      window.lastClickedCalendarDay = e.currentTarget;
+    }
+
+    window.lastClickedEvent = null;
+    window.lastClickedEventId = newEvent.id;
+    window.lastDragPosition = null;
     
     // Store the exact times for the modal to use
     window.prefilledEventDates = {
@@ -296,9 +431,102 @@ const WeeklyView = () => {
     });
     openEventModal(newEvent, true); // true indicates it's a new event for the modal
   };
+
+  // Handle event drop onto a specific hour cell (with minute precision)
+  const handleEventDropOnHourCell = (e, targetDay, targetHour) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const eventData = e.dataTransfer.getData('event');
+    if (!eventData) return;
+
+    try {
+      const draggedEvent = JSON.parse(eventData);
+      const oldStart = new Date(draggedEvent.start);
+      const oldEnd = new Date(draggedEvent.end);
+
+      // Duration preserved for normal events, but if the source was all‑day
+      // (or effectively a 24h+ span), convert to a 60‑minute timed block.
+      const rawDurationMs = Math.max(1, oldEnd.getTime() - oldStart.getTime());
+      const ONE_HOUR = 60 * 60 * 1000;
+      const durationMs = (draggedEvent.isAllDay || rawDurationMs >= 23 * ONE_HOUR)
+        ? ONE_HOUR
+        : rawDurationMs;
+
+      // Compute minute precision from cursor inside the hour cell
+      const rect = e.currentTarget.getBoundingClientRect();
+      const relativeY = e.clientY - rect.top;
+      const minutePercentage = Math.min(1, Math.max(0, (relativeY % HOUR_HEIGHT) / HOUR_HEIGHT));
+      const minutes = Math.floor(minutePercentage * 60);
+      const { hour: snappedHour, minutes: snappedMinutes } = snapHourMinutePair(targetHour, minutes);
+
+      const newStart = new Date(targetDay);
+      newStart.setHours(snappedHour, snappedMinutes, 0, 0);
+      const newEnd = new Date(newStart.getTime() + durationMs);
+
+      updateEvent(draggedEvent.id, {
+        ...draggedEvent,
+        start: newStart,
+        end: newEnd,
+        isAllDay: false
+      });
+    } catch (error) {
+      console.error('Error dropping event on hour cell:', error);
+    }
+
+    e.currentTarget.classList.remove('event-dragover');
+  };
+
+  const handleAllDayEventDrop = (e, targetDay) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const eventData = e.dataTransfer.getData('event');
+    if (!eventData) return;
+
+    try {
+      const draggedEvent = JSON.parse(eventData);
+      const oldStart = new Date(draggedEvent.start);
+      const oldEnd = new Date(draggedEvent.end);
+      const durationMs = Math.max(30 * 60 * 1000, oldEnd.getTime() - oldStart.getTime());
+
+      const newStart = new Date(targetDay);
+      newStart.setHours(0, 0, 0, 0);
+      const msInDay = 24 * 60 * 60 * 1000;
+      let newEnd;
+
+      if (draggedEvent.isAllDay) {
+        const daySpan = Math.max(1, Math.round(durationMs / msInDay) || 1);
+        newEnd = new Date(newStart.getTime() + daySpan * msInDay);
+      } else {
+        newEnd = new Date(newStart.getTime() + msInDay);
+      }
+
+      updateEvent(draggedEvent.id, {
+        ...draggedEvent,
+        start: newStart,
+        end: newEnd,
+        isAllDay: true
+      });
+    } catch (error) {
+      console.error('Error dropping all-day event:', error);
+    }
+
+    e.currentTarget.classList.remove('event-dragover');
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    e.currentTarget.classList.add('event-dragover')
+  }
+
+  const handleDragLeave = (e) => {
+    e.currentTarget.classList.remove('event-dragover')
+  }
   
   // Handle creating an all-day event
-  const handleAllDayCellClick = (day) => {
+  const handleAllDayCellClick = (e, day) => {
     const startDate = new Date(day);
     startDate.setHours(0, 0, 0, 0);
 
@@ -313,6 +541,29 @@ const WeeklyView = () => {
       color: 'blue',
       isAllDay: true
     };
+
+    const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+    const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+    const target = e?.currentTarget;
+    if (target) {
+      const rect = target.getBoundingClientRect();
+      window.lastCalendarAnchorRect = {
+        top: rect.top + scrollTop,
+        bottom: rect.bottom + scrollTop,
+        left: rect.left + scrollLeft,
+        right: rect.right + scrollLeft,
+        width: rect.width,
+        height: rect.height,
+        eventId: newEvent.id
+      };
+      window.lastClickedCalendarDay = target;
+    } else {
+      window.lastCalendarAnchorRect = null;
+      window.lastClickedCalendarDay = null;
+    }
+    window.lastClickedEvent = null;
+    window.lastClickedEventId = newEvent.id;
+    window.lastDragPosition = null;
     
     // Store the exact times for the modal to use
     window.prefilledEventDates = {
@@ -399,64 +650,17 @@ const WeeklyView = () => {
   }
   
   // Function to render an all-day event
-  const renderAllDayEvent = (event, indexKey) => {
-    // Ensure event has a color, default to blue if not present
-    const eventColor = event.color || 'blue';
-    
-    // Check if color is a hex code (starts with #)
-    const isHexColor = eventColor.startsWith('#');
-    
-    // Function to lighten a hex color for better appearance
-    const lightenHexColor = (hex, percent = 30) => {
-      hex = hex.replace('#', '');
-      const r = parseInt(hex.substring(0, 2), 16);
-      const g = parseInt(hex.substring(2, 4), 16);
-      const b = parseInt(hex.substring(4, 6), 16);
-      const lightenedR = Math.min(255, Math.floor(r + (255 - r) * (percent / 100)));
-      const lightenedG = Math.min(255, Math.floor(g + (255 - g) * (percent / 100)));
-      const lightenedB = Math.min(255, Math.floor(b + (255 - b) * (percent / 100)));
-      return `#${lightenedR.toString(16).padStart(2, '0')}${lightenedG.toString(16).padStart(2, '0')}${lightenedB.toString(16).padStart(2, '0')}`;
-    };
-    
-    // Function to darken a hex color for text/border
-    const darkenHexColor = (hex, percent = 30) => {
-      hex = hex.replace('#', '');
-      const r = parseInt(hex.substring(0, 2), 16);
-      const g = parseInt(hex.substring(2, 4), 16);
-      const b = parseInt(hex.substring(4, 6), 16);
-      const darkenedR = Math.floor(r * (1 - percent / 100));
-      const darkenedG = Math.floor(g * (1 - percent / 100));
-      const darkenedB = Math.floor(b * (1 - percent / 100));
-      return `#${darkenedR.toString(16).padStart(2, '0')}${darkenedG.toString(16).padStart(2, '0')}${darkenedB.toString(16).padStart(2, '0')}`;
-    };
-    
-    const backgroundColor = isHexColor ? lightenHexColor(eventColor, 30) : `var(--color-${eventColor}-500)`;
-    const textColor = isHexColor ? darkenHexColor(eventColor, 30) : `var(--color-${eventColor}-900)`;
-    
-    return (
-      <div
-        key={event.id || `${event.start.getTime()}-${event.title}-${indexKey}`}
-        className="truncate rounded px-2 cursor-pointer text-xs flex items-center mb-1"
-        style={{
-          height: `${ALL_DAY_EVENT_HEIGHT}px`,
-          backgroundColor: backgroundColor,
-          opacity: 0.85,
-          marginBottom: `${ALL_DAY_EVENT_GAP}px`,
-        }}
-        onClick={(e) => {
-          e.stopPropagation();
-          openEventModal(event);
-        }}
-      >
-        <span 
-          className="font-medium truncate"
-          style={{ color: textColor }}
-        >
-          {event.title}
-        </span>
-      </div>
-    );
-  };
+  const renderAllDayEvent = (event, indexKey) => (
+    <AllDayEvent
+      key={event.id || `${event.start.getTime()}-${event.title}-${indexKey}`}
+      event={event}
+      onOpen={openEventModal}
+      style={{
+        height: `${ALL_DAY_EVENT_HEIGHT}px`,
+        marginBottom: `${ALL_DAY_EVENT_GAP}px`,
+      }}
+    />
+  );
   
   // Initialize Sortable for droppable hour cells
   useEffect(() => {
@@ -475,6 +679,7 @@ const WeeklyView = () => {
         chosenClass: 'sortable-chosen',
         dragClass: 'sortable-drag-active',
         dragoverClass: 'sortable-dragover',
+        draggable: '.task-item',
         onStart: function() {
           // Add a class to the body to indicate dragging is in progress
           document.body.classList.add('task-dragging');
@@ -487,9 +692,28 @@ const WeeklyView = () => {
           document.querySelectorAll('.sortable-dragover').forEach(el => {
             el.classList.remove('sortable-dragover');
           });
+          // Cleanup any leftover drag artifacts if drop was cancelled
+          queueMicrotask(() => {
+            try {
+              document.querySelectorAll('.sortable-ghost, .task-ghost').forEach(el => {
+                if (el && el.parentNode && !el.closest('.task-list')) {
+                  el.parentNode.removeChild(el)
+                }
+              })
+            } catch (_) {}
+          })
         },
         // Handle when a task is dragged over this cell
         onAdd: async function(evt) {
+          if (evt.pullMode && evt.pullMode !== 'clone') {
+            return
+          }
+          if (evt.item?.dataset?.converted === 'true') {
+            return
+          }
+          if (evt.item) {
+            evt.item.dataset.converted = 'true'
+          }
           const taskId = evt.item.getAttribute('data-task-id') || evt.item.getAttribute('data-id');
           const hour = parseInt(evt.to.getAttribute('data-hour'), 10);
           const dateStr = evt.to.getAttribute('data-date');
@@ -504,6 +728,9 @@ const WeeklyView = () => {
               // Ignore - React may have already removed it
             }
           }, 0);
+          if (evt.clone && evt.clone.parentNode) {
+            evt.clone.parentNode.removeChild(evt.clone)
+          }
           
           if (taskId && !isNaN(hour) && dateStr) {
             // Parse the date string properly to avoid timezone issues
@@ -553,6 +780,7 @@ const WeeklyView = () => {
         chosenClass: 'sortable-chosen',
         dragClass: 'sortable-drag-active',
         dragoverClass: 'sortable-dragover',
+        draggable: '.task-item',
         onStart: function() {
           // Add a class to the body to indicate dragging is in progress
           document.body.classList.add('task-dragging');
@@ -565,9 +793,28 @@ const WeeklyView = () => {
           document.querySelectorAll('.sortable-dragover').forEach(el => {
             el.classList.remove('sortable-dragover');
           });
+          // Cleanup any leftover drag artifacts if drop was cancelled
+          queueMicrotask(() => {
+            try {
+              document.querySelectorAll('.sortable-ghost, .task-ghost').forEach(el => {
+                if (el && el.parentNode && !el.closest('.task-list')) {
+                  el.parentNode.removeChild(el)
+                }
+              })
+            } catch (_) {}
+          })
         },
         // Handle when a task is dragged over this cell
         onAdd: async function(evt) {
+          if (evt.pullMode && evt.pullMode !== 'clone') {
+            return
+          }
+          if (evt.item?.dataset?.converted === 'true') {
+            return
+          }
+          if (evt.item) {
+            evt.item.dataset.converted = 'true'
+          }
           const taskId = evt.item.getAttribute('data-task-id') || evt.item.getAttribute('data-id');
           const dateStr = evt.to.getAttribute('data-date');
           
@@ -581,6 +828,9 @@ const WeeklyView = () => {
               // Ignore - React may have already removed it
             }
           }, 0);
+          if (evt.clone && evt.clone.parentNode) {
+            evt.clone.parentNode.removeChild(evt.clone)
+          }
           
           if (taskId && dateStr) {
             const [year, month, day] = dateStr.split('-').map(Number);
@@ -615,13 +865,13 @@ const WeeklyView = () => {
   return (
     <div 
       ref={containerRef}
-      className="view-container"
+      className="view-container flex flex-col h-full"
       onWheel={handleWheel}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
     >
-      <div className="flex w-full border-b border-gray-200 dark:border-gray-700 sticky top-0 bg-white dark:bg-gray-800">
+      <div className="flex w-full border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 flex-shrink-0">
         <div className="w-16 text-center py-2 text-gray-500 border-r border-gray-200 dark:border-gray-700">
           GMT-7
         </div>
@@ -644,8 +894,8 @@ const WeeklyView = () => {
         })}
       </div>
       
-      {/* All-day events section */}
-      <div className="flex w-full border-b border-gray-200 dark:border-gray-700 sticky top-[41px] bg-white dark:bg-gray-800">
+      {/* All-day events section - fixed */}
+      <div className="flex w-full border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 z-20 flex-shrink-0">
         <div className="w-16 flex-shrink-0 text-center py-2 text-xs text-gray-500 border-r border-gray-200 dark:border-gray-700">
           All-day
         </div>
@@ -668,11 +918,18 @@ const WeeklyView = () => {
             return (
               <div 
                 key={dayIndex}
-                className="flex-1 relative border-r border-gray-200 dark:border-gray-700 droppable-cell"
+                className="flex-1 relative border-r border-gray-200 dark:border-gray-700 droppable-cell overflow-hidden"
                 data-date={format(day, 'yyyy-MM-dd')}
                 data-all-day="true"
-                style={{ minHeight: `${requiredHeight}px`, padding: '4px' }}
-                onClick={() => handleAllDayCellClick(day)}
+                style={{ 
+                  minHeight: `${requiredHeight}px`,
+                  maxHeight: `${requiredHeight}px`,
+                  padding: '4px'
+                }}
+                onClick={(e) => handleAllDayCellClick(e, day)}
+                onDrop={(e) => handleAllDayEventDrop(e, day)}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
               >
                 {eventsForDay.map((event, idx) => renderAllDayEvent(event, idx))}
               </div>
@@ -681,7 +938,7 @@ const WeeklyView = () => {
         </div>
       </div>
       
-      <div className="relative flex flex-1">
+      <div className="relative flex flex-1 overflow-y-auto min-h-0">
         {/* Time labels */}
         <div className="w-16 flex-shrink-0 relative z-10 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700">
           {hours.map((hour) => (
@@ -717,15 +974,15 @@ const WeeklyView = () => {
           
           {/* Day columns */}
           <div 
-            className="grid grid-cols-7 h-full" 
+            className="grid grid-cols-7" 
+            style={{ height: `${(DAY_END_HOUR - DAY_START_HOUR + 1) * HOUR_HEIGHT}px` }}
             onMouseUp={handleGridMouseUp}
             onMouseLeave={handleGridMouseUp}
           >
             {days.map((day, dayIndex) => (
               <div 
                 key={dayIndex}
-                className="relative border-r border-gray-200 dark:border-gray-700 min-h-full"
-                style={{ height: `${(DAY_END_HOUR - DAY_START_HOUR + 1) * HOUR_HEIGHT}px` }}
+                className="relative border-r border-gray-200 dark:border-gray-700 h-full week-day-column"
               >
                 {/* Hour cells for drag-to-create */}
                 {hours.map((hour) => (
@@ -742,6 +999,9 @@ const WeeklyView = () => {
                     onMouseDown={(e) => handleCellMouseDown(e, day, hour)}
                     onMouseMove={(e) => handleCellMouseMove(e, day, hour)}
                     onDoubleClick={(e) => handleCellDoubleClick(e, day, hour)}
+                    onDrop={(e) => handleEventDropOnHourCell(e, day, hour)}
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
                   />
                 ))}
                 

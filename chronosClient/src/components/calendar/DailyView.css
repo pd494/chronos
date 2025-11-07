@@ -1,0 +1,27 @@
+/* DailyView.css */
+
+/* Event drag hover styles for daily view */
+.day-hour-cell.event-dragover {
+  background-color: rgba(139, 92, 246, 0.2) !important;
+  position: relative;
+  box-shadow: inset 0 0 0 1px rgba(139, 92, 246, 0.55);
+  animation: purple-slot-pulse 0.9s ease-in-out infinite alternate;
+}
+
+.day-hour-cell.event-dragover::after {
+  content: '';
+  position: absolute;
+  inset: 8px;
+  border-radius: 6px;
+  border: 1px dashed rgba(139, 92, 246, 0.6);
+  pointer-events: none;
+}
+
+@keyframes purple-slot-pulse {
+  from {
+    background-color: rgba(139, 92, 246, 0.15);
+  }
+  to {
+    background-color: rgba(139, 92, 246, 0.35);
+  }
+}

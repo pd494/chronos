@@ -1,0 +1,7 @@
+/* MonthlyView.css */
+
+/* Event drag styles for month view */
+.calendar-day.event-dragover {
+  background-color: rgba(139, 92, 246, 0.2) !important;
+  position: relative;
+}

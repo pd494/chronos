@@ -1,16 +1,98 @@
 import { format } from 'date-fns'
+import { useState, useEffect } from 'react'
 import { useCalendar } from '../../context/CalendarContext'
 
 const EventIndicator = ({ event, isMonthView }) => {
-  const { openEventModal } = useCalendar()
+  const { openEventModal, selectedEvent, updateEvent } = useCalendar()
+  const isSelected = selectedEvent?.id === event.id
+  const [isDragging, setIsDragging] = useState(false)
+  const [shouldBounce, setShouldBounce] = useState(false)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    let timeoutId = null
+    const handleBounce = (evt) => {
+      if (evt?.detail?.eventId === event.id) {
+        setShouldBounce(true)
+        if (timeoutId) clearTimeout(timeoutId)
+        timeoutId = setTimeout(() => setShouldBounce(false), 600)
+      }
+    }
+    window.addEventListener('chronos:event-bounce', handleBounce)
+    return () => {
+      window.removeEventListener('chronos:event-bounce', handleBounce)
+      if (timeoutId) clearTimeout(timeoutId)
+    }
+  }, [event.id])
   
   const handleClick = (e) => {
+    if (isDragging) return
     e.stopPropagation()
     
-    // Store the clicked element position for modal placement
+    // Store the clicked event element for modal placement
+    const rect = e.currentTarget.getBoundingClientRect();
+    const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+    const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
+
+    window.lastClickedEvent = e.currentTarget;
     window.lastClickedCalendarDay = e.currentTarget;
+    window.lastClickedEventId = event.id;
+    window.lastCalendarAnchorRect = {
+      top: rect.top + scrollTop,
+      bottom: rect.bottom + scrollTop,
+      left: rect.left + scrollLeft,
+      right: rect.right + scrollLeft,
+      width: rect.width,
+      height: rect.height,
+      eventId: event.id
+    };
     
     openEventModal(event)
+  }
+
+  const handleDragStart = (e) => {
+    e.stopPropagation()
+    setIsDragging(true)
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('event', JSON.stringify(event))
+    e.dataTransfer.setData('eventId', event.id)
+    try { e.dataTransfer.setData('text/plain', ' ') } catch (_) {}
+    
+    // Mark this specific element as being dragged
+    e.currentTarget.setAttribute('data-dragging', 'true')
+    
+    // Create custom drag preview so the ghost doesn't stretch across the viewport
+    const rect = e.currentTarget.getBoundingClientRect()
+    const dragPreview = e.currentTarget.cloneNode(true)
+    dragPreview.style.opacity = '0.85'
+    dragPreview.style.position = 'absolute'
+    dragPreview.style.top = '-1000px'
+    dragPreview.style.left = '-1000px'
+    dragPreview.style.width = `${rect.width}px`
+    dragPreview.style.height = `${rect.height}px`
+    dragPreview.style.boxSizing = 'border-box'
+    dragPreview.style.pointerEvents = 'none'
+    document.body.appendChild(dragPreview)
+    const rawOffsetX = (e.clientX ?? rect.left) - rect.left
+    const rawOffsetY = (e.clientY ?? rect.top) - rect.top
+    const offsetX = Math.max(1, Math.min(rect.width - 1, rawOffsetX))
+    const offsetY = Math.max(1, Math.min(rect.height - 1, rawOffsetY))
+    try { e.dataTransfer.setDragImage(dragPreview, offsetX, offsetY) } catch (_) {}
+    setTimeout(() => {
+      if (dragPreview.parentNode) {
+        dragPreview.parentNode.removeChild(dragPreview)
+      }
+    }, 0)
+  }
+
+  const handleDragEnd = (e) => {
+    setIsDragging(false)
+    // Remove dragging marker
+    e.currentTarget.removeAttribute('data-dragging')
+    // Remove all dragover classes
+    document.querySelectorAll('.event-dragover').forEach(el => {
+      el.classList.remove('event-dragover')
+    })
   }
   
   const formattedTime = format(new Date(event.start), 'h:mma').toLowerCase();
@@ -84,12 +166,20 @@ const EventIndicator = ({ event, isMonthView }) => {
 
   return (
     <div
-      className={`text-xs mb-1 flex items-center space-x-1 px-1 py-0.5 cursor-pointer overflow-hidden ${isMonthView ? (isHexColor ? (event.isAllDay ? 'rounded-md' : '') : `${event.isAllDay ? getBgColorClass(eventColor) + ' bg-opacity-70' : ''} ${event.isAllDay ? 'rounded-md' : ''}`) : ''}`}
+      draggable={!isDragging}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+      className={`text-xs mb-1 flex items-center space-x-1 px-1 py-0.5 overflow-hidden transition-opacity hover:opacity-30 ${isMonthView ? (isHexColor ? (event.isAllDay ? 'rounded-md' : '') : `${event.isAllDay ? getBgColorClass(eventColor) + ' bg-opacity-70' : ''} ${event.isAllDay ? 'rounded-md' : ''}`) : ''} calendar-event ${shouldBounce ? 'event-bounce' : ''}`}
       onClick={handleClick}
+      data-event-id={event.id}
+      data-active={isSelected ? 'true' : 'false'}
       style={{ 
         maxWidth: '100%', 
         minWidth: 0,
-        ...(isMonthView && isHexColor && event.isAllDay ? bgStyle : {})
+        cursor: isDragging ? 'grabbing' : 'pointer',
+        opacity: isDragging ? 0.5 : 1,
+        ...(isMonthView && isHexColor && event.isAllDay ? bgStyle : {}),
+        ...(isSelected ? { boxShadow: '0 0 0 2px rgba(52, 120, 246, 0.4)', borderRadius: '8px' } : {})
       }}
     >
       {isMonthView ? (

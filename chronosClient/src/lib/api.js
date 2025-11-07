@@ -243,8 +243,18 @@ function toGoogleEventBody(eventData) {
     body.start = { date: toYMD(start) }
     body.end = { date: toYMD(end) }
   } else {
-    body.start = { dateTime: start.toISOString(), timeZone: tz }
-    body.end = { dateTime: end.toISOString(), timeZone: tz }
+    // Format datetime in local timezone, not UTC
+    const formatLocalDateTime = (d) => {
+      const y = d.getFullYear()
+      const m = String(d.getMonth() + 1).padStart(2, '0')
+      const day = String(d.getDate()).padStart(2, '0')
+      const h = String(d.getHours()).padStart(2, '0')
+      const min = String(d.getMinutes()).padStart(2, '0')
+      const s = String(d.getSeconds()).padStart(2, '0')
+      return `${y}-${m}-${day}T${h}:${min}:${s}`
+    }
+    body.start = { dateTime: formatLocalDateTime(start), timeZone: tz }
+    body.end = { dateTime: formatLocalDateTime(end), timeZone: tz }
   }
 
   return body
@@ -272,18 +282,20 @@ export const calendarApi = {
     return get(`/calendar/events?${params.toString()}`)
   }, 
   
-  async createEvent(eventData, calendarId = 'primary'){
+  async createEvent(eventData, calendarId = 'primary', sendNotifications = false){
     const payload = {
       calendar_id: calendarId,
-      event_data: toGoogleEventBody(eventData)
+      event_data: toGoogleEventBody(eventData),
+      send_notifications: sendNotifications
     }
     return postJson('/calendar/events', payload)
   },
   
-  async updateEvent(eventId, eventData, calendarId = 'primary'){
+  async updateEvent(eventId, eventData, calendarId = 'primary', sendNotifications = false){
     const payload = {
       calendar_id: calendarId,
-      event_data: toGoogleEventBody(eventData)
+      event_data: toGoogleEventBody(eventData),
+      send_notifications: sendNotifications
     }
     return putJson(`/calendar/events/${eventId}`, payload)
   },

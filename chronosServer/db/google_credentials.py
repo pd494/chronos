@@ -9,7 +9,12 @@ from google.auth.transport.requests import Request as GoogleRequest
 from config import settings
 
 logger = logging.getLogger(__name__)
-SCOPES = ["https://www.googleapis.com/auth/calendar"]
+SCOPES = [
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/calendar.events.readonly",
+    "https://www.googleapis.com/auth/calendar.readonly"
+]
 
 
 class GoogleCalendarService:
@@ -98,7 +103,7 @@ class GoogleCalendarService:
                     timeMax=time_max,
                     singleEvents=True,
                     orderBy='startTime',
-                    fields='items(id,summary,description,start,end,extendedProperties,status,created,updated)'
+                    fields='items(id,summary,description,start,end,extendedProperties,status,created,updated,attendees,location)'
                 ).execute()
                 events = events_result.get('items', [])
                 
@@ -115,12 +120,13 @@ class GoogleCalendarService:
                 detail="Failed to fetch events"
             )
     
-    def create_event(self, calendar_id: str, event_data: dict):
+    def create_event(self, calendar_id: str, event_data: dict, send_notifications: bool = False):
         try:
             service = self.get_service()
             created_event = service.events().insert(
                 calendarId=calendar_id,
-                body=event_data
+                body=event_data,
+                sendUpdates='all' if send_notifications else 'none'
             ).execute()
             return created_event
         except HttpError as error:
@@ -130,13 +136,14 @@ class GoogleCalendarService:
                 detail="Failed to create event"
             )
     
-    def update_event(self, event_id: str, calendar_id: str, event_data: dict):
+    def update_event(self, event_id: str, calendar_id: str, event_data: dict, send_notifications: bool = False):
         try:
             service = self.get_service()
             updated_event = service.events().update(
                 calendarId=calendar_id,
                 eventId=event_id,
-                body=event_data
+                body=event_data,
+                sendUpdates='all' if send_notifications else 'none'
             ).execute()
             return updated_event
         except HttpError as error:

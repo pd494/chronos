@@ -3,8 +3,10 @@ import { format, getHours, getMinutes, addDays } from 'date-fns'
 import { useCalendar } from '../../context/CalendarContext'
 import { useTaskContext } from '../../context/TaskContext'
 import DayEvent from '../events/DayEvent'
+import AllDayEvent from '../events/AllDayEvent'
 import Sortable from 'sortablejs'
 import { calculateTimeGridLayout } from '../../lib/eventLayout'
+import './DailyView.css'
 
 const HOUR_HEIGHT = 60 // Height of one hour in pixels
 const DAY_START_HOUR = 0 // Start displaying from 12 AM
@@ -13,6 +15,24 @@ const ALL_DAY_SECTION_HEIGHT = 40 // Height of the all-day events section
 const ALL_DAY_EVENT_HEIGHT = 30
 const ALL_DAY_EVENT_GAP = 4
 const TIMED_EVENT_GAP = 4
+const SNAP_INTERVAL_MINUTES = 30
+const MAX_SNAP_MINUTES = (DAY_END_HOUR * 60) + SNAP_INTERVAL_MINUTES
+const clampSnapMinutes = (minutes) => Math.max(0, Math.min(minutes, MAX_SNAP_MINUTES))
+const snapMinutesToLatestHalfHour = (totalMinutes) => {
+  if (!Number.isFinite(totalMinutes) || totalMinutes <= 0) return 0
+  return clampSnapMinutes(Math.floor(totalMinutes / SNAP_INTERVAL_MINUTES) * SNAP_INTERVAL_MINUTES)
+}
+const snapHourValue = (hourValue) => {
+  if (hourValue == null) return null
+  const totalMinutes = Math.max(0, hourValue) * 60
+  return snapMinutesToLatestHalfHour(totalMinutes) / 60
+}
+const snapHourMinutePair = (hour, minutes = 0) => {
+  const snappedMinutes = snapMinutesToLatestHalfHour((hour * 60) + minutes)
+  const snappedHour = Math.floor(snappedMinutes / 60)
+  const snappedMinute = snappedMinutes % 60
+  return { hour: snappedHour, minutes: snappedMinute }
+}
 
 const DailyView = () => {
   const {
@@ -21,7 +41,8 @@ const DailyView = () => {
     navigateToNext,
     navigateToPrevious,
     openEventModal,
-    getEventsForDate
+    getEventsForDate,
+    updateEvent
   } = useCalendar()
   
   const { convertTodoToEvent } = useTaskContext()
@@ -31,6 +52,13 @@ const DailyView = () => {
   const [isScrolling, setIsScrolling] = useState(false)
   const scrollThreshold = 50
   const timelineRef = useRef(null)
+  
+  // State for drag-to-create event functionality
+  const [isDragging, setIsDragging] = useState(false)
+  const [dragStart, setDragStart] = useState(null)
+  const [dragEnd, setDragEnd] = useState(null)
+  const hasDraggedRef = useRef(false)
+  const dragTimeoutRef = useRef(null)
   
   useEffect(() => {
     // Scroll to current time on initial load
@@ -114,6 +142,196 @@ const DailyView = () => {
   const handleTouchEnd = () => {
     touchStartX.current = null
   }
+
+  // Handle dropping an existing event onto a specific hour cell (preserve duration)
+  const handleEventDrop = (e, hour) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const eventData = e.dataTransfer.getData('event');
+    if (!eventData) return;
+
+    try {
+      const draggedEvent = JSON.parse(eventData);
+      const oldStart = new Date(draggedEvent.start);
+      const oldEnd = new Date(draggedEvent.end);
+      const rawDurationMs = Math.max(1, oldEnd.getTime() - oldStart.getTime());
+      const ONE_HOUR = 60 * 60 * 1000;
+      const durationMs = (draggedEvent.isAllDay || rawDurationMs >= 23 * ONE_HOUR)
+        ? ONE_HOUR
+        : rawDurationMs;
+
+      // Minute precision based on cursor position in the hour cell
+      const rect = e.currentTarget.getBoundingClientRect();
+      const relativeY = e.clientY - rect.top;
+      const minutePercentage = Math.min(1, Math.max(0, (relativeY % HOUR_HEIGHT) / HOUR_HEIGHT));
+      const minutes = Math.floor(minutePercentage * 60);
+      const { hour: snappedHour, minutes: snappedMinutes } = snapHourMinutePair(hour, minutes);
+
+      const newStart = new Date(currentDate);
+      newStart.setHours(snappedHour, snappedMinutes, 0, 0);
+      const newEnd = new Date(newStart.getTime() + durationMs);
+
+      // Optimistically update via context
+      updateEvent(draggedEvent.id, {
+        ...draggedEvent,
+        start: newStart,
+        end: newEnd,
+        isAllDay: false,
+      });
+    } catch (error) {
+      console.error('Error dropping event onto day hour cell:', error);
+    }
+
+    e.currentTarget.classList.remove('event-dragover');
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    e.currentTarget.classList.add('event-dragover');
+  };
+
+  const handleDragLeave = (e) => {
+    e.currentTarget.classList.remove('event-dragover');
+  };
+
+  const handleAllDayEventDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const eventData = e.dataTransfer.getData('event');
+    if (!eventData) return;
+
+    try {
+      const draggedEvent = JSON.parse(eventData);
+      const oldStart = new Date(draggedEvent.start);
+      const oldEnd = new Date(draggedEvent.end);
+      const durationMs = Math.max(30 * 60 * 1000, oldEnd.getTime() - oldStart.getTime());
+
+      const newStart = new Date(currentDate);
+      newStart.setHours(0, 0, 0, 0);
+      const msInDay = 24 * 60 * 60 * 1000;
+      let newEnd;
+
+      if (draggedEvent.isAllDay) {
+        const daySpan = Math.max(1, Math.round(durationMs / msInDay) || 1);
+        newEnd = new Date(newStart.getTime() + daySpan * msInDay);
+      } else {
+        newEnd = new Date(newStart.getTime() + msInDay);
+      }
+
+      updateEvent(draggedEvent.id, {
+        ...draggedEvent,
+        start: newStart,
+        end: newEnd,
+        isAllDay: true,
+      });
+    } catch (error) {
+      console.error('Error dropping all-day event in daily view:', error);
+    }
+
+    e.currentTarget.classList.remove('event-dragover');
+  };
+
+  const handleCellMouseDown = (e, hour) => {
+    if (e.button !== 0) return
+    
+    const rect = e.currentTarget.getBoundingClientRect()
+    const relativeY = e.clientY - rect.top
+    const minutePercentage = (relativeY % HOUR_HEIGHT) / HOUR_HEIGHT
+    const minutes = Math.floor(minutePercentage * 60)
+    const preciseHour = hour + (minutes / 60)
+    const snappedHour = snapHourValue(preciseHour)
+
+    // Store drag info but don't show preview yet
+    setDragStart(snappedHour)
+    setDragEnd(snappedHour)
+    hasDraggedRef.current = false
+    
+    // Delay showing drag preview by 500ms
+    dragTimeoutRef.current = setTimeout(() => {
+      setIsDragging(true)
+    }, 500)
+  }
+
+  const handleCellMouseMove = (e, hour) => {
+    if (!isDragging) return
+    hasDraggedRef.current = true
+
+    const rect = e.currentTarget.getBoundingClientRect()
+    const relativeY = e.clientY - rect.top
+    const minutePercentage = (relativeY % HOUR_HEIGHT) / HOUR_HEIGHT
+    const minutes = Math.floor(minutePercentage * 60)
+    setDragEnd(snapHourValue(hour + (minutes / 60)))
+  }
+
+  const handleGridMouseUp = () => {
+    // Clear the timeout if mouse up happens before drag starts
+    if (dragTimeoutRef.current) {
+      clearTimeout(dragTimeoutRef.current)
+      dragTimeoutRef.current = null
+    }
+    
+    if (!isDragging && dragStart === null) return;
+    
+    const wasDragging = hasDraggedRef.current && isDragging;
+    const savedDragStart = dragStart;
+    const savedDragEnd = dragEnd;
+    
+    setIsDragging(false);
+    setDragStart(null);
+    setDragEnd(null);
+    hasDraggedRef.current = false;
+    
+    if (wasDragging && savedDragStart !== null && savedDragEnd !== null) {
+      const startHour = Math.min(savedDragStart, savedDragEnd);
+      const endHour = Math.max(savedDragStart, savedDragEnd);
+      
+      const startDate = new Date(currentDate);
+      startDate.setHours(Math.floor(startHour), Math.round((startHour % 1) * 60), 0, 0);
+      
+      const endDate = new Date(currentDate);
+      endDate.setHours(Math.floor(endHour), Math.round((endHour % 1) * 60), 0, 0);
+      
+      openEventModal(null, true);
+      window.prefilledEventDates = {
+        startDate,
+        endDate,
+        title: '',
+        color: 'blue',
+        isAllDay: false
+      };
+    }
+  }
+
+  const handleCellDoubleClick = (e, hour) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const relativeY = e.clientY - rect.top;
+    const minutePercentage = (relativeY % HOUR_HEIGHT) / HOUR_HEIGHT;
+    const minutes = Math.floor(minutePercentage * 60);
+    
+    const startDate = new Date(currentDate);
+    startDate.setHours(hour, minutes, 0, 0);
+    
+    const endDate = new Date(startDate);
+    endDate.setHours(startDate.getHours() + 1, startDate.getMinutes(), 0, 0);
+    
+    openEventModal(null, true);
+    window.prefilledEventDates = {
+      startDate,
+      endDate,
+      title: '',
+      color: 'blue',
+      isAllDay: false
+    };
+  }
+  
+  useEffect(() => {
+    const handleMouseUp = () => handleGridMouseUp();
+    document.addEventListener('mouseup', handleMouseUp);
+    return () => document.removeEventListener('mouseup', handleMouseUp);
+  }, [isDragging, dragStart, dragEnd, currentDate, openEventModal])
   
   // Generate time slots
   const hours = []
@@ -173,59 +391,17 @@ const DailyView = () => {
   })
   
   // Function to render an all-day event
-  const renderAllDayEvent = (event) => {
-    const eventColor = event.color || 'blue';
-    
-    // Check if color is a hex code (starts with #)
-    const isHexColor = eventColor.startsWith('#');
-    
-    // Function to lighten a hex color for better appearance
-    const lightenHexColor = (hex, percent = 30) => {
-      hex = hex.replace('#', '');
-      const r = parseInt(hex.substring(0, 2), 16);
-      const g = parseInt(hex.substring(2, 4), 16);
-      const b = parseInt(hex.substring(4, 6), 16);
-      const lightenedR = Math.min(255, Math.floor(r + (255 - r) * (percent / 100)));
-      const lightenedG = Math.min(255, Math.floor(g + (255 - g) * (percent / 100)));
-      const lightenedB = Math.min(255, Math.floor(b + (255 - b) * (percent / 100)));
-      return `#${lightenedR.toString(16).padStart(2, '0')}${lightenedG.toString(16).padStart(2, '0')}${lightenedB.toString(16).padStart(2, '0')}`;
-    };
-    
-    // Function to darken a hex color for text/border
-    const darkenHexColor = (hex, percent = 30) => {
-      hex = hex.replace('#', '');
-      const r = parseInt(hex.substring(0, 2), 16);
-      const g = parseInt(hex.substring(2, 4), 16);
-      const b = parseInt(hex.substring(4, 6), 16);
-      const darkenedR = Math.floor(r * (1 - percent / 100));
-      const darkenedG = Math.floor(g * (1 - percent / 100));
-      const darkenedB = Math.floor(b * (1 - percent / 100));
-      return `#${darkenedR.toString(16).padStart(2, '0')}${darkenedG.toString(16).padStart(2, '0')}${darkenedB.toString(16).padStart(2, '0')}`;
-    };
-    
-    const backgroundColor = isHexColor ? lightenHexColor(eventColor, 30) : `var(--color-${eventColor}-500)`;
-    const textColor = isHexColor ? darkenHexColor(eventColor, 30) : `var(--color-${eventColor}-900)`;
-    return (
-      <div
-        key={event.id}
-        className="truncate rounded px-2 cursor-pointer text-xs relative flex items-center"
-        style={{
-          height: `${ALL_DAY_EVENT_HEIGHT}px`,
-          marginBottom: `${ALL_DAY_EVENT_GAP}px`,
-          backgroundColor: backgroundColor,
-          opacity: 0.85,
-        }}
-        onClick={() => openEventModal(event)}
-      >
-        <span 
-          className="font-medium truncate"
-          style={{ color: textColor }}
-        >
-          {event.title}
-        </span>
-      </div>
-    );
-  };
+  const renderAllDayEvent = (event) => (
+    <AllDayEvent
+      key={event.id}
+      event={event}
+      onOpen={openEventModal}
+      style={{
+        height: `${ALL_DAY_EVENT_HEIGHT}px`,
+        marginBottom: `${ALL_DAY_EVENT_GAP}px`
+      }}
+    />
+  );
   
   useEffect(() => {
     const hourCells = document.querySelectorAll('.day-hour-cell');
@@ -242,6 +418,7 @@ const DailyView = () => {
         ghostClass: 'sortable-ghost',
         dragClass: 'sortable-drag-active',
         dragoverClass: 'sortable-dragover',
+        draggable: '.task-item',
         onStart: function() {
           document.body.classList.add('task-dragging');
         },
@@ -250,8 +427,26 @@ const DailyView = () => {
           document.querySelectorAll('.sortable-dragover').forEach(el => {
             el.classList.remove('sortable-dragover');
           });
+          queueMicrotask(() => {
+            try {
+              document.querySelectorAll('.sortable-ghost, .task-ghost').forEach(el => {
+                if (el && el.parentNode && !el.closest('.task-list')) {
+                  el.parentNode.removeChild(el)
+                }
+              })
+            } catch (_) {}
+          })
         },
         onAdd: async function(evt) {
+          if (evt.pullMode && evt.pullMode !== 'clone') {
+            return
+          }
+          if (evt.item?.dataset?.converted === 'true') {
+            return
+          }
+          if (evt.item) {
+            evt.item.dataset.converted = 'true'
+          }
           const taskId = evt.item.getAttribute('data-task-id') || evt.item.getAttribute('data-id');
           const hour = parseInt(evt.to.getAttribute('data-hour'), 10);
           
@@ -265,6 +460,9 @@ const DailyView = () => {
               // Ignore - React may have already removed it
             }
           }, 0);
+          if (evt.clone && evt.clone.parentNode) {
+            evt.clone.parentNode.removeChild(evt.clone)
+          }
           
           if (taskId && !isNaN(hour)) {
             const startDate = new Date(currentDate);
@@ -306,8 +504,33 @@ const DailyView = () => {
       animation: 150,
       ghostClass: 'sortable-ghost',
       dragClass: 'sortable-drag-active',
-        onAdd: async function(evt) {
-          const taskId = evt.item.getAttribute('data-task-id') || evt.item.getAttribute('data-id');
+      draggable: '.task-item',
+      onStart: function() {
+        document.body.classList.add('task-dragging');
+      },
+      onEnd: function() {
+        document.body.classList.remove('task-dragging');
+        queueMicrotask(() => {
+          try {
+            document.querySelectorAll('.sortable-ghost, .task-ghost').forEach(el => {
+              if (el && el.parentNode && !el.closest('.task-list')) {
+                el.parentNode.removeChild(el)
+              }
+            })
+          } catch (_) {}
+        })
+      },
+      onAdd: async function(evt) {
+        if (evt.pullMode && evt.pullMode !== 'clone') {
+          return
+        }
+        if (evt.item?.dataset?.converted === 'true') {
+          return
+        }
+        if (evt.item) {
+          evt.item.dataset.converted = 'true'
+        }
+        const taskId = evt.item.getAttribute('data-task-id') || evt.item.getAttribute('data-id');
         
         // Remove the CLONE safely - defer to avoid conflicts with React
         setTimeout(() => {
@@ -319,6 +542,9 @@ const DailyView = () => {
             // Ignore - React may have already removed it
           }
         }, 0);
+        if (evt.clone && evt.clone.parentNode) {
+          evt.clone.parentNode.removeChild(evt.clone)
+        }
         
         if (taskId) {
           const startDate = new Date(currentDate);
@@ -344,20 +570,26 @@ const DailyView = () => {
   return (
     <div 
       ref={containerRef}
-      className="view-container"
+      className="view-container flex flex-col h-full"
       onWheel={handleWheel}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
     >
-      {/* All-day events section - always visible for dropping */}
-      <div className="flex w-full border-b border-gray-200 dark:border-gray-700 sticky top-0 bg-white dark:bg-gray-800 z-20">
+      {/* All-day events section - fixed at top, no scrolling */}
+      <div className="flex w-full border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 z-20 flex-shrink-0">
         <div className="w-16 flex-shrink-0 text-center py-2 text-xs text-gray-500 border-r border-gray-200 dark:border-gray-700">
           All-day
         </div>
         <div
-          className="flex-1 p-2 day-all-day-section"
-          style={{ minHeight: `${Math.max(ALL_DAY_SECTION_HEIGHT, Math.max(1, allDayEvents.length) * (ALL_DAY_EVENT_HEIGHT + ALL_DAY_EVENT_GAP) - ALL_DAY_EVENT_GAP)}px` }}
+          className="flex-1 p-2 day-all-day-section overflow-hidden"
+          style={{ 
+            minHeight: `${Math.max(ALL_DAY_SECTION_HEIGHT, Math.max(1, allDayEvents.length) * (ALL_DAY_EVENT_HEIGHT + ALL_DAY_EVENT_GAP) - ALL_DAY_EVENT_GAP)}px`,
+            maxHeight: `${Math.max(ALL_DAY_SECTION_HEIGHT, Math.max(1, allDayEvents.length) * (ALL_DAY_EVENT_HEIGHT + ALL_DAY_EVENT_GAP) - ALL_DAY_EVENT_GAP)}px`
+          }}
+          onDrop={handleAllDayEventDrop}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
         >
           {allDayEvents.map(event => renderAllDayEvent(event))}
           {allDayEvents.length === 0 && (
@@ -366,7 +598,7 @@ const DailyView = () => {
         </div>
       </div>
       
-      <div className="relative flex flex-1">
+      <div className="relative flex flex-1 overflow-y-auto min-h-0">
         {/* Time labels */}
         <div className="w-16 flex-shrink-0 relative z-10 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700">
           {hours.map((hour) => (
@@ -407,7 +639,7 @@ const DailyView = () => {
             className="relative min-h-full w-full"
             style={{ height: `${(DAY_END_HOUR - DAY_START_HOUR + 1) * HOUR_HEIGHT}px` }}
           >
-            {/* Hour cells for drag-to-drop */}
+            {/* Hour cells for drag-to-drop and drag-to-create */}
             {hours.map((hour) => (
               <div
                 key={hour}
@@ -417,8 +649,27 @@ const DailyView = () => {
                   height: `${HOUR_HEIGHT}px`,
                   top: `${(hour - DAY_START_HOUR) * HOUR_HEIGHT}px`
                 }}
+                onMouseDown={(e) => handleCellMouseDown(e, hour)}
+                onMouseMove={(e) => handleCellMouseMove(e, hour)}
+                onDoubleClick={(e) => handleCellDoubleClick(e, hour)}
+                onDrop={(e) => handleEventDrop(e, hour)}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
               />
             ))}
+            
+            {/* Drag preview */}
+            {isDragging && dragStart !== null && dragEnd !== null && (
+              <div
+                className="absolute left-0 right-0 bg-blue-200 dark:bg-blue-700 opacity-50 pointer-events-none rounded"
+                style={{
+                  top: `${Math.min(dragStart, dragEnd) * HOUR_HEIGHT}px`,
+                  height: `${Math.abs(dragEnd - dragStart) * HOUR_HEIGHT}px`,
+                  marginLeft: '8px',
+                  marginRight: '8px'
+                }}
+              />
+            )}
             
             {/* Events for this day (only regular events, not all-day) */}
             {calculateTimeGridLayout(regularEvents).map(({ event, column, columns }) => (

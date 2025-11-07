@@ -137,10 +137,15 @@ export const AuthProvider = ({ children }) => {
       provider: 'google',
       options: {
         redirectTo: `${window.location.origin}/`,
-        scopes: 'https://www.googleapis.com/auth/calendar',
+        scopes: [
+          'https://www.googleapis.com/auth/calendar',
+          'https://www.googleapis.com/auth/calendar.events',
+          'https://www.googleapis.com/auth/calendar.readonly'
+        ].join(' '),
         queryParams: {
           access_type: 'offline',
-          // prompt: 'consent'
+          prompt: 'consent',
+          include_granted_scopes: 'true'
         }
       }
     })

@@ -20,6 +20,12 @@ import { useAuth } from './AuthContext'
 import { monthKey as cacheMonthKey, getMonths as cacheGetMonths, putMonth as cachePutMonth, pruneOlderThan } from '../lib/cache'
 
 const CalendarContext = createContext()
+const EVENT_BOUNCE_EVENT = 'chronos:event-bounce'
+
+const dispatchBounceEvent = (eventId) => {
+  if (typeof window === 'undefined' || !eventId) return
+  window.dispatchEvent(new CustomEvent(EVENT_BOUNCE_EVENT, { detail: { eventId } }))
+}
 
 const INITIAL_PAST_MONTHS = 3
 const INITIAL_FUTURE_MONTHS = 3
@@ -316,6 +322,8 @@ export const CalendarProvider = ({ children }) => {
               end: endIso,
               color: newEvent.color,
               calendar_id: newEvent.calendar_id,
+              location: newEvent.location || '',
+              participants: newEvent.participants || [],
               todoId: newEvent.todoId,
               isOptimistic: newEvent.isOptimistic,
               isAllDay: newEvent.isAllDay,
@@ -329,6 +337,10 @@ export const CalendarProvider = ({ children }) => {
       }
     })
   }, [currentDate, getVisibleRange])
+
+  const triggerEventBounce = useCallback((eventId) => {
+    dispatchBounceEvent(eventId)
+  }, [])
 
   const hydrateFromSnapshot = useCallback(() => {
     try {
@@ -357,6 +369,8 @@ export const CalendarProvider = ({ children }) => {
             isOptimistic: ev.isOptimistic || false,
             isAllDay: ev.isAllDay || false,
             calendar_id: ev.calendar_id,
+            location: ev.location || '',
+            participants: ev.participants || [],
             todoId: todoId ? String(todoId) : undefined,
             isPendingSync
           }
@@ -462,6 +476,8 @@ export const CalendarProvider = ({ children }) => {
                   isGoogleEvent: true,
                   calendar_id: ev.calendar_id,
                   isAllDay: Boolean(ev.isAllDay),
+                  location: ev.location || '',
+                  participants: ev.participants || [],
                   todoId: todoId ? String(todoId) : undefined
                 })
               }
@@ -532,6 +548,11 @@ export const CalendarProvider = ({ children }) => {
             const privateExtendedProps = { ...(event.extendedProperties?.private || {}) }
             const categoryColor = privateExtendedProps.categoryColor
             const todoId = privateExtendedProps.todoId
+            
+            // Extract participants from attendees
+            const participants = Array.isArray(event.attendees) 
+              ? event.attendees.map(a => a.email).filter(Boolean)
+              : []
 
             return {
               id: event.id,
@@ -542,6 +563,8 @@ export const CalendarProvider = ({ children }) => {
               isGoogleEvent: true,
               calendar_id: event.calendar_id,
               isAllDay,
+              location: event.location || '',
+              participants,
               todoId: todoId ? String(todoId) : undefined
             }
           })
@@ -810,6 +833,21 @@ export const CalendarProvider = ({ children }) => {
       }
     }
   }, [dateKey])
+
+  const revertEventState = useCallback((snapshot) => {
+    if (!snapshot?.id) return
+
+    setEvents(prev => prev.map(event => event.id === snapshot.id ? { ...snapshot } : event))
+
+    for (const [key, arr] of eventsByDayRef.current.entries()) {
+      const filtered = arr.filter(event => event.id !== snapshot.id)
+      if (filtered.length !== arr.length) {
+        eventsByDayRef.current.set(key, filtered)
+      }
+    }
+    indexEventByDays(snapshot)
+    saveSnapshotsForAllViews(snapshot)
+  }, [indexEventByDays, saveSnapshotsForAllViews])
 
   useEffect(() => {
     rebuildEventsByDayIndex(events)
@@ -1090,8 +1128,8 @@ export const CalendarProvider = ({ children }) => {
           isGoogleEvent: true,
           calendar_id: eventData.calendar_id || 'primary',
           isOptimistic: isOptimistic || false,
-          isAllDay,
-          todoId: todoId ? String(todoId) : undefined
+          isAllDay
+          // Don't store todoId - each event is independent
         }
 
         if (todoId && isOptimistic) {
@@ -1124,9 +1162,6 @@ export const CalendarProvider = ({ children }) => {
               eventIdsRef.current.delete(replaceId)
               eventIdsRef.current.add(newEvent.id)
               unlinkEvent(replaceId)
-              if (newEvent.todoId) {
-                linkTodoEvent(newEvent.todoId, newEvent.id)
-              }
               
               // Remove old event from day index
               for (const [key, arr] of eventsByDayRef.current.entries()) {
@@ -1138,9 +1173,6 @@ export const CalendarProvider = ({ children }) => {
               
               indexEventByDays(newEvent)
               suppressedEventIdsRef.current.delete(newEvent.id)
-              if (newEvent.todoId) {
-                suppressedTodoIdsRef.current.delete(String(newEvent.todoId))
-              }
               return [...filtered, newEvent]
             }
             return prev
@@ -1167,14 +1199,8 @@ export const CalendarProvider = ({ children }) => {
           if (!eventIdsRef.current.has(newEvent.id)) {
             setEvents(prev => [...prev, newEvent])
             eventIdsRef.current.add(newEvent.id)
-            if (newEvent.todoId) {
-              linkTodoEvent(newEvent.todoId, newEvent.id)
-            }
             indexEventByDays(newEvent)
             suppressedEventIdsRef.current.delete(newEvent.id)
-            if (newEvent.todoId) {
-              suppressedTodoIdsRef.current.delete(String(newEvent.todoId))
-            }
           }
         }
       }
@@ -1377,7 +1403,8 @@ export const CalendarProvider = ({ children }) => {
     
     try {
       const calendarId = processedData.calendar_id || processedData.calendarId || 'primary'
-      const response = await calendarApi.createEvent(processedData, calendarId)
+      const sendNotifications = processedData.sendNotifications || false
+      const response = await calendarApi.createEvent(processedData, calendarId, sendNotifications)
       const created = response?.event || response
 
       const createdStart = coerceDate(created?.start?.dateTime || created?.start?.date || created?.start) || start
@@ -1451,13 +1478,23 @@ export const CalendarProvider = ({ children }) => {
   }, [indexEventByDays, saveSnapshotsForAllViews, removeEventFromAllSnapshots])
 
   const updateEvent = useCallback(async (id, updatedData) => {
+    // Check if this is an optimistic event (temp ID)
+    const isOptimistic = typeof id === 'string' && id.startsWith('temp-');
+    const existingEvent = events.find(e => e.id === id)
+    const previousEventSnapshot = existingEvent
+      ? {
+          ...existingEvent,
+          start: coerceDate(existingEvent.start) || new Date(),
+          end: coerceDate(existingEvent.end) || new Date()
+        }
+      : null
+    
     // Ensure dates are proper Date objects
     let start = coerceDate(updatedData.start)
     let end = coerceDate(updatedData.end)
 
     if (!start) {
-      const existing = events.find(e => e.id === id)
-      start = coerceDate(existing?.start) || new Date()
+      start = coerceDate(existingEvent?.start) || new Date()
     }
     if (!end || end <= start) {
       end = new Date(start.getTime() + 30 * 60 * 1000)
@@ -1506,18 +1543,30 @@ export const CalendarProvider = ({ children }) => {
       saveSnapshotsForAllViews({ ...fullEvent, ...processedData })
     }
     
+    // Don't send optimistic events to backend - wait for them to be resolved first
+    if (isOptimistic) {
+      return;
+    }
+    
     // Re-render happens from setEvents; avoid date jank that triggers heavy reloads
     // Call backend API to persist changes
     try {
       // Find existing event to get its calendar id
-      const existing = events.find(e => e.id === id)
-      const calendarId = existing?.calendar_id || 'primary'
-      await calendarApi.updateEvent(id, processedData, calendarId)
+      const calendarId = existingEvent?.calendar_id || 'primary'
+      const sendNotifications = processedData.sendNotifications || false
+      await calendarApi.updateEvent(id, processedData, calendarId, sendNotifications)
     } catch (error) {
       console.error('Failed to update event:', error);
-      // Could revert optimistic update here if needed
+      const message = typeof error?.message === 'string' ? error.message : ''
+      const forbidden = /forbiddenForNonOrganizer/i.test(message) || /Shared properties can only be changed/i.test(message)
+      if (previousEventSnapshot) {
+        revertEventState(previousEventSnapshot)
+        if (forbidden) {
+          triggerEventBounce(previousEventSnapshot.id)
+        }
+      }
     }
-  }, [indexEventByDays, events, saveSnapshotsForAllViews])
+  }, [indexEventByDays, events, saveSnapshotsForAllViews, revertEventState, triggerEventBounce])
 
   const deleteEvent = useCallback(async (event) => {
     const eventId = event?.id || event
@@ -1544,11 +1593,8 @@ export const CalendarProvider = ({ children }) => {
     // Remove from ALL snapshots immediately (month, week, day)
     removeEventFromAllSnapshots(eventId)
 
-    // Track locally deleted IDs/todos to prevent stale rehydration
+    // Track locally deleted IDs to prevent stale rehydration
     suppressedEventIdsRef.current.add(eventId)
-    if (snapshot.todoId) {
-      suppressedTodoIdsRef.current.add(String(snapshot.todoId))
-    }
 
     try {
       if (!isOptimistic) {
@@ -1566,15 +1612,9 @@ export const CalendarProvider = ({ children }) => {
       // Only restore if it wasn't a "already deleted" error
       setEvents(prev => [...prev, snapshot])
       eventIdsRef.current.add(eventId)
-      if (snapshot.todoId) {
-        linkTodoEvent(snapshot.todoId, eventId)
-      }
       indexEventByDays(snapshot)
       saveSnapshotsForAllViews(snapshot)
       suppressedEventIdsRef.current.delete(eventId)
-      if (snapshot.todoId) {
-        suppressedTodoIdsRef.current.delete(String(snapshot.todoId))
-      }
     }
   }, [unlinkEvent, linkTodoEvent, indexEventByDays, removeEventFromAllSnapshots, saveSnapshotsForAllViews])
 

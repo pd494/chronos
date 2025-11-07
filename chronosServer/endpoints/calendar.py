@@ -64,12 +64,13 @@ async def create_event(
     body = await request.json()
     calendar_id = body.get("calendar_id", "primary")
     event_data = body.get("event_data")
+    send_notifications = body.get("send_notifications", False)
     
     if not event_data:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing event_data")
     
     service = GoogleCalendarService(str(user.id), supabase)
-    created_event = service.create_event(calendar_id, event_data)
+    created_event = service.create_event(calendar_id, event_data, send_notifications)
     
     return {"event": created_event}
 
@@ -83,12 +84,13 @@ async def update_event(
     body = await request.json()
     calendar_id = body.get("calendar_id", "primary")
     event_data = body.get("event_data")
+    send_notifications = body.get("send_notifications", False)
     
     if not event_data:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing event_data")
     
     service = GoogleCalendarService(str(user.id), supabase)
-    updated_event = service.update_event(event_id, calendar_id, event_data)
+    updated_event = service.update_event(event_id, calendar_id, event_data, send_notifications)
     
     return {"event": updated_event}
 

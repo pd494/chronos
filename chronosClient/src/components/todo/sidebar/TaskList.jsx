@@ -1,8 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Sortable from 'sortablejs';
 import { useTaskContext } from '../../../context/TaskContext';
-import TaskScheduledBadge from './TaskScheduledBadge';
 import './TaskList.css';
+
+const DRAG_CLICK_SUPPRESSION_MS = 1200;
+
+// Shared drag state across all category groups
+const globalDragState = { dragging: false, lastEnd: 0 };
 
 const TaskItem = ({ task, onToggleComplete }) => {
   const checkboxRef = useRef(null);
@@ -21,7 +25,7 @@ const TaskItem = ({ task, onToggleComplete }) => {
         }
         setIsChecking(false);
         onToggleComplete(id);
-      }, 150);
+      }, 30);
     } else {
       onToggleComplete(id);
     }
@@ -40,7 +44,6 @@ const TaskItem = ({ task, onToggleComplete }) => {
         {(task.completed || isChecking) ? <span>✓</span> : <span></span>}
       </div>
       <div className="task-content">
-        <TaskScheduledBadge task={task} />
         <div className="task-text">{task.content}</div>
       </div>
       <div className="task-drag-handle">
@@ -51,9 +54,10 @@ const TaskItem = ({ task, onToggleComplete }) => {
 };
 
 const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory }) => {
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(category.name === 'Completed');
   const [isEditingNewTask, setIsEditingNewTask] = useState(false);
   const [newTaskText, setNewTaskText] = useState('');
+  const [renderKey, setRenderKey] = useState(0);
   const newTaskInputRef = useRef(null);
   const tasksContainerRef = useRef(null);
   const sortableRef = useRef(null);
@@ -73,21 +77,29 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
       return;
     }
 
+    if (sortableRef.current) {
+      return;
+    }
+
     const sortable = Sortable.create(tasksContainerRef.current, {
       animation: 150,
       handle: '.task-drag-handle',
-      filter: '.task-checkbox, .task-text, .task-scheduled-tag',
+      filter: '.task-checkbox, .task-text',
       preventOnFilter: false,
       group: {
         name: 'tasks',
         pull: 'clone',
-        put: false 
+        put: false,
+        revertClone: true
       },
       sort: false,
+      revertOnSpill: true,
+      removeCloneOnHide: false,
       ghostClass: 'task-ghost',
       chosenClass: 'task-chosen',
       dragClass: 'task-drag',
-      onStart: function(evt) {
+      onStart(evt) {
+        globalDragState.dragging = true;
         document.body.classList.add('task-dragging');
         document.documentElement.classList.add('dragging');
         if (evt.item) {
@@ -95,9 +107,44 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
           evt.item.setAttribute('data-task-id', taskId);
         }
       },
-      onEnd: function() {
+      onClone(evt) {
+        // Mark the clone so we know it's safe to remove
+        if (evt.clone) {
+          evt.clone.setAttribute('data-is-clone', 'true');
+        }
+      },
+      onEnd(evt) {
         document.body.classList.remove('task-dragging');
         document.documentElement.classList.remove('dragging');
+        globalDragState.lastEnd = Date.now();
+        
+        // Delay clearing the dragging flag to prevent race conditions
+        setTimeout(() => {
+          globalDragState.dragging = false;
+        }, 100);
+        
+        // Clean up only clones and ghost elements
+        setTimeout(() => {
+          try {
+            // Remove clones that were dropped outside
+            document.querySelectorAll('[data-is-clone="true"]').forEach(el => {
+              if (el && el.parentNode) {
+                el.parentNode.removeChild(el);
+              }
+            });
+            // Remove ghost elements
+            document.querySelectorAll('.sortable-ghost, .task-ghost').forEach(el => {
+              if (el && el.parentNode) {
+                el.parentNode.removeChild(el);
+              }
+            });
+          } catch (_) {}
+        }, 0);
+        
+        // Force React re-render as safety net (one frame delay)
+        requestAnimationFrame(() => {
+          setRenderKey(prev => prev + 1);
+        });
       }
     });
 
@@ -109,7 +156,7 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
         sortableRef.current = null;
       }
     };
-  }, [tasks, isCollapsed, category?.name]);
+  }, [isCollapsed, category?.name, tasks, renderKey]);
   
   const handleAddTask = () => {
     if (newTaskText.trim()) {
@@ -130,11 +177,20 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
   
   const getCategoryIcon = () => {
     if (!category.icon) return '⬤';
-    // If icon is a hex color, render a colored dot
     if (category.icon.startsWith('#')) {
       return <span className="dot" style={{ backgroundColor: category.icon }}></span>;
     }
     return category.icon;
+  };
+
+  const handleHeaderActivate = (event) => {
+    const now = Date.now();
+    if (globalDragState.dragging || now - globalDragState.lastEnd < DRAG_CLICK_SUPPRESSION_MS) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    setIsCollapsed(prev => !prev);
   };
 
   return (
@@ -142,7 +198,15 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
       <div className="category-header-container">
         <div 
           className="category-header" 
-          onClick={() => setIsCollapsed(!isCollapsed)}
+          role="button"
+          tabIndex={0}
+          onClick={handleHeaderActivate}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              handleHeaderActivate(event);
+            }
+          }}
         >
           <span className="category-icon">{getCategoryIcon()}</span>
           <span className="category-name">{category.name}</span>
@@ -158,12 +222,13 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
               e.stopPropagation();
               setIsEditingNewTask(true);
             }}
-          >+</button>
+          >+
+          </button>
         )}
       </div>
       
       {!isCollapsed && (
-        <div className="category-tasks" ref={tasksContainerRef}>
+        <div className="category-tasks" ref={tasksContainerRef} key={renderKey}>
           {tasks.map(task => (
             <TaskItem
               key={task.id}
@@ -209,56 +274,104 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
 
 const TaskList = ({ tasks, onToggleComplete, activeCategory, categories }) => {
   const { addTask } = useTaskContext();
+  const [renderKey, setRenderKey] = useState(0);
   const regularTasksContainerRef = useRef(null);
+  const regularSortableRef = useRef(null);
   
   const handleAddTaskToCategory = (text, categoryName) => {
     addTask({ content: text, categoryName });
   };
   
-  // Set up Sortable for regular (non-grouped) task list
   useEffect(() => {
     if (regularTasksContainerRef.current && activeCategory !== 'All') {
+      if (regularSortableRef.current) {
+        return;
+      }
+
       const sortable = Sortable.create(regularTasksContainerRef.current, {
         animation: 150,
         handle: '.task-drag-handle',
-        filter: '.task-checkbox, .task-text, .task-scheduled-tag',
+        filter: '.task-checkbox, .task-text',
         preventOnFilter: false,
         group: {
           name: 'tasks',
           pull: 'clone',
-          put: false 
+          put: false,
+          revertClone: true
         },
         sort: false,
+        revertOnSpill: true,
+        removeCloneOnHide: false,
         ghostClass: 'task-ghost',
         chosenClass: 'task-chosen',
         dragClass: 'task-drag',
         onStart: function(evt) {
+          globalDragState.dragging = true;
           document.body.classList.add('task-dragging');
           document.documentElement.classList.add('dragging');
-          // Store the task data on the clone
           if (evt.item) {
             const taskId = evt.item.getAttribute('data-id');
             evt.item.setAttribute('data-task-id', taskId);
           }
         },
+        onClone: function(evt) {
+          // Mark the clone so we know it's safe to remove
+          if (evt.clone) {
+            evt.clone.setAttribute('data-is-clone', 'true');
+          }
+        },
         onEnd: function(evt) {
           document.body.classList.remove('task-dragging');
           document.documentElement.classList.remove('dragging');
+          globalDragState.lastEnd = Date.now();
+          
+          // Delay clearing the dragging flag to prevent race conditions
+          setTimeout(() => {
+            globalDragState.dragging = false;
+          }, 100);
+          
+          // Clean up only clones and ghost elements
+          setTimeout(() => {
+            try {
+              // Remove clones that were dropped outside
+              document.querySelectorAll('[data-is-clone="true"]').forEach(el => {
+                if (el && el.parentNode) {
+                  el.parentNode.removeChild(el);
+                }
+              });
+              // Remove ghost elements
+              document.querySelectorAll('.sortable-ghost, .task-ghost').forEach(el => {
+                if (el && el.parentNode) {
+                  el.parentNode.removeChild(el);
+                }
+              });
+            } catch (_) {}
+          }, 0);
+          
+          // Force React re-render as safety net (one frame delay)
+          requestAnimationFrame(() => {
+            setRenderKey(prev => prev + 1);
+          });
         }
       });
       
+      regularSortableRef.current = sortable;
+
       return () => {
-        sortable.destroy();
+        if (regularSortableRef.current) {
+          regularSortableRef.current.destroy();
+          regularSortableRef.current = null;
+        }
       };
+    } else if (regularSortableRef.current) {
+      regularSortableRef.current.destroy();
+      regularSortableRef.current = null;
     }
-  }, [activeCategory]); // Only recreate when switching categories
+  }, [activeCategory, renderKey]);
   
-  // If we're in the 'All' tab, group tasks by category
   if (activeCategory === 'All') {
-    // Group tasks by category
     const tasksByCategory = {};
     
-    // Initialize with all categories, even empty ones
     categories.forEach(cat => {
       if (cat.id !== 'all' && cat.id !== 'add-category') {
         const orderValue = typeof cat.order === 'number' ? cat.order : categories.findIndex(c => c.id === cat.id);
@@ -270,7 +383,6 @@ const TaskList = ({ tasks, onToggleComplete, activeCategory, categories }) => {
       }
     });
     
-    // Add tasks to their categories (skip Uncategorized)
     tasks.forEach(task => {
       const category = task.category_name;
       if (!category || category === 'Uncategorized') return;
@@ -278,14 +390,13 @@ const TaskList = ({ tasks, onToggleComplete, activeCategory, categories }) => {
       if (!tasksByCategory[category]) {
         tasksByCategory[category] = {
           tasks: [],
-          icon: '⬤', // Default icon
+          icon: '⬤',
           order: category === 'Completed' ? Number.MAX_SAFE_INTEGER : Object.keys(tasksByCategory).length
         };
       }
       tasksByCategory[category].tasks.push(task);
     });
     
-    // Make sure all categories from the context are included, even if they don't have tasks
     categories.forEach(cat => {
       if (cat.id !== 'all' && cat.id !== 'add-category' && !tasksByCategory[cat.name]) {
         const orderValue = typeof cat.order === 'number' ? cat.order : categories.findIndex(c => c.id === cat.id);
@@ -297,7 +408,6 @@ const TaskList = ({ tasks, onToggleComplete, activeCategory, categories }) => {
       }
     });
     
-    // Sort categories by order, ensuring Completed is always last
     const sortedCategories = Object.entries(tasksByCategory)
       .sort(([, a], [, b]) => a.order - b.order);
     
@@ -323,9 +433,8 @@ const TaskList = ({ tasks, onToggleComplete, activeCategory, categories }) => {
     );
   }
   
-  // Regular view for specific categories
   return (
-    <div className="task-list" ref={regularTasksContainerRef}>
+    <div className="task-list" ref={regularTasksContainerRef} key={renderKey}>
       {tasks.map(task => (
         <TaskItem
           key={task.id}

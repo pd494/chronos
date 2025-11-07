@@ -1,4 +1,4 @@
-a.task-list {
+.task-list {
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -9,21 +9,23 @@ a.task-list {
 
 /* Sortable specific styles */
 .sortable-ghost {
-  opacity: 0.4;
-  background-color: #c8ebfb !important;
+  opacity: 0.25;
+  background-color: rgba(59, 130, 246, 0.15) !important;
+  border-radius: 16px;
 }
 
 .sortable-drag {
-  opacity: 0.8;
-  background-color: #f5f5f5;
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
+  opacity: 0.9;
+  background-color: #ffffff;
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.12);
+  border-radius: 16px;
   z-index: 1000;
 }
 
 .task-drag {
-  transform: rotate(1deg) !important;
-  background-color: rgba(59, 130, 246, 0.15) !important;
-  border: 1px solid rgba(59, 130, 246, 0.4) !important;
+  background-color: rgba(59, 130, 246, 0.12) !important;
+  border: 1px solid rgba(59, 130, 246, 0.3) !important;
+  transform: none !important;
   cursor: grabbing !important;
   z-index: 1001 !important;
 }
@@ -124,20 +126,6 @@ a.task-list {
   white-space: nowrap;
 }
 
-.task-scheduled-tag {
-  margin-right: 12px;
-  padding: 2px 6px;
-  background-color: #ececec;
-  border-radius: 8px;
-  font-size: 9px;
-  color: #0a0a0c;
-  font-weight: 500;
-  white-space: nowrap;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid rgba(0, 0, 0, 0.04);
-}
 
 .task-drag-handle {
   cursor: grab;
@@ -155,10 +143,6 @@ a.task-list {
   overflow: hidden;
 }
 
-.task-content .task-scheduled-tag {
-  margin: 0 0 4px 0;
-  align-self: flex-start;
-}
 
 
 /* Styles for the new editable task item */
@@ -174,7 +158,6 @@ a.task-list {
   font-size: inherit;
   font-family: inherit;
   color: inherit;
-  padding: 0;
 }
 
 .empty-task-list, .empty-category {
@@ -304,4 +287,11 @@ a.task-list {
 
 .category-group-wrapper.with-spacing {
   margin-top: 14.4px; /* Reduced spacing between categories by 10% */
+}
+
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
 }

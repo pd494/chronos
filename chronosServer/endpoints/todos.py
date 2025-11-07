@@ -436,7 +436,7 @@ async def convert_todo_to_event(
         
         event_data = {
             "summary": todo.get("content", "Untitled Event"),
-            "description": f"Converted from todo: {todo.get('content', '')}",
+            "description": f"Converted from todo in Chronos: {todo.get('content', '')}",
         }
 
         extended_props = event_data.get("extendedProperties", {}) or {}

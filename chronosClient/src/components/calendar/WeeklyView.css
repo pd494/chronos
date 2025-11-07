@@ -35,7 +35,7 @@
   left: 0;
   right: 0;
   cursor: default;
-  z-index: 2;
+  z-index: 1;
 }
 
 .drag-selection {
@@ -159,5 +159,41 @@
   to {
     transform: translate(-50%, -50%) scale(1.15);
     opacity: 0.8;
+  }
+}
+
+/* Event drag styles */
+.week-day-column.event-dragover {
+  background-color: rgba(139, 92, 246, 0.2) !important;
+  position: relative;
+}
+
+.hour-cell.event-dragover {
+  background-color: rgba(139, 92, 246, 0.2) !important;
+  position: relative;
+  box-shadow: inset 0 0 0 1px rgba(139, 92, 246, 0.6);
+  animation: purple-slot-pulse 0.9s ease-in-out infinite alternate;
+}
+
+.hour-cell.event-dragover::after {
+  content: '';
+  position: absolute;
+  inset: 6px 8px;
+  border-radius: 6px;
+  border: 1px dashed rgba(139, 92, 246, 0.65);
+  pointer-events: none;
+}
+
+.droppable-cell.event-dragover {
+  background-color: rgba(139, 92, 246, 0.2) !important;
+  position: relative;
+}
+
+@keyframes purple-slot-pulse {
+  from {
+    background-color: rgba(139, 92, 246, 0.15);
+  }
+  to {
+    background-color: rgba(139, 92, 246, 0.35);
   }
 }

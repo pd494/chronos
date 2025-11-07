@@ -455,29 +455,8 @@ export const TaskProvider = ({ children }) => {
           : toLocalDateOnlyString(new Date(startDate.getTime() + 24 * 60 * 60 * 1000)))
       : isoEnd;
 
-    const previousSnapshot = {
-      date: task.date,
-      scheduled_date: task.scheduled_date,
-      scheduled_at: task.scheduled_at,
-      scheduled_is_all_day: task.scheduled_is_all_day,
-      google_event_id: task.google_event_id
-    };
-
-    // Immediately reflect scheduled time in the sidebar
-    setTasksEnhanced(prev => prev.map(t => (
-      t.id === todoId
-        ? enhanceTaskWithSchedule({
-            ...t,
-            date: payloadStart,
-            scheduled_date: payloadStart,
-            scheduled_at: payloadStart,
-            scheduled_is_all_day: isAllDay
-          })
-        : t
-    )));
-
     // Create optimistic event immediately with category color
-    const optimisticEventId = `temp-${Date.now()}`;
+    const optimisticEventId = `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     const optimisticEvent = {
       id: optimisticEventId,
       summary: task.content,
@@ -490,8 +469,8 @@ export const TaskProvider = ({ children }) => {
         : { dateTime: isoEnd },
       calendar_id: 'primary',
       isAllDay,
-      color: categoryColor,
-      todoId
+      color: categoryColor
+      // Don't include todoId - each event is independent
     };
 
     // Dispatch immediately for instant UI update
@@ -516,18 +495,9 @@ export const TaskProvider = ({ children }) => {
         ...response.data,
         title: response.data?.summary || task.content,
         isAllDay,
-        color: categoryColor,
-        todoId
+        color: categoryColor
+        // Don't include todoId - each event is independent
       };
-
-      setTasksEnhanced(prev => prev.map(t => (
-        t.id === todoId
-          ? {
-              ...t,
-              google_event_id: resolvedEvent.id
-            }
-          : t
-      )))
 
       // Update with real event data
       window.dispatchEvent(new CustomEvent('todoConvertedToEvent', {
@@ -539,8 +509,7 @@ export const TaskProvider = ({ children }) => {
         }
       }));
 
-      // Background refresh to ensure sidebar state stays in sync
-      try { await loadTasks(); } catch (_) {}
+      // Don't refresh tasks after scheduling - keep UI stable
 
       return resolvedEvent;
     } catch (error) {
@@ -551,86 +520,11 @@ export const TaskProvider = ({ children }) => {
         detail: { eventId: optimisticEventId }
       }));
 
-      // revert scheduled tag if backend failed
-      setTasksEnhanced(prev => prev.map(t => (
-        t.id === todoId
-          ? enhanceTaskWithSchedule({
-              ...t,
-              date: previousSnapshot.date,
-              scheduled_date: previousSnapshot.scheduled_date,
-              scheduled_at: previousSnapshot.scheduled_at,
-              scheduled_is_all_day: previousSnapshot.scheduled_is_all_day,
-              google_event_id: previousSnapshot.google_event_id
-            })
-          : t
-      )));
-      
       throw error;
     }
   };
 
-  useEffect(() => {
-    const handleCalendarSync = (event) => {
-      const todoIds = Array.isArray(event.detail?.todoIds)
-        ? event.detail.todoIds.map(id => String(id))
-        : null;
-      if (!todoIds) return;
-      const activeTodoIds = new Set(todoIds);
-      const cleared = [];
-
-      setTasksEnhanced(prev => {
-        if (!Array.isArray(prev) || prev.length === 0) {
-          return prev;
-        }
-
-        let mutated = false;
-        const next = prev.map(task => {
-          if (!task) {
-            return task;
-          }
-          const taskId = String(task.id);
-          const hasScheduleMetadata = Boolean(
-            task.google_event_id ||
-            task.date ||
-            task.scheduled_date ||
-            task.scheduled_at
-          );
-          if (!hasScheduleMetadata) {
-            return task;
-          }
-          if (activeTodoIds.has(taskId)) {
-            return task;
-          }
-          mutated = true;
-          cleared.push(taskId);
-          return {
-            ...task,
-            date: null,
-            scheduled_date: null,
-            scheduled_at: null,
-            scheduled_is_all_day: false,
-            google_event_id: null
-          };
-        });
-
-        return mutated ? next : prev;
-      });
-
-      if (cleared.length) {
-        const uniqueIds = Array.from(new Set(cleared));
-        Promise.allSettled(
-          uniqueIds.map(id =>
-            todosApi.updateTodo(id, { date: null, google_event_id: null })
-          )
-        ).catch(() => {});
-      }
-    };
-
-    window.addEventListener('calendarTodoEventsSynced', handleCalendarSync);
-    return () => {
-      window.removeEventListener('calendarTodoEventsSynced', handleCalendarSync);
-    };
-  }, [setTasksEnhanced]);
+  // Removed problematic calendar sync handler that was clearing todo schedule metadata
 
   return (
     <TaskContext.Provider value={{ 
