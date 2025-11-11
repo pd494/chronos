@@ -124,4 +124,33 @@ async def delete_event(
     service.delete_event(event_id, calendar_id)
     
     return {"message": "Event deleted successfully"}
+
+@router.post("/events/{event_id}/respond")
+async def respond_to_event(
+    event_id: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_client)
+):
+    body = await request.json()
+    response_status = body.get("response_status")
+    calendar_id = body.get("calendar_id", "primary")
+
+    if not isinstance(response_status, str):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing response_status"
+        )
+
+    normalized = response_status.lower()
+    if normalized not in {"accepted", "declined", "tentative"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid response_status"
+        )
+
+    service = GoogleCalendarService(str(user.id), supabase)
+    updated_event = service.respond_to_event(event_id, calendar_id, normalized, user.email)
+
+    return {"event": updated_event}
         

@@ -70,6 +70,12 @@ const ORDINAL_SELECT_OPTIONS = [
   { value: -1, label: 'last' }
 ]
 
+const RSVP_OPTIONS = [
+  { label: 'Maybe', value: 'tentative' },
+  { label: 'Decline', value: 'declined' },
+  { label: 'Accept', value: 'accepted' }
+]
+
 // Helper to get initials from email
 const getInitials = (email) => {
   const name = email.split('@')[0];
@@ -190,6 +196,7 @@ const EventModal = () => {
     closeEventModal: contextCloseEventModal,
     createEvent,
     updateEvent,
+    respondToInvite,
     deleteEvent,
     view
   } = useCalendar()
@@ -220,6 +227,10 @@ const EventModal = () => {
   const [recurrenceDropdownCoords, setRecurrenceDropdownCoords] = useState({ top: 0, left: 0, width: 280 })
   const [showRecurringDeletePrompt, setShowRecurringDeletePrompt] = useState(false)
   const [deletePromptCoords, setDeletePromptCoords] = useState({ top: 0, left: 0 })
+  const [inviteResponseLoading, setInviteResponseLoading] = useState(false)
+  const [inviteResponseError, setInviteResponseError] = useState('')
+  const [optimisticRSVPStatus, setOptimisticRSVPStatus] = useState(null)
+  const currentRSVPStatus = selectedEvent ? (optimisticRSVPStatus ?? selectedEvent.viewerResponseStatus) : null
   const deletePromptRef = useRef(null)
   const [modalPosition, setModalPosition] = useState({ top: '50%', left: '50%', transform: 'translate(-50%, -50%)', pointerSide: 'left' })
   const [isFromDayClick, setIsFromDayClick] = useState(false)
@@ -248,6 +259,19 @@ const EventModal = () => {
     }
     return base
   }, [])
+
+  const formatInviteStatus = (status) => {
+    switch (status) {
+      case 'accepted':
+        return 'Accepted'
+      case 'declined':
+        return 'Declined'
+      case 'tentative':
+        return 'Maybe'
+      default:
+        return 'no response'
+    }
+  }
 
   const computeRecurrenceDropdownPlacement = useCallback(() => {
     if (typeof window === 'undefined') return
@@ -560,6 +584,12 @@ const EventModal = () => {
   }, [selectedEvent])
 
   useEffect(() => {
+    setInviteResponseLoading(false)
+    setInviteResponseError('')
+    setOptimisticRSVPStatus(null)
+  }, [selectedEvent?.id])
+
+  useEffect(() => {
     if (!internalVisible) return
     if (titleInputRef.current) {
       titleInputRef.current.focus({ preventScroll: true })
@@ -592,6 +622,26 @@ const EventModal = () => {
   useEffect(() => {
     setRecurrenceSummary(conciseRecurrenceSummary(recurrenceState))
   }, [recurrenceState, conciseRecurrenceSummary])
+
+  const handleInviteResponse = useCallback(async (status) => {
+    if (!selectedEvent || inviteResponseLoading) return
+    const currentStatus = optimisticRSVPStatus ?? selectedEvent.viewerResponseStatus
+    if (currentStatus === status) return
+    
+    setOptimisticRSVPStatus(status)
+    setInviteResponseError('')
+    setInviteResponseLoading(true)
+    closeAndAnimateOut()
+    
+    try {
+      await respondToInvite(selectedEvent.id, status)
+    } catch (error) {
+      setOptimisticRSVPStatus(null)
+      setInviteResponseError('Could not update your RSVP. Please try again.')
+    } finally {
+      setInviteResponseLoading(false)
+    }
+  }, [selectedEvent, inviteResponseLoading, respondToInvite, closeAndAnimateOut, optimisticRSVPStatus])
   
   // Detect changes
   useEffect(() => {
@@ -1064,6 +1114,13 @@ const EventModal = () => {
           className="px-6 py-2.5"
         >
           <div className="space-y-2">
+            {/* Shared edit notice for attendee edits */}
+            {selectedEvent && selectedEvent.viewerIsAttendee && !selectedEvent.viewerIsOrganizer && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 shadow-sm">
+                Changes you make only update your view of this shared event.
+              </div>
+            )}
+
             {/* Event Name */}
             <div>
               <label className="block text-xs font-medium text-gray-700 mb-1">Event Name</label>
@@ -1076,7 +1133,7 @@ const EventModal = () => {
                 ref={titleInputRef}
               />
             </div>
-            
+
             {/* Date, Color, Repeat Row */}
             <div className="grid grid-cols-[minmax(0,1.35fr)_auto_minmax(0,1fr)] gap-2 items-end">
               <div>
@@ -1121,7 +1178,7 @@ const EventModal = () => {
                   </button>
                   {showColorPicker && (
                     <div className="absolute z-50 mt-1 p-2 bg-white rounded-lg shadow-lg border border-gray-200">
-                      <div className="grid grid-cols-4 gap-2">
+                      <div className="grid grid-cols-4 gap-3">
                         {CATEGORY_COLORS.map((colorOption) => (
                           <button
                             key={colorOption}
@@ -1635,6 +1692,52 @@ const EventModal = () => {
             </div>
           </div>
           
+          {/* RSVP Controls */}
+          {selectedEvent?.inviteCanRespond && (
+            <div className="mt-4 pt-3 border-t border-gray-100">
+              <div className="flex items-center gap-3 flex-wrap">
+                <p className="text-sm font-semibold text-gray-900">Going?</p>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {RSVP_OPTIONS.map((option) => {
+                    const isActive = currentRSVPStatus === option.value
+                    const commonClasses = 'px-3.5 py-1.5 rounded-full border text-sm font-semibold transition-all flex items-center justify-center gap-1 min-w-[90px]'
+                    let palette = 'bg-white text-gray-700 border-gray-200 hover:border-gray-300'
+                    if (option.value === 'accepted') {
+                      palette = isActive
+                        ? 'bg-[#9F86FF] text-white border-[#9F86FF]'
+                        : 'bg-[rgba(159,134,255,0.15)] text-[#5c3fb3] border-[rgba(159,134,255,0.3)] hover:border-[#9F86FF]'
+                    } else if (option.value === 'declined') {
+                      palette = isActive
+                        ? 'bg-[#F87171] text-white border-[#F87171]'
+                        : 'bg-[rgba(248,113,113,0.15)] text-[#b91c1c] border-[rgba(248,113,113,0.25)] hover:border-[#F87171]'
+                    } else if (isActive) {
+                      palette = 'bg-gray-900 text-white border-gray-900'
+                    }
+                    const inactiveFade = isActive ? '' : ' opacity-55 hover:opacity-100'
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => handleInviteResponse(option.value)}
+                        disabled={inviteResponseLoading}
+                        className={`${commonClasses} ${palette}${inactiveFade}`}
+                      >
+                        {isActive && <FiCheck size={14} />}
+                        {option.label}
+                      </button>
+                    )
+                  })}
+                  {inviteResponseLoading && (
+                    <span className="text-xs text-gray-500">Saving…</span>
+                  )}
+                </div>
+              </div>
+              {inviteResponseError && (
+                <p className="text-xs text-red-500 mt-2">{inviteResponseError}</p>
+              )}
+            </div>
+          )}
+
           {/* Action Buttons */}
           <div className="flex justify-between items-center mt-3 pt-2.5 border-t border-gray-100">
             <div className="flex space-x-1.5">

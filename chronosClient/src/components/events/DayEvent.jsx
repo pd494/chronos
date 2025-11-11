@@ -129,12 +129,24 @@ const DayEvent = ({ event, hourHeight, dayStartHour, position }) => {
     ? `calc(${leftPercent}% + ${columnIndex * gap}px)`
     : '8px'
 
+  const responseStatus = typeof event.viewerResponseStatus === 'string'
+    ? event.viewerResponseStatus.toLowerCase()
+    : (event.isInvitePending ? 'needsaction' : null)
+  const isPendingInvite = responseStatus === 'needsaction'
+  const isTentative = responseStatus === 'tentative'
+  const isDeclined = responseStatus === 'declined'
+  const stripedClass = (isPendingInvite || isTentative) ? 'pending-invite-block' : ''
+  const declinedClass = isDeclined ? 'declined-event-block' : ''
+  const titleColor = isDeclined ? 'rgba(71, 85, 105, 0.6)' : colors.text
+  const timeColor = isDeclined ? 'rgba(71, 85, 105, 0.6)' : colors.text
+  const backgroundColor = isDeclined ? 'rgba(148, 163, 184, 0.225)' : colors.background
+
   return (
     <div
       draggable="true"
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
-      className={`absolute rounded-lg p-2 overflow-hidden text-sm z-10 group event-draggable ${shouldBounce ? 'event-bounce' : ''}`}
+      className={`absolute rounded-lg p-2 overflow-hidden text-sm z-10 group event-draggable ${shouldBounce ? 'event-bounce' : ''} ${stripedClass} ${declinedClass}`}
       style={{
         cursor: isDragging ? 'grabbing' : 'pointer',
         top: `${top}px`,
@@ -142,10 +154,12 @@ const DayEvent = ({ event, hourHeight, dayStartHour, position }) => {
         minHeight: '25px',
         left: leftCalc,
         width: widthCalc,
-        backgroundColor: colors.background,
+        backgroundColor,
         zIndex: 20 + columnIndex,
         boxShadow: isSelected ? '0 0 0 2px rgba(52, 120, 246, 0.6)' : undefined,
-        opacity: isDragging ? 0.25 : 1
+        opacity: isDragging ? 0.25 : ((isPendingInvite || isTentative) ? 0.9 : 1),
+        border: (isPendingInvite || isTentative) ? '1px dashed rgba(148, 163, 184, 0.9)' : undefined,
+        filter: (isPendingInvite || isTentative) ? 'saturate(0.9)' : undefined
       }}
       onClick={handleClick}
       data-event-id={event.id}
@@ -163,7 +177,7 @@ const DayEvent = ({ event, hourHeight, dayStartHour, position }) => {
         <div 
           className="font-medium truncate mb-0.5" 
           style={{ 
-            color: colors.text
+            color: titleColor
           }}
         >
           {event.title}
@@ -171,7 +185,7 @@ const DayEvent = ({ event, hourHeight, dayStartHour, position }) => {
         <div 
           className="text-xs"
           style={{ 
-            color: colors.text
+            color: timeColor
           }}
         >
           {formatTime(startDate)}

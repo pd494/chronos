@@ -39,6 +39,12 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, position }) => {
   const duration = differenceInMinutes(endDate, startDate)
   const height = (duration / 60) * hourHeight
   const isSelected = selectedEvent?.id === event.id
+  const responseStatus = typeof event.viewerResponseStatus === 'string'
+    ? event.viewerResponseStatus.toLowerCase()
+    : (event.isInvitePending ? 'needsaction' : null)
+  const isPendingInvite = responseStatus === 'needsaction'
+  const isTentative = responseStatus === 'tentative'
+  const isDeclined = responseStatus === 'declined'
 
   const handleClick = (e) => {
     if (isDragging) return
@@ -134,12 +140,16 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, position }) => {
     ? `calc(${leftPercent}% + ${columnIndex * gap + baseInset}px)`
     : `${baseInset}px`
 
+  const titleColor = isDeclined ? 'rgba(71, 85, 105, 0.6)' : colors.text
+  const timeColor = isDeclined ? 'rgba(71, 85, 105, 0.6)' : colors.text
+  const backgroundColor = isDeclined ? 'rgba(148, 163, 184, 0.225)' : colors.background
+
   return (
     <div
       draggable="true"
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
-      className={`absolute rounded-lg p-1 overflow-hidden text-sm z-10 group event-draggable ${shouldBounce ? 'event-bounce' : ''}`}
+      className={`absolute rounded-lg p-1 overflow-hidden text-sm z-10 group event-draggable ${shouldBounce ? 'event-bounce' : ''} ${(isPendingInvite || isTentative) ? 'pending-invite-block' : ''} ${isDeclined ? 'declined-event-block' : ''}`}
       onClick={handleClick}
       data-event-id={event.id}
       data-active={isSelected ? 'true' : 'false'}
@@ -150,10 +160,12 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, position }) => {
         minHeight: '20px',
         left: leftCalc,
         width: widthCalc,
-        backgroundColor: colors.background,
+        backgroundColor,
         zIndex: 20 + columnIndex,
         boxShadow: isSelected ? '0 0 0 2px rgba(52, 120, 246, 0.6)' : undefined,
-        opacity: isDragging ? 0.25 : 1
+        opacity: isDragging ? 0.25 : ((isPendingInvite || isTentative) ? 0.9 : 1),
+        border: (isPendingInvite || isTentative) ? '1px dashed rgba(148, 163, 184, 0.9)' : undefined,
+        filter: (isPendingInvite || isTentative) ? 'saturate(0.9)' : undefined
       }}
     >
       {/* Vertical line */}
@@ -168,7 +180,7 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, position }) => {
         <div 
           className="font-medium truncate mb-0.5" 
           style={{ 
-            color: colors.text
+            color: titleColor
           }}
         >
           {event.title}
@@ -176,7 +188,7 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, position }) => {
         <div 
           className="text-xs"
           style={{ 
-            color: colors.text
+            color: timeColor
           }}
         >
           {formatTime(startDate)}

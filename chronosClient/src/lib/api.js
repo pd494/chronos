@@ -324,10 +324,24 @@ export const calendarApi = {
     }
     return putJson(`/calendar/events/${eventId}`, payload)
   },
-
+  
   async deleteEvent(eventId, calendarId = 'primary'){
     const suffix = calendarId ? `?calendar_id=${encodeURIComponent(calendarId)}` : ''
     return deleteRequest(`/calendar/events/${eventId}${suffix}`)
+  },
+
+  async respondToInvite(eventId, responseStatus, calendarId = 'primary') {
+    if (!eventId) {
+      throw new Error('eventId is required to respond to an invite')
+    }
+    if (!responseStatus) {
+      throw new Error('responseStatus is required to respond to an invite')
+    }
+    const payload = {
+      calendar_id: calendarId,
+      response_status: responseStatus
+    }
+    return postJson(`/calendar/events/${eventId}/respond`, payload)
   }
 
 }

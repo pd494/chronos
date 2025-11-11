@@ -103,7 +103,7 @@ class GoogleCalendarService:
                     timeMax=time_max,
                     singleEvents=True,
                     orderBy='startTime',
-                    fields='items(id,summary,description,start,end,recurrence,recurringEventId,originalStartTime,extendedProperties,status,created,updated,attendees,location)'
+                    fields='items(id,summary,description,start,end,recurrence,recurringEventId,originalStartTime,extendedProperties,status,created,updated,attendees(displayName,email,responseStatus,self,optional),organizer(displayName,email,self),location)'
                 ).execute()
                 events = events_result.get('items', [])
                 master_cache = {}
@@ -182,6 +182,31 @@ class GoogleCalendarService:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to update event"
+            )
+    
+    def respond_to_event(self, event_id: str, calendar_id: str, response_status: str, attendee_email: str):
+        try:
+            service = self.get_service()
+            body = {
+                "attendees": [
+                    {
+                        "email": attendee_email,
+                        "responseStatus": response_status
+                    }
+                ]
+            }
+            patched_event = service.events().patch(
+                calendarId=calendar_id,
+                eventId=event_id,
+                body=body,
+                sendUpdates='all'
+            ).execute()
+            return patched_event
+        except HttpError as error:
+            logger.error(f"Error responding to event invite: {error}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to update event response"
             )
     
     def delete_event(self, event_id: str, calendar_id: str):

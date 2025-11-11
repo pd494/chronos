@@ -72,22 +72,46 @@ const AllDayEvent = ({ event, onOpen, className = '', style = {} }) => {
     })
   }
 
+  const responseStatus = typeof event.viewerResponseStatus === 'string'
+    ? event.viewerResponseStatus.toLowerCase()
+    : (event.isInvitePending ? 'needsaction' : null)
+  const isPendingInvite = responseStatus === 'needsaction'
+  const isTentative = responseStatus === 'tentative'
+  const isDeclined = responseStatus === 'declined'
+
+  const titleColor = isDeclined ? 'rgba(71, 85, 105, 0.6)' : colors.text
+
+  const hexToRgba = (hex, alpha) => {
+    if (typeof hex !== 'string' || !hex.startsWith('#')) return hex
+    const normalized = hex.replace('#', '')
+    const r = parseInt(normalized.substring(0, 2), 16)
+    const g = parseInt(normalized.substring(2, 4), 16)
+    const b = parseInt(normalized.substring(4, 6), 16)
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`
+  }
+
+  const backgroundColor = isDeclined
+    ? hexToRgba(colors.background, 0.45)
+    : colors.background
+
   return (
     <div
       draggable
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
       onClick={handleClick}
-      className={`truncate rounded px-2 cursor-pointer text-xs relative flex items-center event-draggable ${shouldBounce ? 'event-bounce' : ''} ${className}`.trim()}
+      className={`truncate rounded px-2 cursor-pointer text-xs relative flex items-center event-draggable ${shouldBounce ? 'event-bounce' : ''} ${(isPendingInvite || isTentative) ? 'pending-invite-block' : ''} ${isDeclined ? 'declined-event-block' : ''} ${className}`.trim()}
       style={{
-        backgroundColor: colors.background,
-        color: colors.text,
-        opacity: isDragging ? 0.5 : 1,
+        backgroundColor,
+        color: titleColor,
+        opacity: isDragging ? 0.5 : ((isPendingInvite || isTentative) ? 0.9 : 1),
+        border: (isPendingInvite || isTentative) ? '1px dashed rgba(148, 163, 184, 0.9)' : undefined,
+        filter: (isPendingInvite || isTentative) ? 'saturate(0.9)' : undefined,
         ...style
       }}
       data-event-id={event.id}
     >
-      <span className="font-medium truncate" style={{ color: colors.text }}>
+      <span className="font-medium truncate" style={{ color: titleColor }}>
         {event.title}
       </span>
     </div>

@@ -96,6 +96,12 @@ const EventIndicator = ({ event, isMonthView }) => {
   }
   
   const formattedTime = format(new Date(event.start), 'h:mma').toLowerCase();
+  const responseStatus = typeof event.viewerResponseStatus === 'string'
+    ? event.viewerResponseStatus.toLowerCase()
+    : (event.isInvitePending ? 'needsaction' : null)
+  const isPendingInvite = responseStatus === 'needsaction'
+  const isTentative = responseStatus === 'tentative'
+  const isDeclined = responseStatus === 'declined'
   
   const eventColor = event.color || 'blue';
   const isHexColor = eventColor.startsWith('#');
@@ -164,12 +170,36 @@ const EventIndicator = ({ event, isMonthView }) => {
     color: darkenHexColor(eventColor, 40)
   } : {};
 
+  const baseTitleStyle = isHexColor ? { ...textStyle } : { color: 'rgb(55, 65, 81)' }
+  const titleStyle = (() => {
+    if (isDeclined) {
+      return { ...baseTitleStyle, color: 'rgba(71, 85, 105, 0.6)' }
+    }
+    if (isPendingInvite || isTentative) {
+      return { ...baseTitleStyle, color: '#475569' }
+    }
+    return baseTitleStyle
+  })()
+
+  const timeStyle = (isPendingInvite || isTentative || isDeclined)
+    ? { color: 'rgba(71, 85, 105, 0.55)' }
+    : {}
+  const baseOpacity = (() => {
+    if (isDeclined) {
+      return event.isAllDay ? 0.6 : 0.55
+    }
+    if ((isPendingInvite || isTentative) && isMonthView) return 0.9
+    return 1
+  })()
+
   return (
     <div
       draggable={!isDragging}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
-      className={`text-xs mb-1 flex items-center space-x-1 px-1 py-0.5 overflow-hidden transition-opacity hover:opacity-30 ${isMonthView ? (isHexColor ? (event.isAllDay ? 'rounded-md' : '') : `${event.isAllDay ? getBgColorClass(eventColor) + ' bg-opacity-70' : ''} ${event.isAllDay ? 'rounded-md' : ''}`) : ''} calendar-event ${shouldBounce ? 'event-bounce' : ''}`}
+      className={`text-xs mb-1 flex items-center space-x-1 px-1 py-0.5 overflow-hidden transition-opacity hover:opacity-30 ${isMonthView ? (isHexColor ? (event.isAllDay ? 'rounded-md' : '') : `${event.isAllDay ? getBgColorClass(eventColor) + ' bg-opacity-70' : ''} ${event.isAllDay ? 'rounded-md' : ''}`) : ''} calendar-event ${shouldBounce ? 'event-bounce' : ''} ${
+        (isPendingInvite || isTentative) && isMonthView ? 'pending-month-invite' : ''
+      } ${isDeclined && isMonthView ? 'declined-month-event' : ''}`}
       onClick={handleClick}
       data-event-id={event.id}
       data-active={isSelected ? 'true' : 'false'}
@@ -177,16 +207,17 @@ const EventIndicator = ({ event, isMonthView }) => {
         maxWidth: '100%', 
         minWidth: 0,
         cursor: isDragging ? 'grabbing' : 'pointer',
-        opacity: isDragging ? 0.5 : 1,
+        opacity: isDragging ? 0.5 : baseOpacity,
         ...(isMonthView && isHexColor && event.isAllDay ? bgStyle : {}),
-        ...(isSelected ? { boxShadow: '0 0 0 2px rgba(52, 120, 246, 0.4)', borderRadius: '8px' } : {})
+        ...(isSelected ? { boxShadow: '0 0 0 2px rgba(52, 120, 246, 0.4)', borderRadius: '8px' } : {}),
+        ...((isPendingInvite || isTentative) && isMonthView ? { backgroundColor: 'rgba(248, 250, 252, 0.9)', color: '#475569' } : {})
       }}
     >
       {isMonthView ? (
         <>
           {/* Colored line indicator */}
           <div 
-            className={isHexColor ? 'rounded-sm' : `${getColorClass(eventColor)} rounded-sm`}
+            className={`${isHexColor ? '' : getColorClass(eventColor)} rounded-sm`}
             style={{ 
               width: '3.2px', 
               height: '14px',
@@ -195,12 +226,21 @@ const EventIndicator = ({ event, isMonthView }) => {
             }}
           ></div>
           
-          <div className="flex-grow truncate overflow-hidden text-ellipsis font-medium" style={{ minWidth: '30px', ...(isHexColor ? textStyle : { color: 'rgb(55, 65, 81)' }) }}>
+          <div
+            className="flex-grow truncate overflow-hidden text-ellipsis font-medium"
+            style={{
+              minWidth: '30px',
+              ...titleStyle
+            }}
+          >
             {event.title}
           </div>
           
           {!event.isAllDay && (
-            <div className="text-gray-600 dark:text-gray-700 flex-shrink-0 min-w-0 whitespace-nowrap text-right font-medium" style={{ minWidth: '45px' }}>
+            <div
+              className="text-gray-600 dark:text-gray-700 flex-shrink-0 min-w-0 whitespace-nowrap text-right font-medium"
+              style={{ minWidth: '45px', ...timeStyle }}
+            >
               {formattedTime}
             </div>
           )}

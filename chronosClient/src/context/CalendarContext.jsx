@@ -101,6 +101,12 @@ const safeJsonParse = (value, fallback = null) => {
   }
 }
 
+const normalizeResponseStatus = (value) => {
+  if (!value) return null
+  const lower = String(value).toLowerCase()
+  return lower === 'needsaction' ? 'needsAction' : lower
+}
+
 
 export const CalendarProvider = ({ children }) => {
   const { user } = useAuth()
@@ -108,6 +114,7 @@ export const CalendarProvider = ({ children }) => {
   const [view, setView] = useState('month')
   const [headerDisplayDate, setHeaderDisplayDate] = useState(currentDate)
   const [events, setEvents] = useState([])
+  const eventsRefValue = useRef(events)
   const [selectedEvent, setSelectedEvent] = useState(null)
   const [showEventModal, setShowEventModal] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -133,6 +140,10 @@ export const CalendarProvider = ({ children }) => {
   const loadedMonthsRef = useRef(new Set())
   const inFlightMonthsRef = useRef(new Set())
   const snapshotSaveTimerRef = useRef(null)
+
+  useEffect(() => {
+    eventsRefValue.current = events
+  }, [events])
 
   const linkTodoEvent = useCallback((todoId, eventId) => {
     if (!todoId || !eventId) return
@@ -468,6 +479,10 @@ export const CalendarProvider = ({ children }) => {
     for (const m of missingMonths) inFlightMonthsRef.current.add(m)
 
     try {
+      const viewerEmail = typeof user?.email === 'string'
+        ? user.email.toLowerCase()
+        : null
+
       // 1) Try to hydrate from cache immediately
       const ukey = user?.id || 'anon'
       const calHash = calHashRef.current
@@ -489,6 +504,7 @@ export const CalendarProvider = ({ children }) => {
               if (!eventIdsRef.current.has(ev.id)) {
                 const todoId = ev.todoId || ev.todo_id
 
+                const cachedViewerResponse = normalizeResponseStatus(ev.viewerResponseStatus)
                 cachedEvents.push({
                   id: ev.id,
                   title: ev.title || ev.summary || 'Untitled',
@@ -504,7 +520,12 @@ export const CalendarProvider = ({ children }) => {
                   recurrenceRule: ev.recurrenceRule || null,
                   recurrenceSummary: ev.recurrenceSummary || null,
                   recurrenceMeta: ev.recurrenceMeta || null,
-                  recurringEventId: ev.recurringEventId || null
+                  recurringEventId: ev.recurringEventId || null,
+                  viewerResponseStatus: cachedViewerResponse,
+                  viewerIsOrganizer: Boolean(ev.viewerIsOrganizer),
+                  viewerIsAttendee: Boolean(ev.viewerIsAttendee),
+                  inviteCanRespond: Boolean(ev.inviteCanRespond),
+                  isInvitePending: cachedViewerResponse === 'needsAction'
                 })
               }
             }
@@ -598,10 +619,27 @@ export const CalendarProvider = ({ children }) => {
               || (privateExtendedProps.recurrenceMeta ? safeJsonParse(privateExtendedProps.recurrenceMeta) : null)
             const recurrenceSummary = ownInfo?.summary || masterInfo?.summary || privateExtendedProps.recurrenceSummary || null
             
-            // Extract participants from attendees
-            const participants = Array.isArray(event.attendees) 
-              ? event.attendees.map(a => a.email).filter(Boolean)
+            const attendeesList = Array.isArray(event.attendees)
+              ? event.attendees
               : []
+            // Extract participants from attendees
+            const participants = attendeesList
+              .map(a => a.email)
+              .filter(Boolean)
+            const viewerAttendee = attendeesList.find((attendee) => {
+              if (attendee?.self) return true
+              if (!viewerEmail || !attendee?.email) return false
+              return attendee.email.toLowerCase() === viewerEmail
+            })
+            const viewerResponseStatus = normalizeResponseStatus(viewerAttendee?.responseStatus)
+            const viewerIsOrganizer = Boolean(
+              viewerEmail &&
+              event.organizer?.email &&
+              event.organizer.email.toLowerCase() === viewerEmail
+            )
+            const viewerIsAttendee = Boolean(viewerAttendee)
+            const inviteCanRespond = viewerIsAttendee && !viewerIsOrganizer
+            const isInvitePending = viewerResponseStatus === 'needsAction'
 
             return {
               id: event.id,
@@ -619,7 +657,13 @@ export const CalendarProvider = ({ children }) => {
               recurrenceSummary,
               recurrenceMeta,
               recurringEventId: event.recurringEventId || null,
-              originalStartTime: event.originalStartTime?.dateTime || event.originalStartTime?.date || null
+              originalStartTime: event.originalStartTime?.dateTime || event.originalStartTime?.date || null,
+              organizerEmail: event.organizer?.email || null,
+              viewerResponseStatus,
+              viewerIsOrganizer,
+              viewerIsAttendee,
+              inviteCanRespond,
+              isInvitePending
             }
           })
           .filter(ev => {
@@ -741,7 +785,14 @@ export const CalendarProvider = ({ children }) => {
                 recurrenceRule: ev.recurrenceRule || null,
                 recurrenceSummary: ev.recurrenceSummary || null,
                 recurrenceMeta: ev.recurrenceMeta || null,
-                recurringEventId: ev.recurringEventId || null
+                recurringEventId: ev.recurringEventId || null,
+                viewerResponseStatus: ev.viewerResponseStatus || null,
+                viewerIsOrganizer: Boolean(ev.viewerIsOrganizer),
+                viewerIsAttendee: Boolean(ev.viewerIsAttendee),
+                inviteCanRespond: Boolean(ev.inviteCanRespond),
+                isInvitePending: typeof ev.isInvitePending === 'boolean'
+                  ? ev.isInvitePending
+                  : normalizeResponseStatus(ev.viewerResponseStatus) === 'needsAction'
               })
               byMonth.set(m, arr)
             }
@@ -1522,6 +1573,12 @@ export const CalendarProvider = ({ children }) => {
     const newEvent = {
       id: uuidv4(),
       ...processedData,
+      organizerEmail: user?.email || null,
+      viewerResponseStatus: 'accepted',
+      viewerIsOrganizer: true,
+      viewerIsAttendee: false,
+      inviteCanRespond: false,
+      isInvitePending: false,
       isOptimistic: true
     }
 
@@ -1575,7 +1632,13 @@ export const CalendarProvider = ({ children }) => {
           created?.extendedProperties?.private?.recurrenceMeta,
           processedData.recurrenceMeta || null
         ),
-        recurringEventId: created?.recurringEventId || null
+        recurringEventId: created?.recurringEventId || null,
+        organizerEmail: created?.organizer?.email || user?.email || null,
+        viewerResponseStatus: 'accepted',
+        viewerIsOrganizer: true,
+        viewerIsAttendee: false,
+        inviteCanRespond: false,
+        isInvitePending: false
       }
 
       migrateOptimisticRecurrenceParentId(newEvent.id, normalizedEvent.id)
@@ -1795,6 +1858,68 @@ export const CalendarProvider = ({ children }) => {
     addOptimisticRecurrenceInstances,
     clearOptimisticRecurrenceInstances
   ])
+
+  const respondToInvite = useCallback(async (eventId, responseStatus) => {
+    if (!eventId || !responseStatus) return
+    const normalized = normalizeResponseStatus(responseStatus)
+    if (!normalized) return
+    if (!['accepted', 'declined', 'tentative'].includes(normalized)) {
+      return
+    }
+
+    const existingEvent = eventsRefValue.current.find(ev => ev.id === eventId)
+    if (!existingEvent) {
+      return
+    }
+
+    const previousSnapshot = { ...existingEvent }
+    const updatedEvent = {
+      ...existingEvent,
+      viewerResponseStatus: normalized,
+      isInvitePending: normalized === 'needsAction'
+    }
+
+    const syncDayIndexWithEvent = (eventToSync) => {
+      for (const [key, arr] of eventsByDayRef.current.entries()) {
+        let changed = false
+        const replaced = arr.map(item => {
+          if (item.id !== eventToSync.id) return item
+          changed = true
+          return eventToSync
+        })
+        if (changed) {
+          eventsByDayRef.current.set(key, replaced)
+        }
+      }
+      saveSnapshotsForAllViews(eventToSync)
+    }
+
+    setEvents(prev => prev.map(ev => (ev.id === eventId ? updatedEvent : ev)))
+    syncDayIndexWithEvent(updatedEvent)
+
+    setSelectedEvent(prev => {
+      if (!prev || prev.id !== eventId) return prev
+      return { ...prev, viewerResponseStatus: normalized, isInvitePending: normalized === 'needsAction' }
+    })
+
+    try {
+      const effectiveCalendarId = updatedEvent.calendar_id || 'primary'
+      await calendarApi.respondToInvite(eventId, normalized, effectiveCalendarId)
+    } catch (error) {
+      console.error('Failed to respond to invite:', error)
+      setEvents(prev => prev.map(ev => (ev.id === eventId ? previousSnapshot : ev)))
+      syncDayIndexWithEvent(previousSnapshot)
+      setSelectedEvent(prev => {
+        if (!prev || prev.id !== eventId) return prev
+        return {
+          ...prev,
+          viewerResponseStatus: previousSnapshot.viewerResponseStatus,
+          isInvitePending: previousSnapshot.viewerResponseStatus === 'needsAction'
+        }
+      })
+      throw error
+    }
+  }, [saveSnapshotsForAllViews])
 
   const deleteEvent = useCallback(async (event) => {
     const eventObject = (event && typeof event === 'object') ? event : null
@@ -2089,6 +2214,7 @@ export const CalendarProvider = ({ children }) => {
     getEventsForDate,
     createEvent,
     updateEvent,
+    respondToInvite,
     deleteEvent,
     openEventModal,
     closeEventModal,
