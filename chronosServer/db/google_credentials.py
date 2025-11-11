@@ -103,12 +103,43 @@ class GoogleCalendarService:
                     timeMax=time_max,
                     singleEvents=True,
                     orderBy='startTime',
-                    fields='items(id,summary,description,start,end,extendedProperties,status,created,updated,attendees,location)'
+                    fields='items(id,summary,description,start,end,recurrence,recurringEventId,originalStartTime,extendedProperties,status,created,updated,attendees,location)'
                 ).execute()
                 events = events_result.get('items', [])
+                master_cache = {}
+                to_fetch_master_ids = set()
+                for event in events:
+                    recurring_id = event.get('recurringEventId')
+                    has_rule = bool(event.get('recurrence'))
+                    private_props = event.get('extendedProperties', {}).get('private', {})
+                    if recurring_id and not has_rule and not private_props.get('recurrenceRule'):
+                        to_fetch_master_ids.add(recurring_id)
+
+                for recurring_id in to_fetch_master_ids:
+                    try:
+                        master = service.events().get(
+                            calendarId=calendar_id,
+                            eventId=recurring_id,
+                            fields='id,recurrence,extendedProperties'
+                        ).execute()
+                        master_cache[recurring_id] = master
+                    except HttpError:
+                        master_cache[recurring_id] = None
                 
                 for event in events:
                     event['calendar_id'] = calendar_id
+                    recurring_id = event.get('recurringEventId')
+                    master = master_cache.get(recurring_id)
+                    if master:
+                        if master.get('recurrence') and not event.get('recurrence'):
+                            event['recurrence'] = master['recurrence']
+                        master_private = master.get('extendedProperties', {}).get('private', {})
+                        if master_private:
+                            event.setdefault('extendedProperties', {}).setdefault('private', {}).update({
+                                k: master_private[k]
+                                for k in ['recurrenceRule', 'recurrenceSummary', 'recurrenceMeta']
+                                if k in master_private
+                            })
                 
                 all_events.extend(events)
             

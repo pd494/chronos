@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import Header from './components/Header'
 import SplitView from './components/SplitView'
 import MonthlyView from './components/calendar/MonthlyView'
@@ -14,6 +14,44 @@ import EventModal from './components/events/EventModal'
 import { useCalendar } from './context/CalendarContext'
 import './components/header.css'
 
+// Toast notification component
+const Toast = ({ message, visible, onClose, autoCloseDelay = 3000 }) => {
+  useEffect(() => {
+    if (visible) {
+      const timer = setTimeout(() => {
+        onClose()
+      }, autoCloseDelay)
+      return () => clearTimeout(timer)
+    }
+  }, [visible, message, onClose, autoCloseDelay])
+
+  if (!visible) return null
+
+  return (
+    <div
+      className="fixed bottom-6 left-1/2 transform -translate-x-1/2 z-[9999] text-white px-6 py-4 rounded-lg shadow-lg transition-all duration-300 ease-out"
+      style={{
+        backgroundColor: 'rgb(159, 134, 255)',
+        animation: visible ? 'slideUp 0.3s ease-out' : 'none'
+      }}
+    >
+      <p className="text-base font-medium">{message}</p>
+      <style>{`
+        @keyframes slideUp {
+          from {
+            opacity: 0;
+            transform: translate(-50%, 20px);
+          }
+          to {
+            opacity: 1;
+            transform: translate(-50%, 0);
+          }
+        }
+      `}</style>
+    </div>
+  )
+}
+
 const AppSkeleton = () => (
   <div className="h-full flex flex-col animate-pulse bg-gray-50">
     <div className="h-12 bg-white border-b border-gray-200" />
@@ -28,15 +66,61 @@ function AppContent() {
   const { view, showEventModal, changeView, initialLoading } = useCalendar()
   const { categories } = useTaskContext()
   const { loading: authLoading } = useAuth()
+  const [toastMessage, setToastMessage] = useState('')
+  const [toastVisible, setToastVisible] = useState(false)
+  const [activeCategory, setActiveCategory] = useState('All')
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
+  const [sidebarWidth, setSidebarWidth] = useState(320)
+  const [sidebarVisible, setSidebarVisible] = useState(true)
+  const deletionTimerRef = useRef(null)
+  const deletionCountRef = useRef(0)
 
   const shouldShowSkeleton = authLoading
 
-  if (shouldShowSkeleton) {
-    return <AppSkeleton />
-  }
+  // Listen for event deletion to show toast
+  useEffect(() => {
+    const handleEventDeleted = (e) => {
+      const message = e.detail?.message || 'Deleted event'
+      
+      if (message === 'Deleted event') {
+        // Clear previous timer if it exists
+        if (deletionTimerRef.current) {
+          clearTimeout(deletionTimerRef.current)
+        }
+        
+        // Increment counter and update toast
+        deletionCountRef.current += 1
+        setToastMessage(`Deleted event (${deletionCountRef.current})`)
+        setToastVisible(true)
+        
+        // Reset counter after 5 seconds of no deletions
+        deletionTimerRef.current = setTimeout(() => {
+          deletionCountRef.current = 0
+        }, 5000)
+      } else {
+        // Error message - reset counter and show error
+        setToastMessage(message)
+        setToastVisible(true)
+        deletionCountRef.current = 0
+        if (deletionTimerRef.current) {
+          clearTimeout(deletionTimerRef.current)
+        }
+      }
+    }
+
+    window.addEventListener('eventDeleted', handleEventDeleted)
+    return () => {
+      window.removeEventListener('eventDeleted', handleEventDeleted)
+      if (deletionTimerRef.current) {
+        clearTimeout(deletionTimerRef.current)
+      }
+    }
+  }, [])
 
   // Add keyboard shortcuts
   useEffect(() => {
+    if (shouldShowSkeleton) return
+
     const handleKeyDown = (e) => {
       // Skip if user is typing in an input or textarea
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
@@ -75,7 +159,11 @@ function AppContent() {
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [changeView, showEventModal]);
+  }, [changeView, showEventModal, shouldShowSkeleton])
+
+  if (shouldShowSkeleton) {
+    return <AppSkeleton />
+  }
 
   
   const renderCalendarView = () => {
@@ -91,11 +179,6 @@ function AppContent() {
     }
   }
 
-  const [activeCategory, setActiveCategory] = useState('All');
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState(320);
-  const [sidebarVisible, setSidebarVisible] = useState(true);
-  
   const handleSidebarChange = (width, visible) => {
     setSidebarWidth(width);
     setSidebarVisible(visible);
@@ -153,6 +236,11 @@ function AppContent() {
       />
       {showEventModal && <EventModal />}
       {!showEventModal && <FloatingChatBar />}
+      <Toast 
+        message={toastMessage} 
+        visible={toastVisible} 
+        onClose={() => setToastVisible(false)}
+      />
     </div>
   )
 }

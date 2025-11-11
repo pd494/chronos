@@ -227,6 +227,31 @@ function toGoogleEventBody(eventData) {
     }
   }
 
+  if (Array.isArray(eventData.recurrence)) {
+    body.recurrence = eventData.recurrence
+  } else if (eventData.recurrenceRule) {
+    body.recurrence = [eventData.recurrenceRule]
+  }
+
+  if (eventData.recurrenceRule || eventData.recurrenceSummary || eventData.recurrenceMeta) {
+    body.extendedProperties = body.extendedProperties || {}
+    const privateProps = { ...(body.extendedProperties.private || {}) }
+    if (eventData.recurrenceRule) {
+      privateProps.recurrenceRule = eventData.recurrenceRule
+    }
+    if (eventData.recurrenceSummary) {
+      privateProps.recurrenceSummary = eventData.recurrenceSummary
+    }
+    if (eventData.recurrenceMeta) {
+      privateProps.recurrenceMeta = typeof eventData.recurrenceMeta === 'string'
+        ? eventData.recurrenceMeta
+        : JSON.stringify(eventData.recurrenceMeta)
+    }
+    body.extendedProperties.private = {
+      ...privateProps
+    }
+  }
+
   // Start/end boundaries
   const tz = 'America/Los_Angeles'
   const start = eventData.start instanceof Date ? eventData.start : new Date(eventData.start)

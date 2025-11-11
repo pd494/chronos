@@ -1,9 +1,21 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { format, parse } from 'date-fns'
 import { 
-  FiX, FiTrash2, FiUsers, FiMapPin, FiClock, FiCalendar, FiChevronDown, FiPlus, FiCheck
+  FiX, FiTrash2, FiUsers, FiMapPin, FiClock, FiCalendar, FiChevronDown, FiPlus, FiCheck, FiRepeat
 } from 'react-icons/fi'
 import { useCalendar } from '../../context/CalendarContext'
+import {
+  buildRecurrencePayload,
+  cloneRecurrenceState,
+  createDefaultRecurrenceState,
+  describeRecurrence,
+  formatRecurrenceSummary,
+  WEEKDAY_CODES,
+  WEEKDAY_MINI,
+  WEEKDAY_LABELS,
+  RECURRENCE_FREQUENCIES
+} from '../../lib/recurrence'
 
 // Define color options directly
 const COLOR_OPTIONS = [
@@ -32,6 +44,31 @@ const CATEGORY_COLORS = [
   '#00C7BE',
   '#FF2D55'
 ];
+
+const ORDINAL_DISPLAY = {
+  1: 'First',
+  2: 'Second',
+  3: 'Third',
+  4: 'Fourth',
+  '-1': 'Last'
+}
+
+const FREQUENCY_UNITS = {
+  DAILY: 'day(s)',
+  WEEKLY: 'week(s)',
+  MONTHLY: 'month(s)',
+  YEARLY: 'year(s)'
+}
+
+const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const MONTHLY_DAYS = Array.from({ length: 31 }, (_, idx) => idx + 1)
+const ORDINAL_SELECT_OPTIONS = [
+  { value: 1, label: 'first' },
+  { value: 2, label: 'second' },
+  { value: 3, label: 'third' },
+  { value: 4, label: 'fourth' },
+  { value: -1, label: 'last' }
+]
 
 // Helper to get initials from email
 const getInitials = (email) => {
@@ -172,14 +209,78 @@ const EventModal = () => {
   const [participantEmail, setParticipantEmail] = useState('')
   const [showNotifyMembers, setShowNotifyMembers] = useState(false)
   const [showColorPicker, setShowColorPicker] = useState(false)
+  const [showRecurrencePicker, setShowRecurrencePicker] = useState(false)
+  const [recurrenceViewMode, setRecurrenceViewMode] = useState('shortcuts')
+  const [recurrenceState, setRecurrenceState] = useState(() => createDefaultRecurrenceState(new Date()))
+  const [recurrenceDraft, setRecurrenceDraft] = useState(() => createDefaultRecurrenceState(new Date()))
+  const [recurrenceSummary, setRecurrenceSummary] = useState('Does not repeat')
+  const [recurrenceConfirmationVisible, setRecurrenceConfirmationVisible] = useState(false)
+  const [recurrenceDropdownPlacement, setRecurrenceDropdownPlacement] = useState('bottom')
+  const [recurrenceDropdownMaxHeight, setRecurrenceDropdownMaxHeight] = useState(360)
+  const [recurrenceDropdownCoords, setRecurrenceDropdownCoords] = useState({ top: 0, left: 0, width: 280 })
+  const [showRecurringDeletePrompt, setShowRecurringDeletePrompt] = useState(false)
+  const [deletePromptCoords, setDeletePromptCoords] = useState({ top: 0, left: 0 })
+  const deletePromptRef = useRef(null)
   const [modalPosition, setModalPosition] = useState({ top: '50%', left: '50%', transform: 'translate(-50%, -50%)', pointerSide: 'left' })
   const [isFromDayClick, setIsFromDayClick] = useState(false)
   const [hasChanges, setHasChanges] = useState(false)
   const titleInputRef = useRef(null)
   const modalRef = useRef(null)
   const colorPickerRef = useRef(null)
+  const recurrencePickerRef = useRef(null)
+  const recurrenceTriggerRef = useRef(null)
+  const deleteButtonRef = useRef(null)
   const participantInputRef = useRef(null)
   const initialValuesRef = useRef({})
+  const recurrenceConfirmationTimerRef = useRef(null)
+
+  const buildDateWithTime = useCallback((dateStr, timeStr) => {
+    if (!dateStr || typeof dateStr !== 'string') return null
+    const [year, month, day] = dateStr.split('-').map(Number)
+    if ([year, month, day].some(num => Number.isNaN(num))) return null
+    const base = new Date(year, month - 1, day, 0, 0, 0, 0)
+    if (Number.isNaN(base.getTime())) return null
+    if (timeStr && typeof timeStr === 'string' && timeStr.includes(':')) {
+      const [hour, minute] = timeStr.split(':').map(Number)
+      if (!Number.isNaN(hour) && !Number.isNaN(minute)) {
+        base.setHours(hour, minute, 0, 0)
+      }
+    }
+    return base
+  }, [])
+
+  const computeRecurrenceDropdownPlacement = useCallback(() => {
+    if (typeof window === 'undefined') return
+    const triggerEl = recurrenceTriggerRef.current
+    if (!triggerEl) {
+      setRecurrenceDropdownPlacement('bottom')
+      setRecurrenceDropdownMaxHeight(360)
+      return
+    }
+    const rect = triggerEl.getBoundingClientRect()
+    const viewportHeight = window.innerHeight
+    const viewportWidth = window.innerWidth
+    const margin = 16
+    const spaceAbove = rect.top - margin
+    const spaceBelow = viewportHeight - rect.bottom - margin
+    const preferredHeight = 360
+    const maxDropdownWidth = Math.min(300, Math.max(220, viewportWidth - margin * 2))
+    const centeredLeft = rect.left + rect.width / 2 - maxDropdownWidth / 2
+    const constrainedLeft = Math.min(
+      Math.max(margin, centeredLeft),
+      viewportWidth - margin - maxDropdownWidth
+    )
+
+    if (spaceBelow >= preferredHeight || spaceBelow >= spaceAbove) {
+      setRecurrenceDropdownPlacement('bottom')
+      setRecurrenceDropdownMaxHeight(Math.min(400, Math.max(240, spaceBelow)))
+      setRecurrenceDropdownCoords({ top: rect.bottom + 6, left: constrainedLeft, width: maxDropdownWidth })
+    } else {
+      setRecurrenceDropdownPlacement('top')
+      setRecurrenceDropdownMaxHeight(Math.min(400, Math.max(240, spaceAbove)))
+      setRecurrenceDropdownCoords({ top: rect.top - 6, left: constrainedLeft, width: maxDropdownWidth })
+    }
+  }, [])
 
   useEffect(() => {
     // Set modal position and animate in when the component is mounted or event changes
@@ -221,6 +322,57 @@ const EventModal = () => {
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
   }, [showColorPicker]);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (recurrencePickerRef.current && recurrencePickerRef.current.contains(event.target)) {
+        return
+      }
+      setShowRecurrencePicker(false)
+      setRecurrenceViewMode('shortcuts')
+    }
+    if (showRecurrencePicker) {
+      document.addEventListener('mousedown', handleClickOutside)
+      return () => document.removeEventListener('mousedown', handleClickOutside)
+    }
+  }, [showRecurrencePicker])
+
+  useEffect(() => {
+    if (!showRecurrencePicker) return
+    computeRecurrenceDropdownPlacement()
+    const handleResize = () => computeRecurrenceDropdownPlacement()
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [showRecurrencePicker, computeRecurrenceDropdownPlacement])
+
+  useEffect(() => {
+    if (!showRecurrencePicker) {
+      setRecurrenceViewMode('shortcuts')
+    }
+  }, [showRecurrencePicker])
+
+  useEffect(() => {
+    if (!showRecurringDeletePrompt) return
+    const handleClick = (event) => {
+      // If clicking the delete button that opened the prompt, ignore
+      if (deleteButtonRef.current && deleteButtonRef.current.contains(event.target)) return
+      // If clicking inside the prompt itself, ignore
+      if (deletePromptRef.current && deletePromptRef.current.contains(event.target)) return
+      // Otherwise, close the prompt
+      setShowRecurringDeletePrompt(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [showRecurringDeletePrompt])
+
+  useEffect(() => {
+    return () => {
+      if (recurrenceConfirmationTimerRef.current) {
+        clearTimeout(recurrenceConfirmationTimerRef.current)
+        recurrenceConfirmationTimerRef.current = null
+      }
+    }
+  }, [])
   
   // Close modal when clicking outside (but not on events)
   useEffect(() => {
@@ -230,6 +382,15 @@ const EventModal = () => {
                             event.target.closest('.event-draggable') ||
                             event.target.closest('.event-indicator');
       
+      // If clicking inside the delete prompt, don't close the modal
+      if (deletePromptRef.current && deletePromptRef.current.contains(event.target)) {
+        return
+      }
+
+      const clickedInRecurrenceDropdown = recurrencePickerRef.current && recurrencePickerRef.current.contains(event.target)
+      if (clickedInRecurrenceDropdown) {
+        return
+      }
       if (modalRef.current && !modalRef.current.contains(event.target) && !clickedOnEvent) {
         setInternalVisible(false);
         setTimeout(() => {
@@ -241,6 +402,7 @@ const EventModal = () => {
           setExpandedChips(new Set())
           setIsAddingParticipant(false)
           setParticipantEmail('')
+          setShowRecurrencePicker(false)
           contextCloseEventModal();
         }, 300);
       }
@@ -261,6 +423,7 @@ const EventModal = () => {
       setExpandedChips(new Set())
       setIsAddingParticipant(false)
       setParticipantEmail('')
+      setShowRecurrencePicker(false)
       contextCloseEventModal();
     }, 300); // Match animation duration
   }, [contextCloseEventModal]);
@@ -343,6 +506,26 @@ const EventModal = () => {
       setIsFromDayClick(!!fromDayClick);
     }
     
+    const recurrenceAnchor = (() => {
+      if (selectedEvent?.start) {
+        const existing = new Date(selectedEvent.start)
+        if (!Number.isNaN(existing.getTime())) {
+          return existing
+        }
+      }
+      return buildDateWithTime(initialEventDate, initialTimeStart) || new Date()
+    })()
+    const recurrenceDetails = selectedEvent
+      ? describeRecurrence(
+          selectedEvent.recurrenceRule,
+          recurrenceAnchor,
+          selectedEvent.recurrenceMeta
+        )
+      : {
+          state: createDefaultRecurrenceState(recurrenceAnchor),
+          summary: 'Does not repeat'
+        }
+
     setEventName(initialEventName);
     setEventDate(initialEventDate);
     setTimeStart(initialTimeStart);
@@ -350,6 +533,10 @@ const EventModal = () => {
     setColor(initialColor);
     setIsAllDay(initialIsAllDay);
     setLocation(initialLocation);
+    setRecurrenceState(cloneRecurrenceState(recurrenceDetails.state))
+    setRecurrenceDraft(cloneRecurrenceState(recurrenceDetails.state))
+    setRecurrenceSummary(recurrenceDetails.summary)
+    setShowRecurrencePicker(false)
     
     // Store initial values for change detection
     const initialParticipants = selectedEvent?.participants || [];
@@ -361,7 +548,8 @@ const EventModal = () => {
       color: initialColor,
       isAllDay: initialIsAllDay,
       location: initialLocation,
-      participants: initialParticipants
+      participants: initialParticipants,
+      recurrenceRule: selectedEvent?.recurrenceRule || ''
     };
     setHasChanges(false);
     setParticipants(initialParticipants);
@@ -384,6 +572,26 @@ const EventModal = () => {
       participantInputRef.current.focus({ preventScroll: true })
     }
   }, [isAddingParticipant])
+
+  const conciseRecurrenceSummary = useCallback((state) => {
+    if (!state?.enabled) return 'Does not repeat'
+    switch (state.frequency) {
+      case 'DAILY':
+        return 'Daily'
+      case 'WEEKLY':
+        return 'Weekly'
+      case 'MONTHLY':
+        return 'Monthly'
+      case 'YEARLY':
+        return 'Yearly'
+      default:
+        return 'Custom'
+    }
+  }, [])
+
+  useEffect(() => {
+    setRecurrenceSummary(conciseRecurrenceSummary(recurrenceState))
+  }, [recurrenceState, conciseRecurrenceSummary])
   
   // Detect changes
   useEffect(() => {
@@ -396,6 +604,11 @@ const EventModal = () => {
     const participantsChanged = 
       JSON.stringify(participants.sort()) !== JSON.stringify((initial.participants || []).sort());
     
+    const anchorDate = buildDateWithTime(eventDate, timeStart) || new Date()
+    const recurrencePayload = buildRecurrencePayload(recurrenceState, anchorDate)
+    const recurrenceRule = recurrencePayload?.rule || ''
+    const initialRecurrenceRule = initial.recurrenceRule || ''
+
     const changed = 
       eventName !== initial.eventName ||
       eventDate !== initial.eventDate ||
@@ -404,7 +617,8 @@ const EventModal = () => {
       color !== initial.color ||
       isAllDay !== initial.isAllDay ||
       location !== initial.location ||
-      participantsChanged;
+      participantsChanged ||
+      recurrenceRule !== initialRecurrenceRule;
     
     setHasChanges(changed);
     
@@ -424,22 +638,170 @@ const EventModal = () => {
         setShowNotifyMembers(true);
       }
     }
-  }, [selectedEvent, eventName, eventDate, timeStart, timeEnd, color, isAllDay, location, participants]);
+  }, [selectedEvent, eventName, eventDate, timeStart, timeEnd, color, isAllDay, location, participants, recurrenceState, buildDateWithTime]);
   
-  const buildDateWithTime = useCallback((dateStr, timeStr) => {
-    if (!dateStr || typeof dateStr !== 'string') return null
-    const [year, month, day] = dateStr.split('-').map(Number)
-    if ([year, month, day].some(num => Number.isNaN(num))) return null
-    const base = new Date(year, month - 1, day, 0, 0, 0, 0)
-    if (Number.isNaN(base.getTime())) return null
-    if (timeStr && typeof timeStr === 'string' && timeStr.includes(':')) {
-      const [hour, minute] = timeStr.split(':').map(Number)
-      if (!Number.isNaN(hour) && !Number.isNaN(minute)) {
-        base.setHours(hour, minute, 0, 0)
-      }
+
+  // kept for backward compat (no-op now that we use portal)
+
+  const recurrenceAnchorDate = useCallback(() => {
+    return buildDateWithTime(eventDate, timeStart) || new Date()
+  }, [buildDateWithTime, eventDate, timeStart])
+
+  const triggerRecurrenceConfirmation = useCallback(() => {
+    if (recurrenceConfirmationTimerRef.current) {
+      clearTimeout(recurrenceConfirmationTimerRef.current)
+    }
+    setRecurrenceConfirmationVisible(true)
+    recurrenceConfirmationTimerRef.current = setTimeout(() => {
+      setRecurrenceConfirmationVisible(false)
+      recurrenceConfirmationTimerRef.current = null
+    }, 2000)
+  }, [])
+
+  const handleFrequencySelectChange = (value) => {
+    if (value === 'CUSTOM') {
+      setRecurrenceViewMode('custom')
+      return
+    }
+    updateRecurrenceDraft({ frequency: value })
+  }
+
+  const buildPresetRecurrenceState = useCallback((preset) => {
+    const anchor = recurrenceAnchorDate()
+    const base = createDefaultRecurrenceState(anchor)
+    const weekday = WEEKDAY_CODES[anchor.getDay()]
+
+    if (preset === 'none') {
+      base.enabled = false
+      return base
+    }
+
+    base.enabled = true
+    switch (preset) {
+      case 'daily':
+        base.frequency = 'DAILY'
+        base.interval = 1
+        break
+      case 'weekly':
+        base.frequency = 'WEEKLY'
+        base.interval = 1
+        base.daysOfWeek = [weekday]
+        break
+      case 'monthly':
+        base.frequency = 'MONTHLY'
+        base.interval = 1
+        base.monthlyMode = 'day'
+        base.monthlyDay = anchor.getDate()
+        break
+      case 'yearly':
+        base.frequency = 'YEARLY'
+        base.interval = 1
+        base.yearlyMode = 'date'
+        base.yearlyMonth = anchor.getMonth() + 1
+        base.yearlyDay = anchor.getDate()
+        break
+      default:
+        break
     }
     return base
-  }, [])
+  }, [recurrenceAnchorDate])
+
+  const recurrenceShortcutOptions = [
+    { id: 'none', label: 'Does not repeat', description: 'One-time event' },
+    { id: 'daily', label: 'Daily', description: 'Every day' },
+    { id: 'weekly', label: 'Weekly', description: 'Same day each week' },
+    { id: 'monthly', label: 'Monthly', description: 'Same date each month' },
+    { id: 'yearly', label: 'Yearly', description: 'Same date every year' },
+    { id: 'custom', label: 'Custom...', description: 'Advanced repeat options' }
+  ]
+
+  const handleRecurrenceShortcutSelect = (optionId) => {
+    if (optionId === 'custom') {
+      setRecurrenceDraft(cloneRecurrenceState(recurrenceState))
+      setRecurrenceViewMode('custom')
+      return
+    }
+    const nextState = buildPresetRecurrenceState(optionId)
+    setRecurrenceState(cloneRecurrenceState(nextState))
+    setRecurrenceDraft(cloneRecurrenceState(nextState))
+    const nextSummary = formatRecurrenceSummary(nextState, recurrenceAnchorDate())
+    setRecurrenceSummary(nextSummary)
+    setShowRecurrencePicker(false)
+    triggerRecurrenceConfirmation()
+  }
+
+  const handleToggleRecurrencePicker = () => {
+    if (showRecurrencePicker) {
+      setRecurrenceDraft(cloneRecurrenceState(recurrenceState))
+      setShowRecurrencePicker(false)
+      return
+    }
+    const draft = cloneRecurrenceState(recurrenceState)
+    if (!draft.enabled) {
+      draft.enabled = true
+    }
+    setRecurrenceDraft(draft)
+    setRecurrenceViewMode('shortcuts')
+    computeRecurrenceDropdownPlacement()
+    setShowRecurrencePicker(true)
+  }
+
+  const handleClearRecurrence = () => {
+    const cleared = createDefaultRecurrenceState(recurrenceAnchorDate())
+    setRecurrenceState(cloneRecurrenceState(cleared))
+    setRecurrenceDraft(cloneRecurrenceState(cleared))
+    setRecurrenceSummary('Does not repeat')
+    setShowRecurrencePicker(false)
+    triggerRecurrenceConfirmation()
+  }
+
+  const updateRecurrenceDraft = (updates = {}, { forceEnable = true } = {}) => {
+    setRecurrenceDraft((prev) => ({
+      ...prev,
+      ...updates,
+      enabled: forceEnable ? true : prev.enabled
+    }))
+  }
+
+  const toggleRecurrenceDay = (dayCode) => {
+    setRecurrenceDraft((prev) => {
+      let nextDays
+      if (prev.daysOfWeek.includes(dayCode)) {
+        nextDays = prev.daysOfWeek.filter((code) => code !== dayCode)
+        if (!nextDays.length) {
+          nextDays = [dayCode]
+        }
+      } else {
+        nextDays = [...prev.daysOfWeek, dayCode]
+      }
+      return {
+        ...prev,
+        daysOfWeek: nextDays,
+        enabled: true
+      }
+    })
+  }
+
+  const handleSelectMonthlyDay = (day) => {
+    updateRecurrenceDraft({ monthlyMode: 'day', monthlyDay: day })
+  }
+
+  const handleSelectYearlyMonth = (month) => {
+    updateRecurrenceDraft({ yearlyMonth: month }, { forceEnable: true })
+  }
+
+  const handleApplyRecurrence = () => {
+    setRecurrenceState(cloneRecurrenceState(recurrenceDraft))
+    setRecurrenceSummary(formatRecurrenceSummary(recurrenceDraft, recurrenceAnchorDate()))
+    setShowRecurrencePicker(false)
+    triggerRecurrenceConfirmation()
+  }
+
+  const handleCancelRecurrenceEdit = () => {
+    setRecurrenceDraft(cloneRecurrenceState(recurrenceState))
+    setRecurrenceViewMode('shortcuts')
+    setShowRecurrencePicker(false)
+  }
 
   const handleSubmit = (e) => {
     if (e) e.preventDefault();
@@ -471,6 +833,19 @@ const EventModal = () => {
       participants,
       sendNotifications: showNotifyMembers && participants.length > 0
     };
+
+    const recurrencePayload = buildRecurrencePayload(recurrenceState, finalStartDateTime)
+    if (recurrencePayload) {
+      eventData.recurrence = [recurrencePayload.rule]
+      eventData.recurrenceRule = recurrencePayload.rule
+      eventData.recurrenceSummary = recurrencePayload.summary
+      eventData.recurrenceMeta = recurrencePayload.meta
+    } else {
+      eventData.recurrence = []
+      eventData.recurrenceRule = ''
+      eventData.recurrenceSummary = 'Does not repeat'
+      eventData.recurrenceMeta = { enabled: false }
+    }
         
     const action = selectedEvent
       ? updateEvent(selectedEvent.id, eventData)
@@ -498,11 +873,42 @@ const EventModal = () => {
     setTimeError(end <= start ? 'End time must be after start time' : '')
   }, [eventDate, timeStart, timeEnd, isAllDay, buildDateWithTime])
   
-  const handleDelete = () => { // Ensure this is a stable function if used in useEffect deps
-    if (selectedEvent) {
-      deleteEvent(selectedEvent);
-      closeAndAnimateOut();
+  const isRecurringEvent = useMemo(() => {
+    if (!selectedEvent) return false
+    // Check if it's an instance of a recurring event
+    if (selectedEvent.recurringEventId || selectedEvent.parentRecurrenceId) {
+      return true
     }
+    // Check if it has recurrence metadata enabled
+    if (selectedEvent.recurrenceMeta?.enabled) {
+      return true
+    }
+    // Check if it has a recurrence rule
+    if (selectedEvent.recurrenceRule && typeof selectedEvent.recurrenceRule === 'string' && selectedEvent.recurrenceRule.trim().length > 0) {
+      return true
+    }
+    return false
+  }, [selectedEvent])
+
+  const executeDelete = useCallback((scope = 'single') => {
+    if (!selectedEvent) return
+    deleteEvent({ ...selectedEvent, deleteScope: scope })
+    setShowRecurringDeletePrompt(false)
+    closeAndAnimateOut()
+  }, [selectedEvent, deleteEvent, closeAndAnimateOut])
+
+  const handleDelete = () => { // Ensure this is a stable function if used in useEffect deps
+    if (!selectedEvent) return
+    if (isRecurringEvent) {
+      if (deleteButtonRef.current && modalRef.current) {
+        const rect = deleteButtonRef.current.getBoundingClientRect()
+        const modalRect = modalRef.current.getBoundingClientRect()
+        setDeletePromptCoords({ top: rect.bottom + 8, left: modalRect.left })
+      }
+      setShowRecurringDeletePrompt(true)
+      return
+    }
+    executeDelete('single')
   };
   
   const formatTimeForDisplay = (time24h) => {
@@ -569,7 +975,7 @@ const EventModal = () => {
                    ${internalVisible ? 'opacity-100 scale-100' : 'opacity-0 scale-95 pointer-events-none'}`}
         style={{
           ...modalPosition,
-          width: '400px',
+          width: '460px',
           maxHeight: '90vh',
           border: '1px solid #e5e7eb',
           borderRadius: '16px',
@@ -671,8 +1077,8 @@ const EventModal = () => {
               />
             </div>
             
-            {/* Date and Color Row */}
-            <div className="grid grid-cols-[1.7fr_1fr] gap-2">
+            {/* Date, Color, Repeat Row */}
+            <div className="grid grid-cols-[minmax(0,1.35fr)_auto_minmax(0,1fr)] gap-2 items-end">
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1">Date</label>
                 {(isFromDayClick && !selectedEvent) ? (
@@ -706,10 +1112,10 @@ const EventModal = () => {
                   <button
                     type="button"
                     onClick={() => setShowColorPicker(!showColorPicker)}
-                    className="flex items-center justify-center px-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg hover:bg-gray-100 transition-colors w-full"
+                    className="flex items-center justify-center px-1.5 py-1.5 bg-gray-50 border border-gray-200 rounded-lg hover:bg-gray-100 transition-colors h-10 w-11"
                   >
                     <div 
-                      className="w-5 h-5 rounded-full" 
+                      className="w-5 h-5 rounded-full"
                       style={{ backgroundColor: color }}
                     />
                   </button>
@@ -733,6 +1139,348 @@ const EventModal = () => {
                       </div>
                     </div>
                   )}
+                </div>
+              </div>
+
+              {/* Recurrence */}
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Repeat</label>
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={handleToggleRecurrencePicker}
+                    className="flex items-center gap-2 px-2 py-1.5 bg-gray-50 border border-gray-200 rounded-lg hover:bg-gray-100 transition-colors w-full h-10"
+                    ref={recurrenceTriggerRef}
+                  >
+                    <FiRepeat className="text-gray-500" size={14} />
+                    <span className={`text-sm truncate ${recurrenceState.enabled ? 'text-gray-900' : 'text-gray-500'}`}>
+                      {recurrenceSummary}
+                    </span>
+                    <FiChevronDown className="text-gray-400 ml-auto" size={14} />
+                  </button>
+                  {showRecurrencePicker && createPortal(
+                    <div
+                      ref={recurrencePickerRef}
+                      className="fixed z-[1000] bg-white border border-gray-200 rounded-xl shadow-xl p-3 space-y-3 overflow-y-auto"
+                      style={{
+                        top: recurrenceDropdownPlacement === 'top' ? recurrenceDropdownCoords.top : recurrenceDropdownCoords.top,
+                        left: recurrenceDropdownCoords.left,
+                        width: recurrenceDropdownCoords.width,
+                        maxHeight: recurrenceDropdownMaxHeight,
+                        transform: recurrenceDropdownPlacement === 'top' ? 'translateY(-100%)' : 'none'
+                      }}
+                    >
+                      {recurrenceViewMode === 'shortcuts' ? (
+                        <div className="space-y-3">
+                          <div className="flex items-start justify-between">
+                            <div>
+                              <p className="text-sm font-semibold text-gray-900">Repeat</p>
+                              <p className="text-xs text-gray-500">{recurrenceSummary}</p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={handleClearRecurrence}
+                              className="text-xs text-blue-600 hover:text-blue-700"
+                            >
+                              Reset
+                            </button>
+                          </div>
+                          <div className="space-y-1">
+                            {recurrenceShortcutOptions.map((option) => (
+                              <button
+                                key={option.id}
+                                type="button"
+                                onClick={() => handleRecurrenceShortcutSelect(option.id)}
+                                className="w-full text-left px-3 py-2 rounded-lg border border-transparent hover:border-blue-200 hover:bg-blue-50 transition-colors"
+                              >
+                                <div className="text-sm font-medium text-gray-900">{option.label}</div>
+                                <div className="text-xs text-gray-500">{option.description}</div>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          <div className="flex items-center justify-between">
+                            <button
+                              type="button"
+                              onClick={() => setRecurrenceViewMode('shortcuts')}
+                              className="text-xs text-gray-600 hover:text-gray-800"
+                            >
+                              ← Back
+                            </button>
+                            <p className="text-sm font-semibold text-gray-900">Custom repeat</p>
+                            <button
+                              type="button"
+                              onClick={handleClearRecurrence}
+                              className="text-xs text-blue-600 hover:text-blue-700"
+                            >
+                              Clear
+                            </button>
+                          </div>
+                          <p className="text-xs text-gray-500">
+                            {formatRecurrenceSummary(recurrenceDraft, recurrenceAnchorDate())}
+                          </p>
+                          <div>
+                            <label className="text-xs font-medium text-gray-600">Frequency</label>
+                            <select
+                              value={recurrenceDraft.frequency}
+                              onChange={(e) => handleFrequencySelectChange(e.target.value)}
+                              className="mt-1 w-full px-2.5 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            >
+                              {RECURRENCE_FREQUENCIES.map((freq) => (
+                                <option key={freq.value} value={freq.value}>{freq.label}</option>
+                              ))}
+                              <option value="CUSTOM">Custom…</option>
+                            </select>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <label className="text-xs font-medium text-gray-600">Every</label>
+                            <input
+                              type="number"
+                              min="1"
+                              value={recurrenceDraft.interval}
+                              onChange={(e) => updateRecurrenceDraft({ interval: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+                              className="w-16 px-2 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            />
+                            <span className="text-sm text-gray-500">
+                              {FREQUENCY_UNITS[recurrenceDraft.frequency] || 'occurrence(s)'}
+                            </span>
+                          </div>
+                          {recurrenceDraft.frequency === 'WEEKLY' && (
+                            <div>
+                              <label className="text-xs font-medium text-gray-600 mb-1 block">Week on</label>
+                              <div className="grid grid-cols-7 gap-1">
+                                {WEEKDAY_CODES.map((code) => {
+                                  const active = recurrenceDraft.daysOfWeek.includes(code)
+                                  return (
+                                    <button
+                                      type="button"
+                                      key={code}
+                                      onClick={() => toggleRecurrenceDay(code)}
+                                      className={`h-8 rounded-lg text-xs font-semibold transition-colors ${
+                                        active ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                                      }`}
+                                    >
+                                      {WEEKDAY_MINI[code]}
+                                    </button>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          )}
+                          {recurrenceDraft.frequency === 'MONTHLY' && (
+                            <div className="space-y-2">
+                              <label className="text-xs font-medium text-gray-600">Each month</label>
+                              <div className="space-y-2">
+                                <label className="flex items-center gap-2 text-sm text-gray-700">
+                                  <input
+                                    type="radio"
+                                    name="recurrenceMonthlyMode"
+                                    checked={recurrenceDraft.monthlyMode === 'day'}
+                                    onChange={() => updateRecurrenceDraft({ monthlyMode: 'day' })}
+                                  />
+                                  <span>Each</span>
+                                </label>
+                                {recurrenceDraft.monthlyMode === 'day' && (
+                                  <div className="grid grid-cols-7 gap-1">
+                                    {MONTHLY_DAYS.map((day) => {
+                                      const active = recurrenceDraft.monthlyDay === day
+                                      return (
+                                        <button
+                                          key={day}
+                                          type="button"
+                                          onClick={() => handleSelectMonthlyDay(day)}
+                                          className={`h-8 rounded-lg text-xs font-semibold transition-colors ${
+                                            active ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                                          }`}
+                                        >
+                                          {day}
+                                        </button>
+                                      )
+                                    })}
+                                  </div>
+                                )}
+                                <label className="flex items-center gap-2 text-sm text-gray-700 pt-1">
+                                  <input
+                                    type="radio"
+                                    name="recurrenceMonthlyMode"
+                                    checked={recurrenceDraft.monthlyMode === 'weekday'}
+                                    onChange={() => updateRecurrenceDraft({ monthlyMode: 'weekday' })}
+                                  />
+                                  <span>On the</span>
+                                  <select
+                                    value={recurrenceDraft.monthlyWeek}
+                                    onChange={(e) => updateRecurrenceDraft({ monthlyWeek: parseInt(e.target.value, 10) || 1 })}
+                                    className="px-2 py-1 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                  >
+                                    {ORDINAL_SELECT_OPTIONS.map(({ value, label }) => (
+                                      <option key={value} value={value}>{label}</option>
+                                    ))}
+                                  </select>
+                                  <select
+                                    value={recurrenceDraft.monthlyWeekday}
+                                    onChange={(e) => updateRecurrenceDraft({ monthlyWeekday: e.target.value })}
+                                    className="px-2 py-1 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 flex-1"
+                                  >
+                                    {WEEKDAY_CODES.map((code) => (
+                                      <option key={code} value={code}>{WEEKDAY_LABELS[code]}</option>
+                                    ))}
+                                  </select>
+                                </label>
+                              </div>
+                            </div>
+                          )}
+                          {recurrenceDraft.frequency === 'YEARLY' && (
+                            <div className="space-y-2">
+                              <label className="text-xs font-medium text-gray-600">Year in</label>
+                              <div className="grid grid-cols-3 gap-1">
+                                {MONTH_LABELS.map((label, idx) => {
+                                  const monthNumber = idx + 1
+                                  const active = recurrenceDraft.yearlyMonth === monthNumber
+                                  return (
+                                    <button
+                                      key={label}
+                                      type="button"
+                                      onClick={() => handleSelectYearlyMonth(monthNumber)}
+                                      className={`h-9 rounded-lg text-xs font-semibold transition-colors ${
+                                        active ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                                      }`}
+                                    >
+                                      {label}
+                                    </button>
+                                  )
+                                })}
+                              </div>
+                              <div className="space-y-1">
+                                <label className="flex items-center gap-2 text-sm text-gray-700">
+                                  <input
+                                    type="radio"
+                                    name="recurrenceYearlyMode"
+                                    checked={recurrenceDraft.yearlyMode === 'date'}
+                                    onChange={() => updateRecurrenceDraft({ yearlyMode: 'date' })}
+                                  />
+                                  <span>On day</span>
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    max="31"
+                                    value={recurrenceDraft.yearlyDay}
+                                    onChange={(e) => updateRecurrenceDraft({ yearlyDay: Math.min(31, Math.max(1, parseInt(e.target.value, 10) || 1)) })}
+                                    className="w-20 px-2 py-1 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    disabled={recurrenceDraft.yearlyMode !== 'date'}
+                                  />
+                                </label>
+                                <label className="flex items-center gap-2 text-sm text-gray-700">
+                                  <input
+                                    type="radio"
+                                    name="recurrenceYearlyMode"
+                                    checked={recurrenceDraft.yearlyMode === 'weekday'}
+                                    onChange={() => updateRecurrenceDraft({ yearlyMode: 'weekday' })}
+                                  />
+                                  <span>On the</span>
+                                </label>
+                                {recurrenceDraft.yearlyMode === 'weekday' && (
+                                  <div className="flex items-center gap-2 pl-6">
+                                    <select
+                                      value={recurrenceDraft.yearlyWeek}
+                                      onChange={(e) => updateRecurrenceDraft({ yearlyWeek: parseInt(e.target.value, 10) || 1 })}
+                                      className="px-2 py-1 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    >
+                                      {ORDINAL_SELECT_OPTIONS.map(({ value, label }) => (
+                                        <option key={value} value={value}>{label}</option>
+                                      ))}
+                                    </select>
+                                    <select
+                                      value={recurrenceDraft.yearlyWeekday}
+                                      onChange={(e) => updateRecurrenceDraft({ yearlyWeekday: e.target.value })}
+                                      className="px-2 py-1 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 flex-1"
+                                    >
+                                      {WEEKDAY_CODES.map((code) => (
+                                        <option key={code} value={code}>{WEEKDAY_LABELS[code]}</option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-gray-600">Ends</label>
+                            <div className="space-y-1 text-sm text-gray-700">
+                              <label className="flex items-center gap-2">
+                                <input
+                                  type="radio"
+                                  name="recurrenceEnds"
+                                  checked={recurrenceDraft.ends === 'never'}
+                                  onChange={() => updateRecurrenceDraft({ ends: 'never' }, { forceEnable: false })}
+                                />
+                                Never
+                              </label>
+                              <label className="flex items-center gap-2">
+                                <input
+                                  type="radio"
+                                  name="recurrenceEnds"
+                                  checked={recurrenceDraft.ends === 'count'}
+                                  onChange={() => updateRecurrenceDraft({ ends: 'count' }, { forceEnable: false })}
+                                />
+                                <span>After</span>
+                                <input
+                                  type="number"
+                                  min="1"
+                                  value={recurrenceDraft.count}
+                                  onChange={(e) => updateRecurrenceDraft({ count: Math.max(1, parseInt(e.target.value, 10) || 1) }, { forceEnable: false })}
+                                  className="w-16 px-2 py-1 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                  disabled={recurrenceDraft.ends !== 'count'}
+                                />
+                                <span>occurrences</span>
+                              </label>
+                              <label className="flex items-center gap-2">
+                                <input
+                                  type="radio"
+                                  name="recurrenceEnds"
+                                  checked={recurrenceDraft.ends === 'until'}
+                                  onChange={() => updateRecurrenceDraft({ ends: 'until', endDate: recurrenceDraft.endDate || format(recurrenceAnchorDate(), 'yyyy-MM-dd') }, { forceEnable: false })}
+                                />
+                                <span>On</span>
+                                <input
+                                  type="date"
+                                  value={recurrenceDraft.endDate}
+                                  onChange={(e) => updateRecurrenceDraft({ endDate: e.target.value }, { forceEnable: false })}
+                                  className="flex-1 px-2 py-1 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                  disabled={recurrenceDraft.ends !== 'until'}
+                                />
+                              </label>
+                            </div>
+                          </div>
+                          <div className="flex justify-end gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={handleCancelRecurrenceEdit}
+                              className="px-3 py-1.5 text-sm text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleApplyRecurrence}
+                              className="px-3 py-1.5 text-sm text-white bg-blue-600 rounded-lg hover:bg-blue-700"
+                            >
+                              Save
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      {recurrenceConfirmationVisible && (
+                        <div
+                          className="absolute -bottom-2 -right-2 rounded-full shadow-lg flex items-center justify-center"
+                          style={{ width: '28px', height: '28px', backgroundColor: '#7C3AED', color: 'white' }}
+                        >
+                          <FiCheck size={16} />
+                        </div>
+                      )}
+                    </div>
+                  , document.body)}
                 </div>
               </div>
             </div>
@@ -859,7 +1607,10 @@ const EventModal = () => {
                           setExpandedChips(new Set())
                           setParticipantEmail('')
                         }}
-                        className="h-8 w-8 flex items-center justify-center bg-[#3478F6] text-white rounded-md hover:bg-[#2868E6] transition-colors flex-shrink-0"
+                        className="h-8 w-8 flex items-center justify-center text-white rounded-md transition-colors flex-shrink-0 focus:outline-none"
+                        style={{ backgroundColor: 'rgb(159, 134, 255)' }}
+                        onMouseEnter={(e) => e.target.style.backgroundColor = 'rgb(139, 114, 235)'}
+                        onMouseLeave={(e) => e.target.style.backgroundColor = 'rgb(159, 134, 255)'}
                         aria-label="Add participant"
                       >
                         <FiPlus size={16} />
@@ -892,6 +1643,7 @@ const EventModal = () => {
                   type="button"
                   onClick={handleDelete}
                   className="px-4 py-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors font-medium"
+                  ref={deleteButtonRef}
                 >
                   Delete
                 </button>
@@ -910,6 +1662,52 @@ const EventModal = () => {
             </div>
           </div>
         </form>
+        {showRecurringDeletePrompt && typeof document !== 'undefined' && createPortal(
+          <div
+            className="fixed z-[1200] bg-white border border-gray-200 rounded-2xl shadow-xl p-3 space-y-3"
+            style={{
+              top: deletePromptCoords.top,
+              left: deletePromptCoords.left,
+              width: 280
+            }}
+            ref={deletePromptRef}
+            onMouseDown={(e) => {
+              // Prevent document-level mousedown handlers from closing the prompt
+              // before the button onClick handlers can fire
+              e.stopPropagation()
+            }}
+          >
+            <div>
+              <p className="text-sm font-semibold text-gray-900">Delete recurring event?</p>
+              <p className="text-xs text-gray-500 mt-0.5">Remove only this event or the entire series.</p>
+            </div>
+            <div className="space-y-2 text-sm">
+              <button
+                type="button"
+                onClick={() => executeDelete('single')}
+                className="w-full px-3 py-2 text-left rounded-lg border border-gray-200 hover:bg-gray-50"
+              >
+                Delete this event
+              </button>
+              <button
+                type="button"
+                onClick={() => executeDelete('series')}
+                className="w-full px-3 py-2 text-left rounded-lg text-white"
+                style={{ backgroundColor: 'rgb(159, 134, 255)' }}
+              >
+                Delete entire series
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowRecurringDeletePrompt(false)}
+                className="w-full px-3 py-2 text-left rounded-lg border border-gray-200 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>,
+          document.body
+        )}
       </div>
     </>
   )

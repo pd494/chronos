@@ -16,6 +16,7 @@ import {
 } from 'date-fns'
 import { v4 as uuidv4 } from 'uuid'
 import { calendarApi } from '../lib/api'
+import { describeRecurrence, expandRecurrenceInstances } from '../lib/recurrence'
 import { useAuth } from './AuthContext'
 import { monthKey as cacheMonthKey, getMonths as cacheGetMonths, putMonth as cachePutMonth, pruneOlderThan } from '../lib/cache'
 
@@ -89,6 +90,17 @@ const safeToISOString = (value) => {
   return date ? date.toISOString() : null
 }
 
+const safeJsonParse = (value, fallback = null) => {
+  if (!value) return fallback
+  if (typeof value === 'object') return value
+  if (typeof value !== 'string') return fallback
+  try {
+    return JSON.parse(value)
+  } catch (_) {
+    return fallback
+  }
+}
+
 
 export const CalendarProvider = ({ children }) => {
   const { user } = useAuth()
@@ -114,6 +126,7 @@ export const CalendarProvider = ({ children }) => {
   const suppressedEventIdsRef = useRef(new Set())
   const suppressedTodoIdsRef = useRef(new Set())
   const pendingSyncEventIdsRef = useRef(new Map())
+  const optimisticRecurrenceMapRef = useRef(new Map())
   const idlePrefetchCancelRef = useRef(null)
   const cacheTTLRef = useRef(24 * 60 * 60 * 1000) // 24h TTL
   const calHashRef = useRef('all')
@@ -342,6 +355,15 @@ export const CalendarProvider = ({ children }) => {
     dispatchBounceEvent(eventId)
   }, [])
 
+  const migrateOptimisticRecurrenceParentId = (oldId, newId) => {
+    if (!oldId || !newId || oldId === newId) return
+    const existing = optimisticRecurrenceMapRef.current.get(oldId)
+    if (existing) {
+      optimisticRecurrenceMapRef.current.delete(oldId)
+      optimisticRecurrenceMapRef.current.set(newId, existing)
+    }
+  }
+
   const hydrateFromSnapshot = useCallback(() => {
     try {
       if (typeof window === 'undefined') return false
@@ -478,7 +500,11 @@ export const CalendarProvider = ({ children }) => {
                   isAllDay: Boolean(ev.isAllDay),
                   location: ev.location || '',
                   participants: ev.participants || [],
-                  todoId: todoId ? String(todoId) : undefined
+                  todoId: todoId ? String(todoId) : undefined,
+                  recurrenceRule: ev.recurrenceRule || null,
+                  recurrenceSummary: ev.recurrenceSummary || null,
+                  recurrenceMeta: ev.recurrenceMeta || null,
+                  recurringEventId: ev.recurringEventId || null
                 })
               }
             }
@@ -536,6 +562,19 @@ export const CalendarProvider = ({ children }) => {
           segEnd.toISOString(),
           selectedCalendars
         )
+        const seriesInfo = new Map()
+        for (const event of response.events) {
+          if (Array.isArray(event.recurrence) && event.recurrence.length) {
+            const rule = event.recurrence[0]
+            const startBoundary = parseCalendarBoundary(event.start) || parseCalendarBoundary(event.originalStartTime) || new Date()
+            const { state, summary } = describeRecurrence(rule, startBoundary)
+            seriesInfo.set(event.id, {
+              rule,
+              summary,
+              meta: state
+            })
+          }
+        }
         const googleEvents = response.events
           .map(event => {
             if (event.status && event.status.toLowerCase() === 'cancelled') {
@@ -548,6 +587,16 @@ export const CalendarProvider = ({ children }) => {
             const privateExtendedProps = { ...(event.extendedProperties?.private || {}) }
             const categoryColor = privateExtendedProps.categoryColor
             const todoId = privateExtendedProps.todoId
+            const masterInfo = event.recurringEventId ? seriesInfo.get(event.recurringEventId) : null
+            const ownInfo = seriesInfo.get(event.id)
+            const recurrenceRule = ownInfo?.rule
+              || masterInfo?.rule
+              || (Array.isArray(event.recurrence) && event.recurrence.length ? event.recurrence[0] : null)
+              || privateExtendedProps.recurrenceRule
+            const recurrenceMeta = ownInfo?.meta
+              || masterInfo?.meta
+              || (privateExtendedProps.recurrenceMeta ? safeJsonParse(privateExtendedProps.recurrenceMeta) : null)
+            const recurrenceSummary = ownInfo?.summary || masterInfo?.summary || privateExtendedProps.recurrenceSummary || null
             
             // Extract participants from attendees
             const participants = Array.isArray(event.attendees) 
@@ -565,7 +614,12 @@ export const CalendarProvider = ({ children }) => {
               isAllDay,
               location: event.location || '',
               participants,
-              todoId: todoId ? String(todoId) : undefined
+              todoId: todoId ? String(todoId) : undefined,
+              recurrenceRule: recurrenceRule || null,
+              recurrenceSummary,
+              recurrenceMeta,
+              recurringEventId: event.recurringEventId || null,
+              originalStartTime: event.originalStartTime?.dateTime || event.originalStartTime?.date || null
             }
           })
           .filter(ev => {
@@ -683,7 +737,11 @@ export const CalendarProvider = ({ children }) => {
                 color: ev.color,
                 calendar_id: ev.calendar_id,
                 isAllDay: ev.isAllDay,
-                todoId: ev.todoId
+                todoId: ev.todoId,
+                recurrenceRule: ev.recurrenceRule || null,
+                recurrenceSummary: ev.recurrenceSummary || null,
+                recurrenceMeta: ev.recurrenceMeta || null,
+                recurringEventId: ev.recurringEventId || null
               })
               byMonth.set(m, arr)
             }
@@ -833,6 +891,60 @@ export const CalendarProvider = ({ children }) => {
       }
     }
   }, [dateKey])
+
+  const clearOptimisticRecurrenceInstances = useCallback((parentId) => {
+    if (!parentId) return
+    const ids = optimisticRecurrenceMapRef.current.get(parentId)
+    if (!ids || !ids.length) return
+    optimisticRecurrenceMapRef.current.delete(parentId)
+    setEvents(prev => prev.filter(event => !ids.includes(event.id)))
+    ids.forEach((id) => {
+      eventIdsRef.current.delete(id)
+      pendingSyncEventIdsRef.current.delete(id)
+      removeEventFromAllSnapshots(id)
+    })
+    for (const [key, arr] of eventsByDayRef.current.entries()) {
+      const filtered = arr.filter(event => !ids.includes(event.id))
+      if (filtered.length !== arr.length) {
+        eventsByDayRef.current.set(key, filtered)
+      }
+    }
+  }, [removeEventFromAllSnapshots])
+
+  const addOptimisticRecurrenceInstances = useCallback((parentEvent, recurrenceMeta) => {
+    if (!parentEvent || !recurrenceMeta?.enabled) return
+    const visibleRange = getVisibleRange(currentDate, view)
+    if (!visibleRange?.start || !visibleRange?.end) return
+    const occurrences = expandRecurrenceInstances(parentEvent, recurrenceMeta, visibleRange.start, visibleRange.end, 400)
+    if (!occurrences.length) return
+    const baseStart = coerceDate(parentEvent.start)
+    if (!baseStart) return
+    const clones = []
+    occurrences.forEach((occurrence) => {
+      if (Math.abs(occurrence.start.getTime() - baseStart.getTime()) < 60000) {
+        return
+      }
+      const cloneId = `temp-rec-${parentEvent.id}-${occurrence.start.getTime()}`
+      clones.push({
+        ...parentEvent,
+        id: cloneId,
+        start: occurrence.start,
+        end: occurrence.end,
+        isOptimisticRecurrence: true,
+        isOptimistic: true,
+        parentRecurrenceId: parentEvent.id
+      })
+    })
+    if (!clones.length) return
+    const existing = optimisticRecurrenceMapRef.current.get(parentEvent.id) || []
+    optimisticRecurrenceMapRef.current.set(parentEvent.id, [...existing, ...clones.map(clone => clone.id)])
+    setEvents(prev => [...prev, ...clones])
+    clones.forEach((clone) => {
+      eventIdsRef.current.add(clone.id)
+      indexEventByDays(clone)
+      saveSnapshotsForAllViews(clone)
+    })
+  }, [currentDate, view, getVisibleRange, indexEventByDays, saveSnapshotsForAllViews])
 
   const revertEventState = useCallback((snapshot) => {
     if (!snapshot?.id) return
@@ -1380,12 +1492,31 @@ export const CalendarProvider = ({ children }) => {
         ? eventData.isAllDay
         : false
 
+    const recurrenceArray = Array.isArray(eventData.recurrence) && eventData.recurrence.length
+      ? eventData.recurrence
+      : (eventData.recurrenceRule ? [eventData.recurrenceRule] : undefined)
+
     const processedData = {
       ...eventData,
       start,
       end,
       color: eventData.color || 'blue',
       isAllDay
+    }
+
+    if (recurrenceArray) {
+      processedData.recurrence = recurrenceArray
+    } else {
+      delete processedData.recurrence
+    }
+    if (eventData.recurrenceRule) {
+      processedData.recurrenceRule = eventData.recurrenceRule
+    }
+    if (eventData.recurrenceSummary) {
+      processedData.recurrenceSummary = eventData.recurrenceSummary
+    }
+    if (eventData.recurrenceMeta) {
+      processedData.recurrenceMeta = eventData.recurrenceMeta
     }
 
     const newEvent = {
@@ -1400,6 +1531,9 @@ export const CalendarProvider = ({ children }) => {
     
     // Force immediate snapshot save for all views
     saveSnapshotsForAllViews(newEvent)
+    if (processedData.recurrenceMeta?.enabled) {
+      addOptimisticRecurrenceInstances(newEvent, processedData.recurrenceMeta)
+    }
     
     try {
       const calendarId = processedData.calendar_id || processedData.calendarId || 'primary'
@@ -1430,8 +1564,21 @@ export const CalendarProvider = ({ children }) => {
         isOptimistic: false,
         location: created?.location || processedData.location,
         participants: processedData.participants,
-        todoId: processedData.todoId || processedData.todo_id || undefined
+        todoId: processedData.todoId || processedData.todo_id || undefined,
+        recurrenceRule: Array.isArray(created?.recurrence) && created.recurrence.length
+          ? created.recurrence[0]
+          : processedData.recurrenceRule || null,
+        recurrenceSummary: created?.extendedProperties?.private?.recurrenceSummary
+          || processedData.recurrenceSummary
+          || null,
+        recurrenceMeta: safeJsonParse(
+          created?.extendedProperties?.private?.recurrenceMeta,
+          processedData.recurrenceMeta || null
+        ),
+        recurringEventId: created?.recurringEventId || null
       }
+
+      migrateOptimisticRecurrenceParentId(newEvent.id, normalizedEvent.id)
 
       if (!eventIdsRef.current.has(newEvent.id)) {
         suppressedEventIdsRef.current.add(normalizedEvent.id)
@@ -1463,6 +1610,19 @@ export const CalendarProvider = ({ children }) => {
       removeEventFromAllSnapshots(newEvent.id)
       saveSnapshotsForAllViews(normalizedWithPending)
 
+      if (processedData.recurrence || processedData.recurrenceRule || processedData.recurrenceSummary) {
+        try {
+          const { start: visibleStart, end: visibleEnd } = getVisibleRange(currentDate, view)
+          if (visibleStart && visibleEnd) {
+            fetchEventsForRange(visibleStart, visibleEnd, true, true)
+              .then(() => clearOptimisticRecurrenceInstances(normalizedEvent.id))
+              .catch(() => {})
+          }
+        } catch (_) {}
+      } else {
+        clearOptimisticRecurrenceInstances(normalizedEvent.id)
+      }
+
       return normalizedWithPending
     } catch (error) {
       console.error('Failed to create event:', error)
@@ -1473,9 +1633,20 @@ export const CalendarProvider = ({ children }) => {
         const filtered = arr.filter(event => event.id !== newEvent.id)
         eventsByDayRef.current.set(key, filtered)
       }
+      clearOptimisticRecurrenceInstances(newEvent.id)
       throw error
     }
-  }, [indexEventByDays, saveSnapshotsForAllViews, removeEventFromAllSnapshots])
+  }, [
+    indexEventByDays,
+    saveSnapshotsForAllViews,
+    removeEventFromAllSnapshots,
+    getVisibleRange,
+    currentDate,
+    view,
+    fetchEventsForRange,
+    addOptimisticRecurrenceInstances,
+    clearOptimisticRecurrenceInstances
+  ])
 
   const updateEvent = useCallback(async (id, updatedData) => {
     // Check if this is an optimistic event (temp ID)
@@ -1511,6 +1682,37 @@ export const CalendarProvider = ({ children }) => {
     };
     if (typeof isAllDay === 'boolean') {
       processedData.isAllDay = isAllDay
+    }
+    const recurrenceArray = Array.isArray(updatedData.recurrence) && updatedData.recurrence.length
+      ? updatedData.recurrence
+      : (updatedData.recurrenceRule ? [updatedData.recurrenceRule] : undefined)
+    if (recurrenceArray) {
+      processedData.recurrence = recurrenceArray
+    } else if ('recurrence' in processedData) {
+      delete processedData.recurrence
+    }
+    if ('recurrenceRule' in updatedData) {
+      processedData.recurrenceRule = updatedData.recurrenceRule
+      if (!updatedData.recurrenceRule) {
+        delete processedData.recurrence
+      }
+    }
+    if ('recurrenceSummary' in updatedData) {
+      processedData.recurrenceSummary = updatedData.recurrenceSummary
+    }
+    if ('recurrenceMeta' in updatedData) {
+      processedData.recurrenceMeta = updatedData.recurrenceMeta
+    }
+
+    const recurrenceMeta = processedData.recurrenceMeta
+    clearOptimisticRecurrenceInstances(id)
+    if (recurrenceMeta?.enabled) {
+      const parentSnapshot = {
+        ...(existingEvent || {}),
+        ...processedData,
+        id
+      }
+      addOptimisticRecurrenceInstances(parentSnapshot, recurrenceMeta)
     }
 
     // Optimistically update local state
@@ -1554,7 +1756,20 @@ export const CalendarProvider = ({ children }) => {
       // Find existing event to get its calendar id
       const calendarId = existingEvent?.calendar_id || 'primary'
       const sendNotifications = processedData.sendNotifications || false
-      await calendarApi.updateEvent(id, processedData, calendarId, sendNotifications)
+      const backendEventId = existingEvent?.recurringEventId || id
+      await calendarApi.updateEvent(backendEventId, processedData, calendarId, sendNotifications)
+      if (processedData.recurrence || processedData.recurrenceRule || processedData.recurrenceSummary) {
+        try {
+          const { start: visibleStart, end: visibleEnd } = getVisibleRange(currentDate, view)
+          if (visibleStart && visibleEnd) {
+            fetchEventsForRange(visibleStart, visibleEnd, true, true)
+              .then(() => clearOptimisticRecurrenceInstances(id))
+              .catch(() => {})
+          }
+        } catch (_) {}
+      } else {
+        clearOptimisticRecurrenceInstances(id)
+      }
     } catch (error) {
       console.error('Failed to update event:', error);
       const message = typeof error?.message === 'string' ? error.message : ''
@@ -1565,58 +1780,213 @@ export const CalendarProvider = ({ children }) => {
           triggerEventBounce(previousEventSnapshot.id)
         }
       }
+      clearOptimisticRecurrenceInstances(id)
     }
-  }, [indexEventByDays, events, saveSnapshotsForAllViews, revertEventState, triggerEventBounce])
+  }, [
+    indexEventByDays,
+    events,
+    saveSnapshotsForAllViews,
+    revertEventState,
+    triggerEventBounce,
+    getVisibleRange,
+    currentDate,
+    view,
+    fetchEventsForRange,
+    addOptimisticRecurrenceInstances,
+    clearOptimisticRecurrenceInstances
+  ])
 
   const deleteEvent = useCallback(async (event) => {
-    const eventId = event?.id || event
-    const calendarId = event?.calendar_id || 'primary'
-    const isOptimistic = Boolean(event.isOptimistic) || (typeof eventId === 'string' && eventId.startsWith('temp-'))
-    const snapshot = {
-      ...event,
-      start: coerceDate(event.start) || new Date(),
-      end: coerceDate(event.end) || new Date()
+    const eventObject = (event && typeof event === 'object') ? event : null
+    if (!eventObject) {
+      console.warn('deleteEvent: event object required', event)
+      return
     }
 
-    // Remove from ALL data structures immediately
-    setEvents(prev => prev.filter(e => e.id !== eventId))
-    eventIdsRef.current.delete(eventId)
-    pendingSyncEventIdsRef.current.delete(eventId)
-    unlinkEvent(eventId)
+    const rawId = eventObject.id || (typeof event === 'string' ? event : null)
+    if (!rawId) return
+
+    const calendarId = eventObject.calendar_id || eventObject.calendarId || 'primary'
+    const deleteSeries = eventObject.deleteScope === 'series' || Boolean(eventObject.deleteSeries)
+    const isOptimistic = Boolean(eventObject.isOptimistic) || (typeof rawId === 'string' && rawId.startsWith('temp-'))
+
+    const idsToRemove = new Set()
+    let snapshotsToRestore = []
+
+    if (deleteSeries && rawId) {
+      const seriesId = eventObject.recurringEventId || eventObject.parentRecurrenceId || rawId
+      if (!seriesId) {
+        console.warn('deleteEvent: unable to resolve series id for', rawId)
+        return
+      }
+
+      clearOptimisticRecurrenceInstances(seriesId)
+      const eventsToDelete = []
+      const removalIds = new Set()
+
+      // Show toast immediately (optimistic)
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('eventDeleted', { detail: { message: 'Deleted event' } }))
+      }
+
+      setEvents(prev => {
+        const matches = prev.filter(ev =>
+          ev.id === seriesId ||
+          ev.recurringEventId === seriesId ||
+          ev.parentRecurrenceId === seriesId
+        )
+
+        if (!matches.length) {
+          console.warn('No events found to delete for series:', seriesId)
+          return prev
+        }
+
+        matches.forEach(ev => {
+          eventsToDelete.push(ev)
+          removalIds.add(ev.id)
+        })
+
+        snapshotsToRestore = matches.map(ev => ({
+          ...ev,
+          start: coerceDate(ev.start) || new Date(),
+          end: coerceDate(ev.end) || new Date()
+        }))
+
+        removalIds.forEach(id => {
+          eventIdsRef.current.delete(id)
+          pendingSyncEventIdsRef.current.delete(id)
+          unlinkEvent(id)
+          removeEventFromAllSnapshots(id)
+        })
+
+        for (const [key, arr] of eventsByDayRef.current.entries()) {
+          const next = arr.filter(e => !removalIds.has(e.id))
+          if (next.length !== arr.length) {
+            eventsByDayRef.current.set(key, next)
+          }
+        }
+
+        removalIds.forEach(id => suppressedEventIdsRef.current.add(id))
+
+        return prev.filter(ev => !removalIds.has(ev.id))
+      })
+
+      if (!eventsToDelete.length) {
+        if (!isOptimistic && seriesId) {
+          try {
+            await calendarApi.deleteEvent(seriesId, calendarId)
+            // Show toast notification
+            if (typeof window !== 'undefined') {
+              window.dispatchEvent(new CustomEvent('eventDeleted'))
+            }
+          } catch (error) {
+            const message = typeof error?.message === 'string' ? error.message : ''
+            if (!/not found/i.test(message) && !/deleted/i.test(message) && !/Resource has been deleted/i.test(message)) {
+              console.error('Failed to delete event series:', error)
+            }
+          }
+        }
+        return
+      }
+
+      // Perform backend deletion of the series master only (Google removes all instances)
+      if (!isOptimistic && seriesId) {
+        try {
+          await calendarApi.deleteEvent(seriesId, calendarId)
+          try {
+            const { start: visibleStart, end: visibleEnd } = getVisibleRange(currentDate, view)
+            if (visibleStart && visibleEnd) {
+              fetchEventsForRange(visibleStart, visibleEnd, true, true).catch(() => {})
+            }
+          } catch (_) {}
+        } catch (error) {
+          const message = typeof error?.message === 'string' ? error.message : ''
+          if (!/not found/i.test(message) && !/deleted/i.test(message) && !/Resource has been deleted/i.test(message)) {
+            console.error('Failed to delete event series:', error)
+            // Show error toast
+            if (typeof window !== 'undefined') {
+              window.dispatchEvent(new CustomEvent('eventDeleted', { detail: { message: "Error couldn't delete" } }))
+            }
+            // Rollback on error
+            setEvents(prevEvents => [...prevEvents, ...snapshotsToRestore])
+            snapshotsToRestore.forEach(snapshot => {
+              eventIdsRef.current.add(snapshot.id)
+              indexEventByDays(snapshot)
+              saveSnapshotsForAllViews(snapshot)
+              suppressedEventIdsRef.current.delete(snapshot.id)
+            })
+          }
+        }
+      }
+
+      return
+    } else {
+      // Single event deletion
+      const snapshot = {
+        ...eventObject,
+        start: coerceDate(eventObject.start) || new Date(),
+        end: coerceDate(eventObject.end) || new Date()
+      }
+      // Show toast immediately (optimistic)
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('eventDeleted', { detail: { message: 'Deleted event' } }))
+      }
+
+      snapshotsToRestore = [snapshot]
+      idsToRemove.add(rawId)
+      setEvents(prev => prev.filter(e => e.id !== rawId))
+    }
+
+    idsToRemove.forEach(id => {
+      eventIdsRef.current.delete(id)
+      pendingSyncEventIdsRef.current.delete(id)
+      unlinkEvent(id)
+      removeEventFromAllSnapshots(id)
+    })
+
     for (const [key, arr] of eventsByDayRef.current.entries()) {
-      const next = arr.filter(e => e.id !== eventId)
+      const next = arr.filter(e => !idsToRemove.has(e.id))
       if (next.length !== arr.length) {
         eventsByDayRef.current.set(key, next)
       }
     }
 
-    // Remove from ALL snapshots immediately (month, week, day)
-    removeEventFromAllSnapshots(eventId)
-
-    // Track locally deleted IDs to prevent stale rehydration
-    suppressedEventIdsRef.current.add(eventId)
+    idsToRemove.forEach(id => suppressedEventIdsRef.current.add(id))
 
     try {
       if (!isOptimistic) {
-        await calendarApi.deleteEvent(eventId, calendarId)
+        await calendarApi.deleteEvent(rawId, calendarId)
       }
     } catch (error) {
       const message = typeof error?.message === 'string' ? error.message : ''
-      // If the event was already gone remotely (deleted/not found), treat as success
       if (/not found/i.test(message) || /deleted/i.test(message) || /Resource has been deleted/i.test(message)) {
-        // Keep it suppressed - event is gone from Google
         return
       }
 
       console.error('Failed to delete event:', error)
-      // Only restore if it wasn't a "already deleted" error
-      setEvents(prev => [...prev, snapshot])
-      eventIdsRef.current.add(eventId)
-      indexEventByDays(snapshot)
-      saveSnapshotsForAllViews(snapshot)
-      suppressedEventIdsRef.current.delete(eventId)
+      // Show error toast
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('eventDeleted', { detail: { message: "Error couldn't delete" } }))
+      }
+      setEvents(prev => [...prev, ...snapshotsToRestore])
+      snapshotsToRestore.forEach(snapshot => {
+        eventIdsRef.current.add(snapshot.id)
+        indexEventByDays(snapshot)
+        saveSnapshotsForAllViews(snapshot)
+        suppressedEventIdsRef.current.delete(snapshot.id)
+      })
     }
-  }, [unlinkEvent, linkTodoEvent, indexEventByDays, removeEventFromAllSnapshots, saveSnapshotsForAllViews])
+  }, [
+    unlinkEvent,
+    indexEventByDays,
+    removeEventFromAllSnapshots,
+    saveSnapshotsForAllViews,
+    clearOptimisticRecurrenceInstances,
+    getVisibleRange,
+    currentDate,
+    view,
+    fetchEventsForRange
+  ])
 
   const openEventModal = useCallback((event = null, isNewEvent = false) => {
     // If this is a new drag-created event
