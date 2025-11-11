@@ -76,6 +76,9 @@ const RSVP_OPTIONS = [
   { label: 'Accept', value: 'accepted' }
 ]
 
+const DEFAULT_TIMED_START = '10:30'
+const DEFAULT_TIMED_END = '11:45'
+
 // Helper to get initials from email
 const getInitials = (email) => {
   const name = email.split('@')[0];
@@ -203,10 +206,11 @@ const EventModal = () => {
   
   const [eventName, setEventName] = useState('')
   const [eventDate, setEventDate] = useState(format(new Date(), 'yyyy-MM-dd'))
-  const [timeStart, setTimeStart] = useState('10:30')
-  const [timeEnd, setTimeEnd] = useState('11:45')
+  const [eventEndDate, setEventEndDate] = useState(format(new Date(), 'yyyy-MM-dd'))
+  const [timeStart, setTimeStart] = useState(DEFAULT_TIMED_START)
+  const [timeEnd, setTimeEnd] = useState(DEFAULT_TIMED_END)
   const [color, setColor] = useState('#3478F6')
-  const [isAllDay, setIsAllDay] = useState(false)
+  const [isAllDay, setIsAllDay] = useState(true)
   const [location, setLocation] = useState('')
   const [internalVisible, setInternalVisible] = useState(false)
   const [participants, setParticipants] = useState([])
@@ -237,6 +241,7 @@ const EventModal = () => {
   const [hasChanges, setHasChanges] = useState(false)
   const titleInputRef = useRef(null)
   const modalRef = useRef(null)
+  const lastTimedRangeRef = useRef({ start: DEFAULT_TIMED_START, end: DEFAULT_TIMED_END })
   const colorPickerRef = useRef(null)
   const recurrencePickerRef = useRef(null)
   const recurrenceTriggerRef = useRef(null)
@@ -487,10 +492,13 @@ const EventModal = () => {
   useEffect(() => {
     let initialEventName = 'New Event';
     let initialEventDate = format(new Date(), 'yyyy-MM-dd');
-    let initialTimeStart = '10:30';
-    let initialTimeEnd = '11:45';
+    let initialEventEndDate = initialEventDate;
+    let initialTimeStart = '00:00';
+    let initialTimeEnd = '23:59';
+    let timedFallbackStart = DEFAULT_TIMED_START;
+    let timedFallbackEnd = DEFAULT_TIMED_END;
     let initialColor = 'blue';
-    let initialIsAllDay = false;
+    let initialIsAllDay = true;
     let initialLocation = '';
 
     if (selectedEvent) {
@@ -500,8 +508,17 @@ const EventModal = () => {
       
       initialEventName = selectedEvent.title || '';
       initialEventDate = format(start, 'yyyy-MM-dd');
+      if (selectedEvent.isAllDay) {
+        const inclusiveEnd = new Date(end)
+        inclusiveEnd.setDate(inclusiveEnd.getDate() - 1)
+        initialEventEndDate = format(inclusiveEnd, 'yyyy-MM-dd')
+      } else {
+        initialEventEndDate = format(end, 'yyyy-MM-dd')
+      }
       initialTimeStart = format(start, 'HH:mm');
       initialTimeEnd = format(end, 'HH:mm');
+      timedFallbackStart = initialTimeStart;
+      timedFallbackEnd = initialTimeEnd;
       initialColor = selectedEvent.color || 'blue';
       initialIsAllDay = selectedEvent.isAllDay || false;
       initialLocation = selectedEvent.location || '';
@@ -521,13 +538,28 @@ const EventModal = () => {
       
       initialEventName = dragTitle || 'New Event';
       initialEventDate = format(startDateObj, 'yyyy-MM-dd');
-      initialTimeStart = format(startDateObj, 'HH:mm');
-      initialTimeEnd = format(endDateObj, 'HH:mm');
       initialColor = dragColor || 'blue';
-      initialIsAllDay = dragIsAllDay || false;
+      const derivedAllDay = typeof dragIsAllDay === 'boolean' ? dragIsAllDay : true;
+      initialIsAllDay = derivedAllDay;
+      if (derivedAllDay) {
+        const inclusiveEnd = new Date(endDateObj)
+        inclusiveEnd.setDate(inclusiveEnd.getDate() - 1)
+        initialEventEndDate = format(inclusiveEnd, 'yyyy-MM-dd')
+        initialTimeStart = '00:00'
+        initialTimeEnd = '23:59'
+      } else {
+        initialEventEndDate = format(endDateObj, 'yyyy-MM-dd')
+        initialTimeStart = format(startDateObj, 'HH:mm');
+        initialTimeEnd = format(endDateObj, 'HH:mm');
+        timedFallbackStart = initialTimeStart;
+        timedFallbackEnd = initialTimeEnd;
+      }
       
       // Set flag for whether to show date picker
       setIsFromDayClick(!!fromDayClick);
+    } else {
+      // Brand new event from + button defaults to all-day on the current date
+      initialIsAllDay = true;
     }
     
     const recurrenceAnchor = (() => {
@@ -552,10 +584,20 @@ const EventModal = () => {
 
     setEventName(initialEventName);
     setEventDate(initialEventDate);
-    setTimeStart(initialTimeStart);
-    setTimeEnd(initialTimeEnd);
+    setEventEndDate(initialEventEndDate);
     setColor(initialColor);
     setIsAllDay(initialIsAllDay);
+    if (initialIsAllDay) {
+      setTimeStart('00:00');
+      setTimeEnd('23:59');
+    } else {
+      setTimeStart(initialTimeStart);
+      setTimeEnd(initialTimeEnd);
+    }
+    lastTimedRangeRef.current = {
+      start: timedFallbackStart,
+      end: timedFallbackEnd
+    }
     setLocation(initialLocation);
     setRecurrenceState(cloneRecurrenceState(recurrenceDetails.state))
     setRecurrenceDraft(cloneRecurrenceState(recurrenceDetails.state))
@@ -567,8 +609,9 @@ const EventModal = () => {
     initialValuesRef.current = {
       eventName: initialEventName,
       eventDate: initialEventDate,
-      timeStart: initialTimeStart,
-      timeEnd: initialTimeEnd,
+      eventEndDate: initialEventEndDate,
+      timeStart: initialIsAllDay ? '00:00' : initialTimeStart,
+      timeEnd: initialIsAllDay ? '23:59' : initialTimeEnd,
       color: initialColor,
       isAllDay: initialIsAllDay,
       location: initialLocation,
@@ -588,6 +631,15 @@ const EventModal = () => {
     setInviteResponseError('')
     setOptimisticRSVPStatus(null)
   }, [selectedEvent?.id])
+
+  useEffect(() => {
+    if (!eventDate || !eventEndDate) return
+    const start = new Date(eventDate)
+    const end = new Date(eventEndDate)
+    if (end < start) {
+      setEventEndDate(eventDate)
+    }
+  }, [eventDate, eventEndDate])
 
   useEffect(() => {
     if (!internalVisible) return
@@ -662,6 +714,7 @@ const EventModal = () => {
     const changed = 
       eventName !== initial.eventName ||
       eventDate !== initial.eventDate ||
+      eventEndDate !== initial.eventEndDate ||
       timeStart !== initial.timeStart ||
       timeEnd !== initial.timeEnd ||
       color !== initial.color ||
@@ -688,7 +741,7 @@ const EventModal = () => {
         setShowNotifyMembers(true);
       }
     }
-  }, [selectedEvent, eventName, eventDate, timeStart, timeEnd, color, isAllDay, location, participants, recurrenceState, buildDateWithTime]);
+  }, [selectedEvent, eventName, eventDate, eventEndDate, timeStart, timeEnd, color, isAllDay, location, participants, recurrenceState, buildDateWithTime]);
   
 
   // kept for backward compat (no-op now that we use portal)
@@ -853,6 +906,56 @@ const EventModal = () => {
     setShowRecurrencePicker(false)
   }
 
+  const ensureTimedMode = useCallback(() => {
+    if (!isAllDay) return
+    const fallbackStart = lastTimedRangeRef.current.start || DEFAULT_TIMED_START
+    const fallbackEnd = lastTimedRangeRef.current.end || DEFAULT_TIMED_END
+    setIsAllDay(false)
+    setTimeStart(fallbackStart)
+    setTimeEnd(fallbackEnd)
+  }, [isAllDay])
+
+  const handleAllDayToggle = useCallback((checked) => {
+    if (checked) {
+      if (!isAllDay) {
+        lastTimedRangeRef.current = {
+          start: timeStart || DEFAULT_TIMED_START,
+          end: timeEnd || DEFAULT_TIMED_END
+        }
+      }
+      setIsAllDay(true)
+      setTimeStart('00:00')
+      setTimeEnd('23:59')
+      setTimeError('')
+    } else {
+      ensureTimedMode()
+    }
+  }, [ensureTimedMode, isAllDay, timeStart, timeEnd])
+
+  const handleTimeStartChange = useCallback((value) => {
+    if (isAllDay) {
+      ensureTimedMode()
+    }
+    const nextValue = value || DEFAULT_TIMED_START
+    setTimeStart(nextValue)
+    lastTimedRangeRef.current = {
+      ...lastTimedRangeRef.current,
+      start: nextValue
+    }
+  }, [ensureTimedMode, isAllDay])
+
+  const handleTimeEndChange = useCallback((value) => {
+    if (isAllDay) {
+      ensureTimedMode()
+    }
+    const nextValue = value || DEFAULT_TIMED_END
+    setTimeEnd(nextValue)
+    lastTimedRangeRef.current = {
+      ...lastTimedRangeRef.current,
+      end: nextValue
+    }
+  }, [ensureTimedMode, isAllDay])
+
   const handleSubmit = (e) => {
     if (e) e.preventDefault();
     
@@ -862,11 +965,17 @@ const EventModal = () => {
     if (isAllDay) {
       finalStartDateTime = buildDateWithTime(eventDate, '00:00') || new Date()
       finalStartDateTime.setHours(0, 0, 0, 0)
-      finalEndDateTime = new Date(finalStartDateTime.getTime())
-      finalEndDateTime.setHours(23, 59, 0, 0)
+      const rawEnd = buildDateWithTime(eventEndDate || eventDate, '00:00') || new Date(finalStartDateTime)
+      rawEnd.setHours(0, 0, 0, 0)
+      if (rawEnd < finalStartDateTime) {
+        setTimeError('End date must be after start date')
+        return
+      }
+      finalEndDateTime = new Date(rawEnd.getTime())
+      finalEndDateTime.setDate(finalEndDateTime.getDate() + 1)
     } else {
       finalStartDateTime = buildDateWithTime(eventDate, timeStart) || new Date()
-      finalEndDateTime = buildDateWithTime(eventDate, timeEnd)
+      finalEndDateTime = buildDateWithTime(eventEndDate || eventDate, timeEnd)
       if (!finalEndDateTime || finalEndDateTime <= finalStartDateTime) {
         setTimeError('End time must be after start time')
         return
@@ -897,6 +1006,10 @@ const EventModal = () => {
       eventData.recurrenceMeta = { enabled: false }
     }
         
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('chronos:month-range-reset'))
+    }
+
     const action = selectedEvent
       ? updateEvent(selectedEvent.id, eventData)
       : createEvent(eventData);
@@ -911,17 +1024,23 @@ const EventModal = () => {
   // Validate times whenever inputs change
   useEffect(() => {
     if (isAllDay) {
-      setTimeError('')
+      const start = buildDateWithTime(eventDate, '00:00')
+      const end = buildDateWithTime(eventEndDate, '00:00')
+      if (!start || !end) {
+        setTimeError('')
+        return
+      }
+      setTimeError(end < start ? 'End date must be after start date' : '')
       return
     }
     const start = buildDateWithTime(eventDate, timeStart)
-    const end = buildDateWithTime(eventDate, timeEnd)
+    const end = buildDateWithTime(eventEndDate || eventDate, timeEnd)
     if (!start || !end) {
       setTimeError('')
       return
     }
     setTimeError(end <= start ? 'End time must be after start time' : '')
-  }, [eventDate, timeStart, timeEnd, isAllDay, buildDateWithTime])
+  }, [eventDate, eventEndDate, timeStart, timeEnd, isAllDay, buildDateWithTime])
   
   const isRecurringEvent = useMemo(() => {
     if (!selectedEvent) return false
@@ -1134,10 +1253,10 @@ const EventModal = () => {
               />
             </div>
 
-            {/* Date, Color, Repeat Row */}
-            <div className="grid grid-cols-[minmax(0,1.35fr)_auto_minmax(0,1fr)] gap-2 items-end">
+            {/* Date Range */}
+            <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">Date</label>
+                <label className="block text-xs font-medium text-gray-700 mb-1">Start Date</label>
                 {(isFromDayClick && !selectedEvent) ? (
                   // Static date display when created from day click (new event only)
                   <div className="flex items-center px-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg">
@@ -1161,7 +1280,27 @@ const EventModal = () => {
                   </div>
                 )}
               </div>
-              
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">End Date</label>
+                <div className="relative">
+                  <div className="flex items-center px-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-100 transition-colors">
+                    <FiCalendar className="text-gray-500 mr-2" size={14} />
+                    <span className="flex-grow text-sm text-gray-900 truncate">{formatDateForDisplay(eventEndDate)}</span>
+                    <FiChevronDown className="text-gray-400" size={14} />
+                  </div>
+                  <input
+                    type="date"
+                    value={eventEndDate}
+                    min={eventDate}
+                    onChange={(e) => setEventEndDate(e.target.value)}
+                    className="absolute inset-0 opacity-0 cursor-pointer"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Color & Repeat */}
+            <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-2 items-end">
               {/* Color Picker */}
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-1">Color</label>
@@ -1542,30 +1681,49 @@ const EventModal = () => {
               </div>
             </div>
             
-            {/* Time Start/End */}
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">Start</label>
-                <input
-                  type="time"
-                  value={timeStart}
-                  onChange={(e) => setTimeStart(e.target.value)}
-                  disabled={isAllDay}
-                  className="w-full px-3 py-1.5 text-sm text-gray-900 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50"
-                />
-              </div>
-              
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">End</label>
-                <input
-                  type="time"
-                  value={timeEnd}
-                  onChange={(e) => setTimeEnd(e.target.value)}
-                  disabled={isAllDay}
-                  className="w-full px-3 py-1.5 text-sm text-gray-900 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50"
-                />
-              </div>
+            {/* All-day toggle */}
+            <div className="flex items-center gap-2">
+              <input
+                id="event-all-day-toggle"
+                type="checkbox"
+                checked={isAllDay}
+                onChange={(e) => handleAllDayToggle(e.target.checked)}
+                className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+              />
+              <label htmlFor="event-all-day-toggle" className="text-sm text-gray-700 select-none">
+                All-day event
+              </label>
             </div>
+
+            {/* Time Start/End */}
+            {isAllDay ? (
+              <div className="flex items-center gap-3 px-3 py-2 bg-gray-50 border border-dashed border-gray-200 rounded-lg text-sm text-gray-700">
+                <FiClock className="text-blue-500" size={16} />
+                <span className="flex-1">This event spans the entire day. Toggle off to pick custom hours.</span>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Start</label>
+                  <input
+                    type="time"
+                    value={timeStart}
+                    onChange={(e) => handleTimeStartChange(e.target.value)}
+                    className="w-full px-3 py-1.5 text-sm text-gray-900 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
+                
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">End</label>
+                  <input
+                    type="time"
+                    value={timeEnd}
+                    onChange={(e) => handleTimeEndChange(e.target.value)}
+                    className="w-full px-3 py-1.5 text-sm text-gray-900 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
+              </div>
+            )}
             {!isAllDay && timeError && (
               <div className="text-xs text-red-600">{timeError}</div>
             )}

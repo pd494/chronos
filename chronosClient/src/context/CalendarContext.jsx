@@ -2148,13 +2148,10 @@ export const CalendarProvider = ({ children }) => {
       // Called from the + Event button in header with no event
       setSelectedEvent(null);
       
-      // Create a default new event starting at the current hour, lasting 1 hour
-      const now = new Date();
-      const startDate = new Date(now);
-      startDate.setMinutes(0, 0, 0); // Round to the current hour
-      
-      const endDate = new Date(startDate);
-      endDate.setHours(startDate.getHours() + 1); // 1 hour duration
+      // Default new events to an all-day block on the currently focused date
+      const baseDate = startOfDay(currentDate || new Date());
+      const startDate = new Date(baseDate);
+      const endDate = addDays(new Date(baseDate), 1);
       
       // Create default prefilled event
       window.prefilledEventDates = {
@@ -2162,6 +2159,7 @@ export const CalendarProvider = ({ children }) => {
         endDate,
         title: 'New Event',
         color: 'blue',
+        isAllDay: true,
         fromEventButton: true // Flag to indicate this came from + Event button
       };
       

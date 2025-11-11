@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { format, differenceInCalendarDays, startOfDay } from 'date-fns'
 import { getEventColors } from '../../lib/eventColors'
 
 const AllDayEvent = ({ event, onOpen, className = '', style = {} }) => {
@@ -94,13 +95,33 @@ const AllDayEvent = ({ event, onOpen, className = '', style = {} }) => {
     ? hexToRgba(colors.background, 0.45)
     : colors.background
 
+  const spansMultipleDays = (() => {
+    if (!event?.start || !event?.end) return false
+    try {
+      const startDay = startOfDay(new Date(event.start))
+      const endDay = startOfDay(new Date(event.end))
+      return differenceInCalendarDays(endDay, startDay) >= 1
+    } catch (_) {
+      return false
+    }
+  })()
+
+  const showStartTime = spansMultipleDays && !event.isAllDay && event.start
+  const formattedStartTime = showStartTime
+    ? format(new Date(event.start), 'h:mma').toLowerCase()
+    : null
+
+  const indicatorColor = isDeclined
+    ? 'rgba(148, 163, 184, 0.8)'
+    : (colors.border || colors.text)
+
   return (
     <div
       draggable
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
       onClick={handleClick}
-      className={`truncate rounded px-2 cursor-pointer text-xs relative flex items-center event-draggable ${shouldBounce ? 'event-bounce' : ''} ${(isPendingInvite || isTentative) ? 'pending-invite-block' : ''} ${isDeclined ? 'declined-event-block' : ''} ${className}`.trim()}
+      className={`truncate rounded px-2 cursor-pointer text-xs relative flex items-center gap-2 event-draggable ${shouldBounce ? 'event-bounce' : ''} ${(isPendingInvite || isTentative) ? 'pending-invite-block' : ''} ${isDeclined ? 'declined-event-block' : ''} ${className}`.trim()}
       style={{
         backgroundColor,
         color: titleColor,
@@ -111,8 +132,17 @@ const AllDayEvent = ({ event, onOpen, className = '', style = {} }) => {
       }}
       data-event-id={event.id}
     >
-      <span className="font-medium truncate" style={{ color: titleColor }}>
-        {event.title}
+      <div
+        className="flex-shrink-0 w-1 h-4 rounded"
+        style={{ backgroundColor: indicatorColor }}
+      ></div>
+      <span className="font-medium truncate flex items-center gap-1" style={{ color: titleColor }}>
+        <span className="truncate">{event.title}</span>
+        {formattedStartTime && (
+          <span className="text-[11px] font-semibold text-slate-600 whitespace-nowrap">
+            {formattedStartTime}
+          </span>
+        )}
       </span>
     </div>
   )

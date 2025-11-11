@@ -1,4 +1,4 @@
-import { format } from 'date-fns'
+import { format, differenceInCalendarDays, startOfDay } from 'date-fns'
 import { useState, useEffect } from 'react'
 import { useCalendar } from '../../context/CalendarContext'
 
@@ -24,7 +24,19 @@ const EventIndicator = ({ event, isMonthView }) => {
       if (timeoutId) clearTimeout(timeoutId)
     }
   }, [event.id])
-  
+  const spansMultipleDays = (() => {
+    if (!event?.start || !event?.end) return false
+    try {
+      const startDay = startOfDay(new Date(event.start))
+      const endDay = startOfDay(new Date(event.end))
+      return differenceInCalendarDays(endDay, startDay) >= 1
+    } catch (_) {
+      return false
+    }
+  })()
+
+  const treatAsAllDay = event.isAllDay || spansMultipleDays
+
   const handleClick = (e) => {
     if (isDragging) return
     e.stopPropagation()
@@ -158,7 +170,7 @@ const EventIndicator = ({ event, isMonthView }) => {
   }
   
   // For hex colors, use inline styles - only for all-day events
-  const bgStyle = (isHexColor && event.isAllDay) ? {
+  const bgStyle = (isHexColor && treatAsAllDay) ? {
     backgroundColor: lightenHexColor(eventColor, 70)
   } : {};
   
@@ -186,7 +198,7 @@ const EventIndicator = ({ event, isMonthView }) => {
     : {}
   const baseOpacity = (() => {
     if (isDeclined) {
-      return event.isAllDay ? 0.6 : 0.55
+      return treatAsAllDay ? 0.6 : 0.55
     }
     if ((isPendingInvite || isTentative) && isMonthView) return 0.9
     return 1
@@ -197,7 +209,7 @@ const EventIndicator = ({ event, isMonthView }) => {
       draggable={!isDragging}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
-      className={`text-xs mb-1 flex items-center space-x-1 px-1 py-0.5 overflow-hidden transition-opacity hover:opacity-30 ${isMonthView ? (isHexColor ? (event.isAllDay ? 'rounded-md' : '') : `${event.isAllDay ? getBgColorClass(eventColor) + ' bg-opacity-70' : ''} ${event.isAllDay ? 'rounded-md' : ''}`) : ''} calendar-event ${shouldBounce ? 'event-bounce' : ''} ${
+      className={`text-xs mb-1 flex items-center space-x-1 px-1 py-0.5 overflow-hidden transition-opacity hover:opacity-30 ${isMonthView ? (isHexColor ? (treatAsAllDay ? 'rounded-md' : '') : `${treatAsAllDay ? getBgColorClass(eventColor) + ' bg-opacity-70' : ''} ${treatAsAllDay ? 'rounded-md' : ''}`) : ''} calendar-event ${shouldBounce ? 'event-bounce' : ''} ${
         (isPendingInvite || isTentative) && isMonthView ? 'pending-month-invite' : ''
       } ${isDeclined && isMonthView ? 'declined-month-event' : ''}`}
       onClick={handleClick}
@@ -208,7 +220,7 @@ const EventIndicator = ({ event, isMonthView }) => {
         minWidth: 0,
         cursor: isDragging ? 'grabbing' : 'pointer',
         opacity: isDragging ? 0.5 : baseOpacity,
-        ...(isMonthView && isHexColor && event.isAllDay ? bgStyle : {}),
+        ...(isMonthView && isHexColor && treatAsAllDay ? bgStyle : {}),
         ...(isSelected ? { boxShadow: '0 0 0 2px rgba(52, 120, 246, 0.4)', borderRadius: '8px' } : {}),
         ...((isPendingInvite || isTentative) && isMonthView ? { backgroundColor: 'rgba(248, 250, 252, 0.9)', color: '#475569' } : {})
       }}
@@ -236,7 +248,7 @@ const EventIndicator = ({ event, isMonthView }) => {
             {event.title}
           </div>
           
-          {!event.isAllDay && (
+          {!treatAsAllDay && (
             <div
               className="text-gray-600 dark:text-gray-700 flex-shrink-0 min-w-0 whitespace-nowrap text-right font-medium"
               style={{ minWidth: '45px', ...timeStyle }}
