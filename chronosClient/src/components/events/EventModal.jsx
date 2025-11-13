@@ -1,8 +1,17 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { format, parse } from 'date-fns'
+import { format } from 'date-fns'
 import { 
-  FiX, FiTrash2, FiUsers, FiMapPin, FiClock, FiCalendar, FiChevronDown, FiPlus, FiCheck, FiRepeat
+  FiX,
+  FiUsers,
+  FiMapPin,
+  FiClock,
+  FiCalendar,
+  FiChevronDown,
+  FiChevronRight,
+  FiPlus,
+  FiCheck,
+  FiRepeat
 } from 'react-icons/fi'
 import { useCalendar } from '../../context/CalendarContext'
 import {
@@ -205,6 +214,7 @@ const EventModal = () => {
   } = useCalendar()
   
   const [eventName, setEventName] = useState('')
+  const [eventSubtitle, setEventSubtitle] = useState('')
   const [eventDate, setEventDate] = useState(format(new Date(), 'yyyy-MM-dd'))
   const [eventEndDate, setEventEndDate] = useState(format(new Date(), 'yyyy-MM-dd'))
   const [timeStart, setTimeStart] = useState(DEFAULT_TIMED_START)
@@ -214,7 +224,6 @@ const EventModal = () => {
   const [location, setLocation] = useState('')
   const [internalVisible, setInternalVisible] = useState(false)
   const [participants, setParticipants] = useState([])
-  const [isAddingParticipant, setIsAddingParticipant] = useState(false)
   const [expandedChips, setExpandedChips] = useState(new Set())
   const [timeError, setTimeError] = useState('')
   const [participantEmail, setParticipantEmail] = useState('')
@@ -239,6 +248,8 @@ const EventModal = () => {
   const [modalPosition, setModalPosition] = useState({ top: '50%', left: '50%', transform: 'translate(-50%, -50%)', pointerSide: 'left' })
   const [isFromDayClick, setIsFromDayClick] = useState(false)
   const [hasChanges, setHasChanges] = useState(false)
+  const [showNotificationPicker, setShowNotificationPicker] = useState(false)
+  const [notifications, setNotifications] = useState([])
   const titleInputRef = useRef(null)
   const modalRef = useRef(null)
   const lastTimedRangeRef = useRef({ start: DEFAULT_TIMED_START, end: DEFAULT_TIMED_END })
@@ -247,6 +258,8 @@ const EventModal = () => {
   const recurrenceTriggerRef = useRef(null)
   const deleteButtonRef = useRef(null)
   const participantInputRef = useRef(null)
+  const notificationPickerRef = useRef(null)
+  const notificationTriggerRef = useRef(null)
   const initialValuesRef = useRef({})
   const recurrenceConfirmationTimerRef = useRef(null)
 
@@ -395,6 +408,17 @@ const EventModal = () => {
   }, [showRecurringDeletePrompt])
 
   useEffect(() => {
+    if (!showNotificationPicker) return
+    const handleClick = (event) => {
+      if (notificationTriggerRef.current && notificationTriggerRef.current.contains(event.target)) return
+      if (notificationPickerRef.current && notificationPickerRef.current.contains(event.target)) return
+      setShowNotificationPicker(false)
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [showNotificationPicker])
+
+  useEffect(() => {
     return () => {
       if (recurrenceConfirmationTimerRef.current) {
         clearTimeout(recurrenceConfirmationTimerRef.current)
@@ -429,7 +453,6 @@ const EventModal = () => {
           window.lastClickedCalendarDay = null;
           window.lastClickedEventId = null;
           setExpandedChips(new Set())
-          setIsAddingParticipant(false)
           setParticipantEmail('')
           setShowRecurrencePicker(false)
           contextCloseEventModal();
@@ -450,7 +473,6 @@ const EventModal = () => {
       window.lastClickedCalendarDay = null;
       window.lastClickedEventId = null;
       setExpandedChips(new Set())
-      setIsAddingParticipant(false)
       setParticipantEmail('')
       setShowRecurrencePicker(false)
       contextCloseEventModal();
@@ -500,6 +522,7 @@ const EventModal = () => {
     let initialColor = 'blue';
     let initialIsAllDay = true;
     let initialLocation = '';
+    let initialSubtitle = '';
 
     if (selectedEvent) {
       // Editing existing event
@@ -522,6 +545,7 @@ const EventModal = () => {
       initialColor = selectedEvent.color || 'blue';
       initialIsAllDay = selectedEvent.isAllDay || false;
       initialLocation = selectedEvent.location || '';
+      initialSubtitle = selectedEvent.description || '';
     } else if (window.prefilledEventDates) {
       // Creating new event from drag-to-create/double-click with prefilled dates
       const { 
@@ -583,6 +607,7 @@ const EventModal = () => {
         }
 
     setEventName(initialEventName);
+    setEventSubtitle(initialSubtitle);
     setEventDate(initialEventDate);
     setEventEndDate(initialEventEndDate);
     setColor(initialColor);
@@ -599,10 +624,15 @@ const EventModal = () => {
       end: timedFallbackEnd
     }
     setLocation(initialLocation);
+    setEventSubtitle(initialSubtitle);
     setRecurrenceState(cloneRecurrenceState(recurrenceDetails.state))
     setRecurrenceDraft(cloneRecurrenceState(recurrenceDetails.state))
     setRecurrenceSummary(recurrenceDetails.summary)
     setShowRecurrencePicker(false)
+    
+    // Set notifications from event or default
+    const initialNotifications = selectedEvent?.reminders?.overrides || selectedEvent?.reminders?.useDefault ? [] : [];
+    setNotifications(initialNotifications);
     
     // Store initial values for change detection
     const initialParticipants = selectedEvent?.participants || [];
@@ -615,13 +645,14 @@ const EventModal = () => {
       color: initialColor,
       isAllDay: initialIsAllDay,
       location: initialLocation,
+      eventSubtitle: initialSubtitle,
       participants: initialParticipants,
-      recurrenceRule: selectedEvent?.recurrenceRule || ''
+      recurrenceRule: selectedEvent?.recurrenceRule || '',
+      notifications: initialNotifications
     };
     setHasChanges(false);
     setParticipants(initialParticipants);
     setExpandedChips(new Set())
-    setIsAddingParticipant(false)
     setParticipantEmail('')
 
   }, [selectedEvent])
@@ -645,15 +676,8 @@ const EventModal = () => {
     if (!internalVisible) return
     if (titleInputRef.current) {
       titleInputRef.current.focus({ preventScroll: true })
-      titleInputRef.current.select()
     }
   }, [internalVisible])
-
-  useEffect(() => {
-    if (isAddingParticipant && participantInputRef.current) {
-      participantInputRef.current.focus({ preventScroll: true })
-    }
-  }, [isAddingParticipant])
 
   const conciseRecurrenceSummary = useCallback((state) => {
     if (!state?.enabled) return 'Does not repeat'
@@ -706,6 +730,10 @@ const EventModal = () => {
     const participantsChanged = 
       JSON.stringify(participants.sort()) !== JSON.stringify((initial.participants || []).sort());
     
+    const notificationsChanged =
+      JSON.stringify(notifications.sort((a, b) => a.minutes - b.minutes)) !== 
+      JSON.stringify((initial.notifications || []).sort((a, b) => a.minutes - b.minutes));
+    
     const anchorDate = buildDateWithTime(eventDate, timeStart) || new Date()
     const recurrencePayload = buildRecurrencePayload(recurrenceState, anchorDate)
     const recurrenceRule = recurrencePayload?.rule || ''
@@ -713,6 +741,7 @@ const EventModal = () => {
 
     const changed = 
       eventName !== initial.eventName ||
+      eventSubtitle !== initial.eventSubtitle ||
       eventDate !== initial.eventDate ||
       eventEndDate !== initial.eventEndDate ||
       timeStart !== initial.timeStart ||
@@ -721,6 +750,7 @@ const EventModal = () => {
       isAllDay !== initial.isAllDay ||
       location !== initial.location ||
       participantsChanged ||
+      notificationsChanged ||
       recurrenceRule !== initialRecurrenceRule;
     
     setHasChanges(changed);
@@ -730,6 +760,7 @@ const EventModal = () => {
     if (selectedEvent && participants.length > 0) {
       const meaningfulChange = 
         eventName !== initial.eventName ||
+        eventSubtitle !== initial.eventSubtitle ||
         eventDate !== initial.eventDate ||
         timeStart !== initial.timeStart ||
         timeEnd !== initial.timeEnd ||
@@ -741,7 +772,7 @@ const EventModal = () => {
         setShowNotifyMembers(true);
       }
     }
-  }, [selectedEvent, eventName, eventDate, eventEndDate, timeStart, timeEnd, color, isAllDay, location, participants, recurrenceState, buildDateWithTime]);
+  }, [selectedEvent, eventName, eventSubtitle, eventDate, eventEndDate, timeStart, timeEnd, color, isAllDay, location, participants, notifications, recurrenceState, buildDateWithTime]);
   
 
   // kept for backward compat (no-op now that we use portal)
@@ -938,23 +969,40 @@ const EventModal = () => {
     }
     const nextValue = value || DEFAULT_TIMED_START
     setTimeStart(nextValue)
+    const startMinutes = timeToMinutes(nextValue)
+    const endMinutes = timeToMinutes(timeEnd)
+    if (endMinutes <= startMinutes) {
+      const bumped = minutesToTime(startMinutes + 30)
+      setTimeEnd(bumped)
+      lastTimedRangeRef.current = {
+        start: nextValue,
+        end: bumped
+      }
+      return
+    }
     lastTimedRangeRef.current = {
       ...lastTimedRangeRef.current,
       start: nextValue
     }
-  }, [ensureTimedMode, isAllDay])
+  }, [ensureTimedMode, isAllDay, timeEnd])
 
   const handleTimeEndChange = useCallback((value) => {
     if (isAllDay) {
       ensureTimedMode()
     }
     const nextValue = value || DEFAULT_TIMED_END
-    setTimeEnd(nextValue)
+    const startMinutes = timeToMinutes(timeStart)
+    let endMinutes = timeToMinutes(nextValue)
+    if (endMinutes <= startMinutes) {
+      endMinutes = startMinutes + 30
+    }
+    const safeEnd = minutesToTime(endMinutes)
+    setTimeEnd(safeEnd)
     lastTimedRangeRef.current = {
       ...lastTimedRangeRef.current,
-      end: nextValue
+      end: safeEnd
     }
-  }, [ensureTimedMode, isAllDay])
+  }, [ensureTimedMode, isAllDay, timeStart])
 
   const handleSubmit = (e) => {
     if (e) e.preventDefault();
@@ -982,6 +1030,7 @@ const EventModal = () => {
       }
     }
 
+    const trimmedSubtitle = eventSubtitle.trim()
     const eventData = {
       title: eventName.trim() === '' ? (selectedEvent ? selectedEvent.title : 'New Event') : eventName,
       start: finalStartDateTime,
@@ -989,8 +1038,13 @@ const EventModal = () => {
       color,
       isAllDay,
       location,
+      description: trimmedSubtitle,
       participants,
-      sendNotifications: showNotifyMembers && participants.length > 0
+      sendNotifications: showNotifyMembers && participants.length > 0,
+      reminders: notifications.length > 0 ? {
+        useDefault: false,
+        overrides: notifications
+      } : { useDefault: false, overrides: [] }
     };
 
     const recurrencePayload = buildRecurrencePayload(recurrenceState, finalStartDateTime)
@@ -1089,13 +1143,36 @@ const EventModal = () => {
     return `${hour12}:${minutes} ${period}`;
   };
   
-  const formatDateForDisplay = (dateStr) => {
-    try {
-      const date = parse(dateStr, 'yyyy-MM-dd', new Date());
-      return format(date, 'EEEE, MMM d');
-    } catch {
-      return 'Invalid Date';
-    }
+  const toggleTimePeriod = (time24h) => {
+    if (!time24h || typeof time24h !== 'string' || !time24h.includes(':')) return time24h;
+    const [hours, minutes] = time24h.split(':');
+    const hour = parseInt(hours, 10);
+    const newHour = hour >= 12 ? hour - 12 : hour + 12;
+    return `${String(newHour).padStart(2, '0')}:${minutes}`;
+  };
+
+  const timeToMinutes = (time24h) => {
+    if (!time24h || typeof time24h !== 'string' || !time24h.includes(':')) return 0
+    const [hours, minutes] = time24h.split(':').map(Number)
+    return (Number.isNaN(hours) ? 0 : hours) * 60 + (Number.isNaN(minutes) ? 0 : minutes)
+  }
+
+  const minutesToTime = (totalMinutes) => {
+    const minutesInDay = 24 * 60
+    let safe = totalMinutes % minutesInDay
+    if (safe < 0) safe += minutesInDay
+    const hours = Math.floor(safe / 60)
+    const minutes = safe % 60
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
+  }
+
+  const getTimeParts = (time24h) => {
+    if (!time24h || typeof time24h !== 'string' || !time24h.includes(':')) return { hour: '12', minute: '00', period: 'AM' };
+    const [hours, minutes] = time24h.split(':');
+    const hour = parseInt(hours, 10);
+    const period = hour >= 12 ? 'PM' : 'AM';
+    const hour12 = hour % 12 || 12;
+    return { hour: String(hour12), minute: minutes, period };
   };
   
   const handleAddParticipant = () => {
@@ -1103,7 +1180,6 @@ const EventModal = () => {
     if (email && email.includes('@') && !participants.includes(email)) {
       setParticipants([...participants, email]);
       setParticipantEmail('');
-      setIsAddingParticipant(false);
       setExpandedChips(new Set())
     }
   };
@@ -1133,6 +1209,37 @@ const EventModal = () => {
     }
   };
   
+  const notificationOptions = [
+    { label: 'None', minutes: null },
+    { label: 'At time of event', minutes: 0 },
+    { label: '5 minutes before', minutes: 5 },
+    { label: '10 minutes before', minutes: 10 },
+    { label: '15 minutes before', minutes: 15 },
+    { label: '30 minutes before', minutes: 30 },
+    { label: '1 hour before', minutes: 60 },
+    { label: '2 hours before', minutes: 120 },
+    { label: '1 day before', minutes: 1440 },
+    { label: '2 days before', minutes: 2880 },
+  ];
+  
+  const handleAddNotification = (minutes) => {
+    if (minutes === null) {
+      setNotifications([]);
+    } else if (!notifications.find(n => n.minutes === minutes)) {
+      setNotifications([...notifications, { method: 'popup', minutes }]);
+    }
+    setShowNotificationPicker(false);
+  };
+  
+  const handleRemoveNotification = (minutes) => {
+    setNotifications(notifications.filter(n => n.minutes !== minutes));
+  };
+  
+  const formatNotificationLabel = (minutes) => {
+    const option = notificationOptions.find(o => o.minutes === minutes);
+    return option ? option.label : `${minutes} minutes before`;
+  };
+  
   return (
     <>
       {/* No overlay - calendar always stays in focus */}
@@ -1144,7 +1251,7 @@ const EventModal = () => {
                    ${internalVisible ? 'opacity-100 scale-100' : 'opacity-0 scale-95 pointer-events-none'}`}
         style={{
           ...modalPosition,
-          width: '460px',
+          width: '580px',
           maxHeight: '90vh',
           border: '1px solid #e5e7eb',
           borderRadius: '16px',
@@ -1202,19 +1309,6 @@ const EventModal = () => {
             />
           </>
         )}
-        {/* Header */}
-        <div className="flex justify-between items-center px-6 py-3 border-b border-gray-100">
-          <h2 className="text-base font-semibold text-gray-900">
-            Create Event
-          </h2>
-          <button 
-            type="button"
-            onClick={closeAndAnimateOut}
-            className="p-1 text-gray-400 hover:text-gray-600 transition-colors"
-          >
-            <FiX size={16} />
-          </button>
-        </div>
         
         <form
           onSubmit={handleSubmit}
@@ -1230,131 +1324,251 @@ const EventModal = () => {
               handleSubmit()
             }
           }}
-          className="px-6 py-2.5"
+          className="px-0 py-0"
         >
-          <div className="space-y-2">
+          <div className="space-y-0">
             {/* Shared edit notice for attendee edits */}
             {selectedEvent && selectedEvent.viewerIsAttendee && !selectedEvent.viewerIsOrganizer && (
-              <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 shadow-sm">
+              <div className="mx-4 mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 shadow-sm">
                 Changes you make only update your view of this shared event.
               </div>
             )}
 
-            {/* Event Name */}
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-1">Event Name</label>
+            {/* Close button */}
+            <button 
+              type="button"
+              onClick={closeAndAnimateOut}
+              className="absolute top-3 right-3 p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors z-10"
+            >
+              <FiX size={20} />
+            </button>
+
+            {/* Event Name - Large with subtitle */}
+            <div className="px-4 pt-4 pb-2">
               <input
                 type="text"
                 value={eventName}
                 onChange={(e) => setEventName(e.target.value)}
-                placeholder="Event name"
-                className="w-full px-3 py-2 text-base text-gray-900 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent truncate"
+                placeholder="Add title"
+                className="w-full px-0 py-1 text-xl font-semibold text-gray-900 border-none focus:outline-none focus:ring-0"
                 ref={titleInputRef}
               />
+              <div className="relative">
+                <textarea
+                  value={eventSubtitle}
+                  onChange={(e) => setEventSubtitle(e.target.value)}
+                  placeholder="Add description"
+                  className="w-full px-0 py-1 pr-32 text-sm text-gray-500 border-none focus:outline-none focus:ring-0 resize-none overflow-hidden"
+                  rows={1}
+                  style={{ minHeight: '20px' }}
+                  onInput={(e) => {
+                    e.target.style.height = 'auto'
+                    e.target.style.height = e.target.scrollHeight + 'px'
+                  }}
+                />
+                <button 
+                  type="submit"
+                  disabled={(selectedEvent && !hasChanges) || (!!timeError && !isAllDay)}
+                  className={`absolute right-0 top-0 px-4 py-1.5 text-sm rounded-md transition-colors font-medium ${
+                    (selectedEvent && !hasChanges) || (!!timeError && !isAllDay)
+                      ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                      : 'bg-green-600 text-white hover:bg-green-700'
+                  }`}
+                >
+                  {selectedEvent ? 'Update event' : 'Create event'}
+                </button>
+              </div>
             </div>
 
-            {/* Date Range */}
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">Start Date</label>
-                {(isFromDayClick && !selectedEvent) ? (
-                  // Static date display when created from day click (new event only)
-                  <div className="flex items-center px-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg">
-                    <FiCalendar className="text-gray-500 mr-2" size={14} />
-                    <span className="flex-grow text-sm text-gray-900 truncate">{formatDateForDisplay(eventDate)}</span>
+            {/* Add guests */}
+            <div className="px-4 py-3 border-b border-gray-100">
+              <div className="flex items-start gap-3">
+                <FiUsers className="text-gray-400 mt-1" size={20} />
+                <div className="flex-1 space-y-3">
+                  <input
+                    ref={participantInputRef}
+                    type="email"
+                    value={participantEmail}
+                    onChange={(e) => setParticipantEmail(e.target.value)}
+                    onKeyDown={handleParticipantKeyDown}
+                    placeholder="Add guests"
+                    className="w-full px-0 py-1 text-sm text-gray-900 bg-transparent border-none focus:outline-none focus:ring-0"
+                  />
+                    {participants.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                    {participants.map((email) => {
+                      const bgColor = getParticipantColor(email)
+                      const expanded = expandedChips.has(email)
+                      return (
+                        <div
+                          key={email}
+                            className="flex items-center gap-2"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => toggleChip(email)}
+                              className="w-8 h-8 rounded-full text-xs font-semibold text-white flex items-center justify-center focus:outline-none"
+                            style={{ backgroundColor: bgColor }}
+                            aria-label={`Toggle ${email}`}
+                              title={email}
+                          >
+                            {getInitials(email)}
+                          </button>
+                            {expanded && (
+                              <span className="text-xs text-gray-600">{email}</span>
+                            )}
+              </div>
+                      )
+                    })}
                   </div>
-                ) : (
-                  // Date picker when editing existing event or from + Event button
-                  <div className="relative">
-                    <div className="flex items-center px-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-100 transition-colors">
-                      <FiCalendar className="text-gray-500 mr-2" size={14} />
-                      <span className="flex-grow text-sm text-gray-900 truncate">{formatDateForDisplay(eventDate)}</span>
-                      <FiChevronDown className="text-gray-400" size={14} />
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Add location and Google Meet */}
+            <div className="px-4 py-3 border-b border-gray-100">
+              <div className="flex items-center gap-3">
+                <FiMapPin className="text-gray-400" size={20} />
+                <input
+                  type="text"
+                  value={location}
+                  onChange={(e) => setLocation(e.target.value)}
+                  placeholder="Add location"
+                  className="flex-1 px-0 py-1 text-sm text-gray-900 border-none focus:outline-none focus:ring-0"
+                />
+                  <button
+                    type="button"
+                  className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg hover:bg-gray-100 text-sm text-gray-700"
+                >
+                  <svg className="w-4 h-4" viewBox="0 0 24 24">
+                    <path fill="currentColor" d="M23 11.5A11.5 11.5 0 1 1 11.5 0 11.5 11.5 0 0 1 23 11.5zm-4.5 0a7 7 0 1 0-7 7 7 7 0 0 0 7-7z"/>
+                  </svg>
+                  Google Meet
+                  </button>
+                      </div>
                     </div>
+
+            {/* Time and Date */}
+            <div className="px-4 py-3 border-b border-gray-100">
+              <div className="flex items-start gap-[9px]">
+                <div className="flex flex-col gap-3 pt-0.5">
+                <FiClock className="text-gray-400" size={20} />
+                  <FiCalendar className="text-gray-400" size={20} />
+                </div>
+                <div className="flex-1 space-y-0">
+                  <div className="space-y-2">
+                    {!isAllDay ? (
+                      <>
+                        <div className="flex items-center gap-2 text-sm text-gray-900">
+                        <div className="inline-flex items-center gap-2">
+                        <input
+                          type="time"
+                          value={timeStart}
+                          onChange={(e) => handleTimeStartChange(e.target.value)}
+                            className="px-0 py-0.5 border-none focus:outline-none text-sm text-gray-900 [&::-webkit-calendar-picker-indicator]:hidden [&::-webkit-inner-spin-button]:hidden"
+                            style={{
+                              WebkitAppearance: 'none',
+                              MozAppearance: 'textfield',
+                              width: '70px'
+                            }}
+                          />
+                          <span className="text-gray-400 font-semibold ml-2">→</span>
+                        <input
+                          type="time"
+                          value={timeEnd}
+                          onChange={(e) => handleTimeEndChange(e.target.value)}
+                            className="px-0 py-0 border-none focus:outline-none text-sm text-gray-900 [&::-webkit-calendar-picker-indicator]:hidden [&::-webkit-inner-spin-button]:hidden"
+                            style={{
+                              WebkitAppearance: 'none',
+                              MozAppearance: 'textfield',
+                              width: '70px'
+                            }}
+                          />
+                          </div>
+                          <div className="flex items-center gap-2 ml-auto">
+                          <label className="relative inline-flex items-center cursor-pointer">
+                              <input
+                                id="event-all-day-toggle"
+                                type="checkbox"
+                                checked={isAllDay}
+                                onChange={(e) => handleAllDayToggle(e.target.checked)}
+                                className="sr-only peer"
+                              />
+                              <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                              <span className="ml-2 text-xs text-gray-600 whitespace-nowrap">All day</span>
+                            </label>
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="flex items-center gap-2 text-sm text-gray-900">
+                      <span className="text-gray-500">All day</span>
+                          <div className="flex items-center gap-2 ml-auto">
+                            <label className="relative inline-flex items-center cursor-pointer">
+                              <input
+                                id="event-all-day-toggle"
+                                type="checkbox"
+                                checked={isAllDay}
+                                onChange={(e) => handleAllDayToggle(e.target.checked)}
+                                className="sr-only peer"
+                              />
+                              <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                              <span className="ml-2 text-xs text-gray-600 whitespace-nowrap">All day</span>
+                            </label>
+                          </div>
+                        </div>
+                      </>
+                  )}
+                </div>
+
+                  <div className="flex items-center gap-2 text-sm text-gray-900">
+                    <div className="inline-flex items-center gap-2">
                     <input
                       type="date"
                       value={eventDate}
                       onChange={(e) => setEventDate(e.target.value)}
-                      className="absolute inset-0 opacity-0 cursor-pointer"
+                      className="border-none focus:outline-none text-sm text-gray-900 [&::-webkit-calendar-picker-indicator]:hidden [&::-webkit-inner-spin-button]:hidden"
+                      style={{
+                        WebkitAppearance: 'none',
+                        MozAppearance: 'textfield',
+                        padding: '4px 0',
+                        paddingTop: '8px',
+                        width: '85px'
+                      }}
                     />
-                  </div>
-                )}
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">End Date</label>
-                <div className="relative">
-                  <div className="flex items-center px-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-100 transition-colors">
-                    <FiCalendar className="text-gray-500 mr-2" size={14} />
-                    <span className="flex-grow text-sm text-gray-900 truncate">{formatDateForDisplay(eventEndDate)}</span>
-                    <FiChevronDown className="text-gray-400" size={14} />
-                  </div>
-                  <input
-                    type="date"
-                    value={eventEndDate}
-                    min={eventDate}
-                    onChange={(e) => setEventEndDate(e.target.value)}
-                    className="absolute inset-0 opacity-0 cursor-pointer"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Color & Repeat */}
-            <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-2 items-end">
-              {/* Color Picker */}
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">Color</label>
-                <div className="relative" ref={colorPickerRef}>
-                  <button
-                    type="button"
-                    onClick={() => setShowColorPicker(!showColorPicker)}
-                    className="flex items-center justify-center px-1.5 py-1.5 bg-gray-50 border border-gray-200 rounded-lg hover:bg-gray-100 transition-colors h-10 w-11"
-                  >
-                    <div 
-                      className="w-5 h-5 rounded-full"
-                      style={{ backgroundColor: color }}
+                    <span className="text-gray-400 font-semibold -ml-1.5">→</span>
+                    <input
+                      type="date"
+                      value={eventEndDate}
+                      min={eventDate}
+                      onChange={(e) => setEventEndDate(e.target.value)}
+                      className="border-none focus:outline-none text-sm text-gray-900 [&::-webkit-calendar-picker-indicator]:hidden [&::-webkit-inner-spin-button]:hidden"
+                      style={{
+                        WebkitAppearance: 'none',
+                        MozAppearance: 'textfield',
+                        padding: '4px 0',
+                        paddingTop: '8px',
+                        width: '85px'
+                      }}
                     />
-                  </button>
-                  {showColorPicker && (
-                    <div className="absolute z-50 mt-1 p-2 bg-white rounded-lg shadow-lg border border-gray-200">
-                      <div className="grid grid-cols-4 gap-3">
-                        {CATEGORY_COLORS.map((colorOption) => (
-                          <button
-                            key={colorOption}
-                            type="button"
-                            onClick={() => {
-                              setColor(colorOption);
-                              setShowColorPicker(false);
-                            }}
-                            className={`w-8 h-8 rounded-full transition-all hover:scale-110 ${
-                              color === colorOption ? 'ring-2 ring-offset-2 ring-gray-400' : ''
-                            }`}
-                            style={{ backgroundColor: colorOption }}
-                          />
-                        ))}
-                      </div>
                     </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Recurrence */}
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">Repeat</label>
-                <div className="relative">
-                  <button
-                    type="button"
-                    onClick={handleToggleRecurrencePicker}
-                    className="flex items-center gap-2 px-2 py-1.5 bg-gray-50 border border-gray-200 rounded-lg hover:bg-gray-100 transition-colors w-full h-10"
-                    ref={recurrenceTriggerRef}
-                  >
-                    <FiRepeat className="text-gray-500" size={14} />
-                    <span className={`text-sm truncate ${recurrenceState.enabled ? 'text-gray-900' : 'text-gray-500'}`}>
-                      {recurrenceSummary}
-                    </span>
-                    <FiChevronDown className="text-gray-400 ml-auto" size={14} />
-                  </button>
-                  {showRecurrencePicker && createPortal(
+                      <button
+                        type="button"
+                        onClick={handleToggleRecurrencePicker}
+                        className="flex items-center gap-2 text-xs text-gray-600 hover:text-gray-800 whitespace-nowrap ml-auto"
+                        ref={recurrenceTriggerRef}
+                      >
+                        <FiRepeat className="text-gray-600" size={14} />
+                        <span className={`text-sm truncate ${recurrenceState.enabled ? 'text-gray-900' : 'text-gray-500'}`}>
+                          {recurrenceSummary}
+                        </span>
+                        <FiChevronDown className="text-gray-400" size={14} />
+                      </button>
+                    </div>
+                  </div>
+                    {showRecurrencePicker && createPortal(
                     <div
                       ref={recurrencePickerRef}
                       className="fixed z-[1000] bg-white border border-gray-200 rounded-xl shadow-xl p-3 space-y-3 overflow-y-auto"
@@ -1370,7 +1584,6 @@ const EventModal = () => {
                         <div className="space-y-3">
                           <div className="flex items-start justify-between">
                             <div>
-                              <p className="text-sm font-semibold text-gray-900">Repeat</p>
                               <p className="text-xs text-gray-500">{recurrenceSummary}</p>
                             </div>
                             <button
@@ -1575,12 +1788,9 @@ const EventModal = () => {
                                     onChange={() => updateRecurrenceDraft({ yearlyMode: 'weekday' })}
                                   />
                                   <span>On the</span>
-                                </label>
-                                {recurrenceDraft.yearlyMode === 'weekday' && (
-                                  <div className="flex items-center gap-2 pl-6">
                                     <select
-                                      value={recurrenceDraft.yearlyWeek}
-                                      onChange={(e) => updateRecurrenceDraft({ yearlyWeek: parseInt(e.target.value, 10) || 1 })}
+                                      value={recurrenceDraft.yearlyOrdinal}
+                                      onChange={(e) => updateRecurrenceDraft({ yearlyOrdinal: parseInt(e.target.value, 10) || 1 })}
                                       className="px-2 py-1 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                                     >
                                       {ORDINAL_SELECT_OPTIONS.map(({ value, label }) => (
@@ -1590,73 +1800,21 @@ const EventModal = () => {
                                     <select
                                       value={recurrenceDraft.yearlyWeekday}
                                       onChange={(e) => updateRecurrenceDraft({ yearlyWeekday: e.target.value })}
-                                      className="px-2 py-1 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 flex-1"
+                                      className="px-2 py-1 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                                     >
                                       {WEEKDAY_CODES.map((code) => (
                                         <option key={code} value={code}>{WEEKDAY_LABELS[code]}</option>
                                       ))}
                                     </select>
-                                  </div>
-                                )}
+                                  </label>
                               </div>
                             </div>
                           )}
-                          <div className="space-y-1">
-                            <label className="text-xs font-medium text-gray-600">Ends</label>
-                            <div className="space-y-1 text-sm text-gray-700">
-                              <label className="flex items-center gap-2">
-                                <input
-                                  type="radio"
-                                  name="recurrenceEnds"
-                                  checked={recurrenceDraft.ends === 'never'}
-                                  onChange={() => updateRecurrenceDraft({ ends: 'never' }, { forceEnable: false })}
-                                />
-                                Never
-                              </label>
-                              <label className="flex items-center gap-2">
-                                <input
-                                  type="radio"
-                                  name="recurrenceEnds"
-                                  checked={recurrenceDraft.ends === 'count'}
-                                  onChange={() => updateRecurrenceDraft({ ends: 'count' }, { forceEnable: false })}
-                                />
-                                <span>After</span>
-                                <input
-                                  type="number"
-                                  min="1"
-                                  value={recurrenceDraft.count}
-                                  onChange={(e) => updateRecurrenceDraft({ count: Math.max(1, parseInt(e.target.value, 10) || 1) }, { forceEnable: false })}
-                                  className="w-16 px-2 py-1 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                  disabled={recurrenceDraft.ends !== 'count'}
-                                />
-                                <span>occurrences</span>
-                              </label>
-                              <label className="flex items-center gap-2">
-                                <input
-                                  type="radio"
-                                  name="recurrenceEnds"
-                                  checked={recurrenceDraft.ends === 'until'}
-                                  onChange={() => updateRecurrenceDraft({ ends: 'until', endDate: recurrenceDraft.endDate || format(recurrenceAnchorDate(), 'yyyy-MM-dd') }, { forceEnable: false })}
-                                />
-                                <span>On</span>
-                                <input
-                                  type="date"
-                                  value={recurrenceDraft.endDate}
-                                  onChange={(e) => updateRecurrenceDraft({ endDate: e.target.value }, { forceEnable: false })}
-                                  className="flex-1 px-2 py-1 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                  disabled={recurrenceDraft.ends !== 'until'}
-                                />
-                              </label>
+                            <div className="flex items-center justify-between">
+                              <div className="space-y-1 text-xs text-gray-500">
+                                <p>{recurrenceSummary}</p>
                             </div>
-                          </div>
-                          <div className="flex justify-end gap-2 pt-1">
-                            <button
-                              type="button"
-                              onClick={handleCancelRecurrenceEdit}
-                              className="px-3 py-1.5 text-sm text-gray-700 border border-gray-200 rounded-lg hover:bg-gray-50"
-                            >
-                              Cancel
-                            </button>
+                              <div className="flex items-center gap-2">
                             <button
                               type="button"
                               onClick={handleApplyRecurrence}
@@ -1666,263 +1824,137 @@ const EventModal = () => {
                             </button>
                           </div>
                         </div>
-                      )}
-                      {recurrenceConfirmationVisible && (
-                        <div
-                          className="absolute -bottom-2 -right-2 rounded-full shadow-lg flex items-center justify-center"
-                          style={{ width: '28px', height: '28px', backgroundColor: '#7C3AED', color: 'white' }}
-                        >
-                          <FiCheck size={16} />
                         </div>
                       )}
-                    </div>
-                  , document.body)}
+                      </div>,
+                      document.body
+                    )}
                 </div>
               </div>
             </div>
-            
-            {/* All-day toggle */}
-            <div className="flex items-center gap-2">
-              <input
-                id="event-all-day-toggle"
-                type="checkbox"
-                checked={isAllDay}
-                onChange={(e) => handleAllDayToggle(e.target.checked)}
-                className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-              />
-              <label htmlFor="event-all-day-toggle" className="text-sm text-gray-700 select-none">
-                All-day event
-              </label>
-            </div>
-
-            {/* Time Start/End */}
-            {isAllDay ? (
-              <div className="flex items-center gap-3 px-3 py-2 bg-gray-50 border border-dashed border-gray-200 rounded-lg text-sm text-gray-700">
-                <FiClock className="text-blue-500" size={16} />
-                <span className="flex-1">This event spans the entire day. Toggle off to pick custom hours.</span>
-              </div>
-            ) : (
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">Start</label>
-                  <input
-                    type="time"
-                    value={timeStart}
-                    onChange={(e) => handleTimeStartChange(e.target.value)}
-                    className="w-full px-3 py-1.5 text-sm text-gray-900 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  />
-                </div>
                 
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">End</label>
-                  <input
-                    type="time"
-                    value={timeEnd}
-                    onChange={(e) => handleTimeEndChange(e.target.value)}
-                    className="w-full px-3 py-1.5 text-sm text-gray-900 bg-gray-50 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  />
-                </div>
-              </div>
-            )}
-            {!isAllDay && timeError && (
-              <div className="text-xs text-red-600">{timeError}</div>
-            )}
-            
-            {/* Participants */}
-            <div>
-              <div className="flex items-center gap-2 mb-2 flex-wrap">
-                <div className="flex items-center gap-1">
-                  <label className="text-xs font-medium text-gray-700">Participants</label>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-gray-100 text-gray-600">{participants.length}</span>
-                </div>
-                <div className="flex flex-1 items-center gap-2 min-h-[32px]">
-                  {isAddingParticipant ? (
-                    <div className="flex items-center gap-1.5 flex-1">
-                      <input
-                        ref={participantInputRef}
-                        type="email"
-                        value={participantEmail}
-                        onChange={(e) => setParticipantEmail(e.target.value)}
-                        onKeyDown={handleParticipantKeyDown}
-                        placeholder="Add email address"
-                        className="flex-1 min-w-[240px] px-3 py-1.5 h-8 text-sm text-gray-900 bg-gray-50 border border-blue-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      />
+            {/* Bottom action bar with icons */}
+            <div className="px-4 py-3 flex items-center gap-4 border-t border-gray-100">
+              {/* Notification icon */}
+              <div className="relative" ref={notificationPickerRef}>
                       <button
                         type="button"
-                        onClick={handleAddParticipant}
-                        className="h-8 w-8 flex items-center justify-center bg-green-500 text-white rounded-md hover:bg-green-600 transition-colors"
-                        aria-label="Save participant"
-                      >
-                        <FiCheck size={16} />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setParticipantEmail('')
-                          setIsAddingParticipant(false)
-                        }}
-                        className="h-8 w-8 flex items-center justify-center bg-gray-200 text-gray-600 rounded-md hover:bg-gray-300 transition-colors"
-                        aria-label="Cancel add participant"
-                      >
-                        <FiX size={14} />
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-2 flex-1">
-                      <div
-                        className={`flex gap-1.5 flex-1 items-center ${participants.length >= 5 ? 'overflow-x-auto' : 'flex-wrap overflow-visible'}`}
-                      >
-                        {participants.map((email) => {
-                          const bgColor = getParticipantColor(email);
-                          const expanded = expandedChips.has(email)
-                          return (
-                            <div
-                              key={email}
-                              className="group inline-flex items-center h-8 rounded-full flex-shrink-0 cursor-default select-none px-3"
-                              style={{ backgroundColor: bgColor + '26' }}
-                              title={email}
-                            >
-                              <button
-                                type="button"
-                                onClick={() => toggleChip(email)}
-                                className="w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-semibold flex-shrink-0 focus:outline-none"
-                                style={{ backgroundColor: bgColor, color: 'white' }}
-                                aria-label={`Toggle ${email}`}
-                              >
-                                {getInitials(email)}
-                              </button>
-                              <div
-                                className="ml-2 inline-flex items-center gap-1 transition-all duration-150"
-                                style={{
-                                  color: bgColor,
-                                  maxWidth: expanded ? 200 : 0,
-                                  opacity: expanded ? 1 : 0,
-                                  overflow: 'hidden'
-                                }}
-                              >
-                                <span className="text-xs font-medium whitespace-nowrap">{getHandle(email)}</span>
-                                <button
-                                  type="button"
-                                  onClick={(e) => { e.stopPropagation(); handleRemoveParticipant(email) }}
-                                  className="transition-opacity opacity-0 group-hover:opacity-100 flex-shrink-0"
-                                  style={{ color: bgColor }}
-                                  aria-label={`Remove ${email}`}
-                                >
-                                  <FiX size={12} />
-                                </button>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsAddingParticipant(true)
-                          setExpandedChips(new Set())
-                          setParticipantEmail('')
-                        }}
-                        className="h-8 w-8 flex items-center justify-center text-white rounded-md transition-colors flex-shrink-0 focus:outline-none"
-                        style={{ backgroundColor: 'rgb(159, 134, 255)' }}
-                        onMouseEnter={(e) => e.target.style.backgroundColor = 'rgb(139, 114, 235)'}
-                        onMouseLeave={(e) => e.target.style.backgroundColor = 'rgb(159, 134, 255)'}
-                        aria-label="Add participant"
-                      >
-                        <FiPlus size={16} />
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Notify Members Checkbox */}
-              {participants.length > 0 && (
-                <div className="flex items-center mt-1.5">
-                  <input 
-                    type="checkbox" 
-                    checked={showNotifyMembers}
-                    onChange={(e) => setShowNotifyMembers(e.target.checked)}
-                    className="h-3 w-3 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-                  />
-                  <span className="ml-2 text-xs text-gray-700">Notify members</span>
+              onClick={() => setShowNotificationPicker(!showNotificationPicker)}
+              className="p-2 bg-gray-50 border border-gray-200 rounded-full text-gray-500 hover:bg-gray-100 transition-colors relative"
+            title="Add notification"
+              ref={notificationTriggerRef}
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+            </svg>
+              {notifications.length > 0 && (
+                <div className="absolute -top-1 -right-1 w-4 h-4 bg-blue-600 text-white text-xs rounded-full flex items-center justify-center">
+                  {notifications.length}
                 </div>
               )}
-            </div>
-          </div>
-          
-          {/* RSVP Controls */}
-          {selectedEvent?.inviteCanRespond && (
-            <div className="mt-4 pt-3 border-t border-gray-100">
-              <div className="flex items-center gap-3 flex-wrap">
-                <p className="text-sm font-semibold text-gray-900">Going?</p>
-                <div className="flex items-center gap-2 flex-wrap">
-                  {RSVP_OPTIONS.map((option) => {
-                    const isActive = currentRSVPStatus === option.value
-                    const commonClasses = 'px-3.5 py-1.5 rounded-full border text-sm font-semibold transition-all flex items-center justify-center gap-1 min-w-[90px]'
-                    let palette = 'bg-white text-gray-700 border-gray-200 hover:border-gray-300'
-                    if (option.value === 'accepted') {
-                      palette = isActive
-                        ? 'bg-[#9F86FF] text-white border-[#9F86FF]'
-                        : 'bg-[rgba(159,134,255,0.15)] text-[#5c3fb3] border-[rgba(159,134,255,0.3)] hover:border-[#9F86FF]'
-                    } else if (option.value === 'declined') {
-                      palette = isActive
-                        ? 'bg-[#F87171] text-white border-[#F87171]'
-                        : 'bg-[rgba(248,113,113,0.15)] text-[#b91c1c] border-[rgba(248,113,113,0.25)] hover:border-[#F87171]'
-                    } else if (isActive) {
-                      palette = 'bg-gray-900 text-white border-gray-900'
-                    }
-                    const inactiveFade = isActive ? '' : ' opacity-55 hover:opacity-100'
-                    return (
+                      </button>
+            {showNotificationPicker && (
+              <div className="absolute bottom-full left-0 mb-2 z-50 bg-white rounded-lg shadow-lg border border-gray-200 py-1 min-w-[200px] max-h-80 overflow-y-auto">
+                {notificationOptions.map((option) => {
+                  const isSelected = option.minutes === null 
+                    ? notifications.length === 0
+                    : notifications.some(n => n.minutes === option.minutes);
+                  return (
                       <button
-                        key={option.value}
+                      key={option.label}
                         type="button"
-                        onClick={() => handleInviteResponse(option.value)}
-                        disabled={inviteResponseLoading}
-                        className={`${commonClasses} ${palette}${inactiveFade}`}
-                      >
-                        {isActive && <FiCheck size={14} />}
+                      onClick={() => handleAddNotification(option.minutes)}
+                      className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-50 ${
+                        isSelected ? 'bg-red-50 text-red-700 font-medium' : 'text-gray-700'
+                      }`}
+                    >
+                      {isSelected && option.minutes !== null && (
+                        <span className="mr-2">✓</span>
+                      )}
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="flex-1"></div>
+
+          {/* Show Going status for shared events only */}
+          {selectedEvent?.inviteCanRespond && (
+            <div className="relative">
+                                <button
+                                  type="button"
+                onClick={() => setShowNotifyMembers(!showNotifyMembers)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm ${
+                  currentRSVPStatus === 'accepted' 
+                    ? 'bg-green-100 text-green-700'
+                    : currentRSVPStatus === 'declined'
+                    ? 'bg-red-100 text-red-700'
+                    : 'bg-gray-100 text-gray-600'
+                }`}
+              >
+                <div className={`w-2 h-2 rounded-full ${
+                  currentRSVPStatus === 'accepted' 
+                    ? 'bg-green-500'
+                    : currentRSVPStatus === 'declined'
+                    ? 'bg-red-500'
+                    : 'bg-gray-400'
+                }`}></div>
+                <span>
+                  {currentRSVPStatus === 'accepted' ? 'Going' : currentRSVPStatus === 'declined' ? 'Not going' : 'Maybe'}
+                </span>
+                <FiChevronDown size={14} />
+                                </button>
+              {showNotifyMembers && (
+                <div className="absolute bottom-full right-0 mb-2 z-50 bg-white rounded-lg shadow-lg border border-gray-200 py-1 min-w-[140px]">
+                  {RSVP_OPTIONS.map((option) => (
+                      <button
+                      key={option.value}
+                        type="button"
+                        onClick={() => {
+                        handleInviteResponse(option.value);
+                        setShowNotifyMembers(false);
+                      }}
+                      className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 ${
+                        currentRSVPStatus === option.value ? 'font-semibold' : ''
+                      }`}
+                    >
                         {option.label}
                       </button>
-                    )
-                  })}
-                  {inviteResponseLoading && (
-                    <span className="text-xs text-gray-500">Saving…</span>
-                  )}
+                  ))}
                 </div>
-              </div>
-              {inviteResponseError && (
-                <p className="text-xs text-red-500 mt-2">{inviteResponseError}</p>
               )}
             </div>
           )}
 
-          {/* Action Buttons */}
-          <div className="flex justify-between items-center mt-3 pt-2.5 border-t border-gray-100">
-            <div className="flex space-x-1.5">
               {selectedEvent && (
                 <button 
                   type="button"
                   onClick={handleDelete}
-                  className="px-4 py-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors font-medium"
+              className="px-3 py-1.5 text-sm text-red-600 border border-red-200 rounded-lg hover:bg-red-50 transition-colors"
                   ref={deleteButtonRef}
                 >
-                  Delete
+              Delete event
                 </button>
               )}
-              <button 
-                type="submit"
-                disabled={(selectedEvent && !hasChanges) || (!!timeError && !isAllDay)}
-                className={`px-6 py-2 rounded-lg transition-colors font-medium ${
-                  (selectedEvent && !hasChanges) || (!!timeError && !isAllDay)
-                    ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
-                    : 'bg-green-600 text-white hover:bg-green-700'
-                }`}
-              >
-                {selectedEvent ? 'Update Event' : 'Create Event'}
-              </button>
             </div>
+
+        {/* Notify Members Checkbox */}
+        {participants.length > 0 && !selectedEvent?.inviteCanRespond && (
+          <div className="px-4 pb-3 flex items-center">
+            <input 
+              type="checkbox" 
+              checked={showNotifyMembers}
+              onChange={(e) => setShowNotifyMembers(e.target.checked)}
+              className="h-3 w-3 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+            />
+            <span className="ml-2 text-xs text-gray-600">Notify members</span>
           </div>
+        )}
         </form>
+
         {showRecurringDeletePrompt && typeof document !== 'undefined' && createPortal(
           <div
             className="fixed z-[1200] bg-white border border-gray-200 rounded-2xl shadow-xl p-3 space-y-3"

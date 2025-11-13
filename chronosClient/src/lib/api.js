@@ -218,6 +218,11 @@ function toGoogleEventBody(eventData) {
     body.attendees = eventData.participants.map((email) => ({ email }))
   }
 
+  // Reminders/notifications
+  if (eventData.reminders) {
+    body.reminders = eventData.reminders
+  }
+
   // Extended properties for category color
   if (eventData.color) {
     body.extendedProperties = body.extendedProperties || {}
