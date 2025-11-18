@@ -12,7 +12,8 @@ import {
   addDays,
   subMonths,
   isSameDay,
-  format
+  format,
+  differenceInCalendarDays
 } from 'date-fns'
 import { v4 as uuidv4 } from 'uuid'
 import { calendarApi } from '../lib/api'
@@ -31,7 +32,7 @@ const dispatchBounceEvent = (eventId) => {
 const INITIAL_PAST_MONTHS = 3
 const INITIAL_FUTURE_MONTHS = 3
 const EXPANSION_MONTHS = 2
-const IDLE_PREFETCH_EXTRA_MONTHS = 12
+const IDLE_PREFETCH_EXTRA_MONTHS = 2
 const RECENT_EVENT_SYNC_TTL_MS = 60 * 1000 // allow a short grace period for new events to appear in remote fetches
 
 const parseCalendarBoundary = (boundary) => {
@@ -90,6 +91,28 @@ const safeToISOString = (value) => {
   return date ? date.toISOString() : null
 }
 
+const isMidnight = (date) => {
+  if (!(date instanceof Date)) return false
+  return (
+    date.getHours() === 0 &&
+    date.getMinutes() === 0 &&
+    date.getSeconds() === 0 &&
+    date.getMilliseconds() === 0
+  )
+}
+
+const eventBehavesLikeAllDay = (event) => {
+  if (!event) return false
+  if (event.isAllDay) return true
+  const startDate = coerceDate(event.start)
+  const endDate = coerceDate(event.end)
+  if (!startDate || !endDate) return false
+  const spansMultipleCalendarDays =
+    differenceInCalendarDays(startOfDay(endDate), startOfDay(startDate)) >= 1
+  if (!spansMultipleCalendarDays) return false
+  return isMidnight(startDate) && isMidnight(endDate)
+}
+
 const safeJsonParse = (value, fallback = null) => {
   if (!value) return fallback
   if (typeof value === 'object') return value
@@ -101,6 +124,15 @@ const safeJsonParse = (value, fallback = null) => {
   }
 }
 
+const resolveEventMeetingLocation = (apiEvent, fallback = '') => {
+  if (!apiEvent) return fallback || ''
+  const entryPoints = Array.isArray(apiEvent?.conferenceData?.entryPoints)
+    ? apiEvent.conferenceData.entryPoints
+    : []
+  const preferredEntryPoint = entryPoints.find(ep => ep?.entryPointType === 'video' && ep?.uri)
+  return apiEvent?.hangoutLink || preferredEntryPoint?.uri || apiEvent?.location || fallback || ''
+}
+
 const normalizeResponseStatus = (value) => {
   if (!value) return null
   const lower = String(value).toLowerCase()
@@ -109,11 +141,11 @@ const normalizeResponseStatus = (value) => {
 
 
 export const CalendarProvider = ({ children }) => {
-  const { user } = useAuth()
+  const { user, loading: authLoading } = useAuth()
   const [currentDate, setCurrentDate] = useState(new Date())
   const [view, setView] = useState('month')
   const [headerDisplayDate, setHeaderDisplayDate] = useState(currentDate)
-  const [events, setEvents] = useState([])
+  const [events, setEventsState] = useState([])
   const eventsRefValue = useRef(events)
   const [selectedEvent, setSelectedEvent] = useState(null)
   const [showEventModal, setShowEventModal] = useState(false)
@@ -124,6 +156,7 @@ export const CalendarProvider = ({ children }) => {
   const loadedRangeRef = useRef(null)
   const prefetchedRangesRef = useRef(new Set())
   const eventsByDayRef = useRef(new Map())
+  const skipNextDayIndexRebuildRef = useRef(false)
   const eventIdsRef = useRef(new Set())
   const activeForegroundRequestsRef = useRef(0)
   const activeBackgroundRequestsRef = useRef(0)
@@ -134,12 +167,22 @@ export const CalendarProvider = ({ children }) => {
   const suppressedTodoIdsRef = useRef(new Set())
   const pendingSyncEventIdsRef = useRef(new Map())
   const optimisticRecurrenceMapRef = useRef(new Map())
+  const optimisticEventCacheRef = useRef(new Map())
   const idlePrefetchCancelRef = useRef(null)
   const cacheTTLRef = useRef(24 * 60 * 60 * 1000) // 24h TTL
   const calHashRef = useRef('all')
   const loadedMonthsRef = useRef(new Set())
   const inFlightMonthsRef = useRef(new Set())
   const snapshotSaveTimerRef = useRef(null)
+  const hasBootstrappedRef = useRef(false)
+  const prevSelectedCalHashRef = useRef(null)
+
+  const setEvents = useCallback((updater, options = {}) => {
+    if (options?.skipDayIndexRebuild) {
+      skipNextDayIndexRebuildRef.current = true
+    }
+    setEventsState(updater)
+  }, [])
 
   useEffect(() => {
     eventsRefValue.current = events
@@ -341,6 +384,7 @@ export const CalendarProvider = ({ children }) => {
           if (startIso && endIso) {
             list.push({
               id: newEvent.id,
+              clientKey: newEvent.clientKey || newEvent.id,
               title: newEvent.title,
               start: startIso,
               end: endIso,
@@ -375,9 +419,11 @@ export const CalendarProvider = ({ children }) => {
     }
   }
 
-  const hydrateFromSnapshot = useCallback(() => {
+  const hydrateFromSnapshot = useCallback((options = {}) => {
+    const skipLoadedFlag = Boolean(options?.skipLoadedFlag)
     try {
       if (typeof window === 'undefined') return false
+      if (!user?.id) return false
       const { start, end } = getVisibleRange(currentDate, view)
       const key = snapshotKey(start, end)
       const raw = window.sessionStorage.getItem(key)
@@ -394,6 +440,7 @@ export const CalendarProvider = ({ children }) => {
 
           const e = {
             id: ev.id,
+            clientKey: ev.clientKey || ev.id,
             title: ev.title || 'Untitled',
             start: new Date(ev.start),
             end: new Date(ev.end),
@@ -417,7 +464,7 @@ export const CalendarProvider = ({ children }) => {
         }
       }
       if (toAdd.length) {
-        setEvents(prev => [...prev, ...toAdd])
+        setEvents(prev => [...prev, ...toAdd], { skipDayIndexRebuild: true })
         setTimeout(() => {
           for (const e of toAdd) {
             eventIdsRef.current.add(e.id)
@@ -425,20 +472,38 @@ export const CalendarProvider = ({ children }) => {
           }
         }, 0)
         extendLoadedRange(start, end)
-        hasLoadedInitialRef.current = true
-        setInitialLoading(false)
+        if (!skipLoadedFlag) {
+          hasLoadedInitialRef.current = true
+          setInitialLoading(false)
+        }
         return true
       }
     } catch (_) {}
     return false
-  }, [currentDate, view, getVisibleRange, extendLoadedRange, linkTodoEvent])
+  }, [currentDate, view, getVisibleRange, extendLoadedRange, linkTodoEvent, snapshotKey, user?.id])
 
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    hydrateFromSnapshot()
-  }, [hydrateFromSnapshot])
+    if (authLoading) return
+    if (user) return
+    hasBootstrappedRef.current = false
+    setEvents([], { skipDayIndexRebuild: true })
+    eventsByDayRef.current = new Map()
+    eventIdsRef.current = new Set()
+    pendingSyncEventIdsRef.current = new Map()
+    todoToEventRef.current = new Map()
+    eventToTodoRef.current = new Map()
+    suppressedEventIdsRef.current = new Set()
+    suppressedTodoIdsRef.current = new Set()
+    loadedMonthsRef.current = new Set()
+    inFlightMonthsRef.current = new Set()
+    loadedRangeRef.current = null
+    prefetchedRangesRef.current = new Set()
+    hasLoadedInitialRef.current = false
+    setInitialLoading(true)
+    optimisticEventCacheRef.current = new Map()
+  }, [authLoading, user])
 
-  const fetchEventsForRange = useCallback(async (startDate, endDate, background = false, force = false) => {
+  const fetchEventsForRange = useCallback(async (startDate, endDate, background = false, forceReload = false) => {
     if (!user) {
       return
     }
@@ -455,7 +520,7 @@ export const CalendarProvider = ({ children }) => {
     }
 
     if (
-      !force &&
+      !forceReload &&
       loadedRangeRef.current &&
       loadedRangeRef.current.start <= rangeStart &&
       loadedRangeRef.current.end >= rangeEnd
@@ -467,7 +532,7 @@ export const CalendarProvider = ({ children }) => {
     const allMonths = enumerateMonths(rangeStart, rangeEnd)
     const missingMonths = []
     for (const m of allMonths) {
-      if (!force && loadedMonthsRef.current.has(m)) continue
+      if (!forceReload && loadedMonthsRef.current.has(m)) continue
       if (inFlightMonthsRef.current.has(m)) continue
       missingMonths.push(m)
     }
@@ -516,6 +581,7 @@ export const CalendarProvider = ({ children }) => {
                   isAllDay: Boolean(ev.isAllDay),
                   location: ev.location || '',
                   participants: ev.participants || [],
+                  attendees: ev.attendees || [],
                   todoId: todoId ? String(todoId) : undefined,
                   recurrenceRule: ev.recurrenceRule || null,
                   recurrenceSummary: ev.recurrenceSummary || null,
@@ -534,18 +600,25 @@ export const CalendarProvider = ({ children }) => {
             hadCached = true
             setEvents((prev) => {
               const merged = [...prev]
-              for (const ev of cachedEvents) {
-                if (!eventIdsRef.current.has(ev.id)) {
-                  merged.push(ev)
-                  eventIdsRef.current.add(ev.id)
-                  if (ev.todoId) {
-                    linkTodoEvent(ev.todoId, ev.id)
-                  }
-                  indexEventByDays(ev)
+              const seen = new Set()
+              for (const existing of prev) {
+                if (existing && existing.id) {
+                  seen.add(existing.id)
                 }
               }
+              for (const ev of cachedEvents) {
+                if (!ev || !ev.id) continue
+                if (seen.has(ev.id)) continue
+                merged.push(ev)
+                seen.add(ev.id)
+                eventIdsRef.current.add(ev.id)
+                if (ev.todoId) {
+                  linkTodoEvent(ev.todoId, ev.id)
+                }
+                indexEventByDays(ev)
+              }
               return merged
-            })
+            }, { skipDayIndexRebuild: true })
             extendLoadedRange(rangeStart, rangeEnd)
             if (!hasLoadedInitialRef.current) {
               hasLoadedInitialRef.current = true
@@ -626,6 +699,14 @@ export const CalendarProvider = ({ children }) => {
             const participants = attendeesList
               .map(a => a.email)
               .filter(Boolean)
+            // Store full attendee objects for status info (normalize responseStatus)
+            const attendees = (attendeesList || []).map(attendee => {
+              if (!attendee || typeof attendee !== 'object') return null
+              return {
+                ...attendee,
+                responseStatus: normalizeResponseStatus(attendee?.responseStatus)
+              }
+            }).filter(Boolean)
             const viewerAttendee = attendeesList.find((attendee) => {
               if (attendee?.self) return true
               if (!viewerEmail || !attendee?.email) return false
@@ -643,6 +724,7 @@ export const CalendarProvider = ({ children }) => {
 
             return {
               id: event.id,
+              clientKey: event.id,
               title: event.summary || 'Untitled',
               start,
               end,
@@ -650,8 +732,9 @@ export const CalendarProvider = ({ children }) => {
               isGoogleEvent: true,
               calendar_id: event.calendar_id,
               isAllDay,
-              location: event.location || '',
+              location: resolveEventMeetingLocation(event, event.location || ''),
               participants,
+              attendees,
               todoId: todoId ? String(todoId) : undefined,
               recurrenceRule: recurrenceRule || null,
               recurrenceSummary,
@@ -678,7 +761,7 @@ export const CalendarProvider = ({ children }) => {
         googleEvents.forEach(ev => incomingById.set(ev.id, ev))
         const updatedEvents = []
         const newEvents = []
-        const removedIds = []
+        const reinsertedOptimisticEvents = []
         const now = Date.now()
 
         setEvents(prev => {
@@ -691,7 +774,12 @@ export const CalendarProvider = ({ children }) => {
               const replacement = incomingById.get(ev.id)
               if (replacement) {
                 pendingSyncEventIdsRef.current.delete(ev.id)
-                const merged = { ...ev, ...replacement, isPendingSync: false }
+                const merged = {
+                  ...ev,
+                  ...replacement,
+                  clientKey: ev.clientKey || replacement.clientKey || replacement.id,
+                  isPendingSync: false
+                }
                 next.push(merged)
                 updatedEvents.push(merged)
                 incomingById.delete(ev.id)
@@ -709,7 +797,9 @@ export const CalendarProvider = ({ children }) => {
                   const carry = isPendingSync && !ev.isPendingSync ? { ...ev, isPendingSync: true } : ev
                   next.push(carry)
                 } else {
-                  removedIds.push(ev.id)
+                  // Do not aggressively remove existing events just
+                  // because they are missing from this segment; keep them.
+                  next.push(ev)
                 }
               }
             } else {
@@ -719,29 +809,31 @@ export const CalendarProvider = ({ children }) => {
 
           incomingById.forEach(ev => {
             pendingSyncEventIdsRef.current.delete(ev.id)
-            const normalized = { ...ev, isPendingSync: false }
+            const normalized = {
+              ...ev,
+              clientKey: ev.clientKey || ev.id,
+              isPendingSync: false
+            }
             newEvents.push(normalized)
             next.push(normalized)
           })
 
-          return next
-        })
-
-        if (removedIds.length) {
-          for (const id of removedIds) {
-            eventIdsRef.current.delete(id)
-            pendingSyncEventIdsRef.current.delete(id)
-            unlinkEvent(id)
-            for (const [key, arr] of eventsByDayRef.current.entries()) {
-              const filtered = arr.filter(ev => ev.id !== id)
-              if (filtered.length !== arr.length) {
-                eventsByDayRef.current.set(key, filtered)
-              }
+          const existingIds = new Set(next.map(event => event.id))
+          optimisticEventCacheRef.current.forEach((optEvent) => {
+            if (!existingIds.has(optEvent.id)) {
+              existingIds.add(optEvent.id)
+              next.unshift(optEvent)
+              reinsertedOptimisticEvents.push(optEvent)
             }
-          }
-        }
+          })
+
+          return next
+        }, { skipDayIndexRebuild: true })
 
         const toReindex = [...updatedEvents, ...newEvents]
+        if (reinsertedOptimisticEvents.length) {
+          toReindex.push(...reinsertedOptimisticEvents)
+        }
         if (toReindex.length) {
           for (const ev of toReindex) {
             eventIdsRef.current.add(ev.id)
@@ -948,7 +1040,7 @@ export const CalendarProvider = ({ children }) => {
     const ids = optimisticRecurrenceMapRef.current.get(parentId)
     if (!ids || !ids.length) return
     optimisticRecurrenceMapRef.current.delete(parentId)
-    setEvents(prev => prev.filter(event => !ids.includes(event.id)))
+    setEvents(prev => prev.filter(event => !ids.includes(event.id)), { skipDayIndexRebuild: true })
     ids.forEach((id) => {
       eventIdsRef.current.delete(id)
       pendingSyncEventIdsRef.current.delete(id)
@@ -979,6 +1071,7 @@ export const CalendarProvider = ({ children }) => {
       clones.push({
         ...parentEvent,
         id: cloneId,
+        clientKey: cloneId,
         start: occurrence.start,
         end: occurrence.end,
         isOptimisticRecurrence: true,
@@ -989,7 +1082,7 @@ export const CalendarProvider = ({ children }) => {
     if (!clones.length) return
     const existing = optimisticRecurrenceMapRef.current.get(parentEvent.id) || []
     optimisticRecurrenceMapRef.current.set(parentEvent.id, [...existing, ...clones.map(clone => clone.id)])
-    setEvents(prev => [...prev, ...clones])
+    setEvents(prev => [...prev, ...clones], { skipDayIndexRebuild: true })
     clones.forEach((clone) => {
       eventIdsRef.current.add(clone.id)
       indexEventByDays(clone)
@@ -1000,7 +1093,7 @@ export const CalendarProvider = ({ children }) => {
   const revertEventState = useCallback((snapshot) => {
     if (!snapshot?.id) return
 
-    setEvents(prev => prev.map(event => event.id === snapshot.id ? { ...snapshot } : event))
+    setEvents(prev => prev.map(event => event.id === snapshot.id ? { ...snapshot } : event), { skipDayIndexRebuild: true })
 
     for (const [key, arr] of eventsByDayRef.current.entries()) {
       const filtered = arr.filter(event => event.id !== snapshot.id)
@@ -1013,8 +1106,34 @@ export const CalendarProvider = ({ children }) => {
   }, [indexEventByDays, saveSnapshotsForAllViews])
 
   useEffect(() => {
-    rebuildEventsByDayIndex(events)
-  }, [events, rebuildEventsByDayIndex])
+    if (!Array.isArray(events) || events.length === 0) {
+      rebuildEventsByDayIndex([])
+      skipNextDayIndexRebuildRef.current = false
+      return
+    }
+    const seen = new Set()
+    const deduped = []
+    let hadDuplicates = false
+    for (const ev of events) {
+      if (!ev || !ev.id) continue
+      if (seen.has(ev.id)) {
+        hadDuplicates = true
+        continue
+      }
+      seen.add(ev.id)
+      deduped.push(ev)
+    }
+    if (hadDuplicates) {
+      skipNextDayIndexRebuildRef.current = false
+      setEvents(deduped)
+      return
+    }
+    if (skipNextDayIndexRebuildRef.current) {
+      skipNextDayIndexRebuildRef.current = false
+      return
+    }
+    rebuildEventsByDayIndex(deduped)
+  }, [events, rebuildEventsByDayIndex, setEvents])
 
   useEffect(() => {
     const ids = new Set()
@@ -1058,6 +1177,7 @@ export const CalendarProvider = ({ children }) => {
       return
     }
 
+    // Check if already loaded
     if (
       loadedRangeRef.current &&
       loadedRangeRef.current.start <= rangeStart &&
@@ -1066,8 +1186,16 @@ export const CalendarProvider = ({ children }) => {
       return
     }
 
+    // Check if already prefetched or in-flight
     const key = `${rangeStart.getTime()}_${rangeEnd.getTime()}`
     if (prefetchedRangesRef.current.has(key)) {
+      return
+    }
+    
+    // Check if any months in this range are already in-flight
+    const months = enumerateMonths(rangeStart, rangeEnd)
+    const hasInFlightMonths = months.some(m => inFlightMonthsRef.current.has(m))
+    if (hasInFlightMonths) {
       return
     }
 
@@ -1105,6 +1233,10 @@ export const CalendarProvider = ({ children }) => {
     }
   }, [buildBufferedRange, prefetchRange])
 
+  const lastEnsureRangeRef = useRef({ start: null, end: null })
+  const ensureRangeCooldownRef = useRef(0)
+  const ENSURE_RANGE_COOLDOWN_MS = 10000 // 10 seconds cooldown
+
   const ensureRangeLoaded = useCallback(async (visibleStart, visibleEnd, background = false, force = false) => {
     if (!(visibleStart instanceof Date) || !(visibleEnd instanceof Date)) {
       return
@@ -1113,6 +1245,15 @@ export const CalendarProvider = ({ children }) => {
     const visibleRange = {
       start: startOfDay(visibleStart),
       end: endOfDay(visibleEnd)
+    }
+
+    // Skip if same range was just loaded recently (unless forced)
+    const now = Date.now()
+    const rangeKey = `${visibleRange.start.getTime()}_${visibleRange.end.getTime()}`
+    const lastKey = `${lastEnsureRangeRef.current.start}_${lastEnsureRangeRef.current.end}`
+    
+    if (!force && rangeKey === lastKey && (now - ensureRangeCooldownRef.current) < ENSURE_RANGE_COOLDOWN_MS) {
+      return
     }
 
     const targetRange = buildBufferedRange(visibleStart, visibleEnd)
@@ -1126,6 +1267,8 @@ export const CalendarProvider = ({ children }) => {
     if (!currentRange) {
       await fetchEventsForRange(targetRange.start, targetRange.end, background, true)
       currentRange = loadedRangeRef.current
+      lastEnsureRangeRef.current = { start: visibleRange.start.getTime(), end: visibleRange.end.getTime() }
+      ensureRangeCooldownRef.current = now
     }
 
     if (!currentRange) {
@@ -1148,11 +1291,25 @@ export const CalendarProvider = ({ children }) => {
       }
     }
 
-    prefetchAdjacentRanges(targetRange)
+    // Disabled automatic prefetching - only fetch on user scroll/action
+    // prefetchAdjacentRanges(targetRange)
   }, [buildBufferedRange, fetchEventsForRange, prefetchAdjacentRanges])
+
+  const lastFetchGoogleEventsRef = useRef({ start: null, end: null, time: 0 })
+  const FETCH_GOOGLE_EVENTS_COOLDOWN_MS = 5000 // 5 seconds cooldown
 
   const fetchGoogleEvents = useCallback(async (background = false, reset = false) => {
     const { start, end } = getVisibleRange(currentDate, view)
+    const rangeKey = `${start.getTime()}_${end.getTime()}`
+    const now = Date.now()
+    
+    // Skip if same range was just fetched recently (unless reset or initial load)
+    if (!reset && hasLoadedInitialRef.current && background) {
+      const lastKey = `${lastFetchGoogleEventsRef.current.start}_${lastFetchGoogleEventsRef.current.end}`
+      if (rangeKey === lastKey && (now - lastFetchGoogleEventsRef.current.time) < FETCH_GOOGLE_EVENTS_COOLDOWN_MS) {
+        return
+      }
+    }
 
     if (reset) {
       loadedRangeRef.current = null
@@ -1169,10 +1326,22 @@ export const CalendarProvider = ({ children }) => {
       setLoading(false)
       setIsRevalidating(false)
       setEvents(prev => prev.filter(event => !event.isGoogleEvent))
+      hydrateFromSnapshot({ skipLoadedFlag: true })
     }
 
+    const shouldStageVisibleRange = reset || !hasLoadedInitialRef.current
+
     try {
-      await ensureRangeLoaded(start, end, background, reset)
+      if (shouldStageVisibleRange) {
+        await fetchEventsForRange(start, end, background, true)
+        // Don't automatically prefetch - only on user scroll/action
+        // ensureRangeLoaded(start, end, true, false).catch(() => {})
+      } else {
+        await ensureRangeLoaded(start, end, background, reset)
+      }
+      
+      lastFetchGoogleEventsRef.current = { start: start.getTime(), end: end.getTime(), time: now }
+      
       if (typeof window !== 'undefined') {
         const todoIds = Array.from(todoToEventRef.current.keys())
         window.dispatchEvent(new CustomEvent('calendarTodoEventsSynced', {
@@ -1188,8 +1357,32 @@ export const CalendarProvider = ({ children }) => {
     currentDate,
     view,
     getVisibleRange,
-    ensureRangeLoaded
+    ensureRangeLoaded,
+    fetchEventsForRange,
+    hydrateFromSnapshot
   ])
+
+  const fetchGoogleEventsRef = useRef(fetchGoogleEvents)
+  useEffect(() => {
+    fetchGoogleEventsRef.current = fetchGoogleEvents
+  }, [fetchGoogleEvents])
+
+  useEffect(() => {
+    if (authLoading) return
+    if (!user) {
+      hasBootstrappedRef.current = false
+      return
+    }
+    if (!user.has_google_credentials) {
+      return
+    }
+    if (hasBootstrappedRef.current) return
+    hydrateFromSnapshot()
+    // Start fetching calendar events immediately in parallel with todos
+    // background=true, reset=false
+    fetchGoogleEventsRef.current(true, false)
+    hasBootstrappedRef.current = true
+  }, [authLoading, user?.id, user?.has_google_credentials, hydrateFromSnapshot])
 
   // Persist a tiny snapshot of the visible window in sessionStorage for instant rehydration
   useEffect(() => {
@@ -1218,7 +1411,8 @@ export const CalendarProvider = ({ children }) => {
             end: endIso,
             color: ev.color,
             calendar_id: ev.calendar_id,
-            todoId: ev.todoId
+            todoId: ev.todoId,
+            isAllDay: Boolean(ev.isAllDay)
           })
           if (list.length >= max) break
         }
@@ -1236,34 +1430,57 @@ export const CalendarProvider = ({ children }) => {
 
   const refreshEvents = useCallback(() => {
     if (!user) return
-    fetchGoogleEvents(false, true)
-  }, [user, fetchGoogleEvents])
+    fetchGoogleEventsRef.current(false, true)
+  }, [user])
 
+  const lastFetchParamsRef = useRef({ date: null, view: null })
+  
   useEffect(() => {
     if (!user) return
-    // Use background fetch when only view changes (no date change)
-    // This makes view switching feel instant while still loading any missing data
-    fetchGoogleEvents(true)
-  }, [user, currentDate, view, fetchGoogleEvents])
+    
+    const currentDateKey = currentDate?.getTime()
+    const lastDateKey = lastFetchParamsRef.current.date
+    const lastView = lastFetchParamsRef.current.view
+    
+    // Only fetch if date or view actually changed
+    if (currentDateKey === lastDateKey && view === lastView) {
+      return
+    }
+    
+    lastFetchParamsRef.current = { date: currentDateKey, view }
+    
+    // Only fetch when user explicitly navigates (date/view change)
+    // This is user-initiated, so fetch immediately
+    fetchGoogleEventsRef.current(false)
+  }, [user?.id, currentDate, view])
 
   useEffect(() => {
-    if (!user) return
-    fetchGoogleEvents(false, true)
-  }, [user, selectedCalendars, fetchGoogleEvents])
+    if (!user) {
+      prevSelectedCalHashRef.current = null
+      return
+    }
+    const currentHash = calHashRef.current || 'all'
+    if (!hasBootstrappedRef.current) {
+      prevSelectedCalHashRef.current = currentHash
+      return
+    }
+    if (prevSelectedCalHashRef.current === currentHash) {
+      return
+    }
+    prevSelectedCalHashRef.current = currentHash
+    // Only reset if calendars actually changed
+    fetchGoogleEventsRef.current(false, true)
+  }, [user?.id, selectedCalendars])
 
-  useEffect(() => {
-    if (!user) return
-    const handleFocus = () => fetchGoogleEvents(true)
-    window.addEventListener('focus', handleFocus)
-    return () => window.removeEventListener('focus', handleFocus)
-  }, [user, fetchGoogleEvents])
+  // Disabled automatic focus-triggered fetches - only fetch on user action
+  // useEffect(() => {
+  //   ... focus fetch logic disabled ...
+  // }, [user?.id])
 
-  useEffect(() => {
-    if (!user) return
-    // Refresh events every 30 minutes (1800000 ms)
-    const interval = setInterval(() => fetchGoogleEvents(true), 1800000)
-    return () => clearInterval(interval)
-  }, [user, fetchGoogleEvents])
+  // Disabled automatic periodic refresh - only refresh on user action
+  // useEffect(() => {
+  //   ... periodic refresh disabled ...
+  // }, [user?.id])
 
   // Listen for todo conversion events and add event immediately (optimistic update)
   useEffect(() => {
@@ -1339,7 +1556,7 @@ export const CalendarProvider = ({ children }) => {
               return [...filtered, newEvent]
             }
             return prev
-          })
+          }, { skipDayIndexRebuild: true })
         } else {
           if (todoId && suppressedTodoIdsRef.current.has(String(todoId)) && !isOptimistic) {
             suppressedEventIdsRef.current.add(newEvent.id)
@@ -1360,7 +1577,7 @@ export const CalendarProvider = ({ children }) => {
           }
           // Add new event (optimistic or real)
           if (!eventIdsRef.current.has(newEvent.id)) {
-            setEvents(prev => [...prev, newEvent])
+            setEvents(prev => [...prev, newEvent], { skipDayIndexRebuild: true })
             eventIdsRef.current.add(newEvent.id)
             indexEventByDays(newEvent)
             suppressedEventIdsRef.current.delete(newEvent.id)
@@ -1368,9 +1585,12 @@ export const CalendarProvider = ({ children }) => {
         }
       }
       
-      // Only refresh in background for real events (not optimistic)
+      // Don't trigger background refresh for optimistic or pending events
+      // They will sync naturally when the user navigates or manually refreshes
+      // This prevents flicker and unnecessary API calls
       if (!isOptimistic) {
-        setTimeout(() => fetchGoogleEvents(true), 500)
+        // Only refresh after a significant delay to ensure Google Calendar has synced
+        setTimeout(() => fetchGoogleEventsRef.current(true, false), 8000)
       }
     }
     
@@ -1378,7 +1598,7 @@ export const CalendarProvider = ({ children }) => {
       const eventId = e.detail?.eventId
       if (eventId) {
         // Remove the optimistic event
-        setEvents(prev => prev.filter(ev => ev.id !== eventId))
+        setEvents(prev => prev.filter(ev => ev.id !== eventId), { skipDayIndexRebuild: true })
         eventIdsRef.current.delete(eventId)
         unlinkEvent(eventId)
         
@@ -1398,66 +1618,12 @@ export const CalendarProvider = ({ children }) => {
       window.removeEventListener('todoConvertedToEvent', handleTodoConverted)
       window.removeEventListener('todoConversionFailed', handleTodoConversionFailed)
     }
-  }, [fetchGoogleEvents, linkTodoEvent, unlinkEvent])
+  }, [linkTodoEvent, unlinkEvent])
 
-  useEffect(() => {
-    if (initialLoading) {
-      if (idlePrefetchCancelRef.current) {
-        idlePrefetchCancelRef.current()
-        idlePrefetchCancelRef.current = null
-      }
-      return
-    }
-
-    if (typeof window === 'undefined') {
-      return
-    }
-
-    const scheduleIdlePrefetch = () => {
-      const runPrefetch = () => {
-        idlePrefetchCancelRef.current = null
-        const { start, end } = getVisibleRange(currentDate, view)
-        const baseTarget = buildBufferedRange(start, end)
-        const extended = buildBufferedRange(
-          start,
-          end,
-          INITIAL_PAST_MONTHS + IDLE_PREFETCH_EXTRA_MONTHS,
-          INITIAL_FUTURE_MONTHS + IDLE_PREFETCH_EXTRA_MONTHS
-        )
-        if (extended) {
-          prefetchRange(extended.start, extended.end)
-        }
-        if (baseTarget) {
-          prefetchAdjacentRanges(baseTarget)
-        }
-      }
-
-      if ('requestIdleCallback' in window) {
-        const id = window.requestIdleCallback(runPrefetch, { timeout: 2000 })
-        idlePrefetchCancelRef.current = () => window.cancelIdleCallback(id)
-      } else {
-        const timeout = window.setTimeout(runPrefetch, 600)
-        idlePrefetchCancelRef.current = () => window.clearTimeout(timeout)
-      }
-    }
-
-    scheduleIdlePrefetch()
-
-    return () => {
-      if (idlePrefetchCancelRef.current) {
-        idlePrefetchCancelRef.current()
-        idlePrefetchCancelRef.current = null
-      }
-    }
-  }, [
-    initialLoading,
-    currentDate,
-    view,
-    getVisibleRange,
-    buildBufferedRange,
-    prefetchRange,
-    prefetchAdjacentRanges
-  ])
+  // Disabled automatic idle prefetching - only fetch on user scroll/action
+  // useEffect(() => {
+  //   ... idle prefetch logic disabled ...
+  // }, [])
 
   // Fallback: do not block the entire app on network; show the shell quickly
   useEffect(() => {
@@ -1509,7 +1675,7 @@ export const CalendarProvider = ({ children }) => {
       return true
     })
 
-    // Sort by time: earliest events first
+    // Sort by priority then time so month view stays chronological
     return filtered.sort((a, b) => {
       const weight = (event) => {
         if (event.isOptimistic) return -2
@@ -1518,6 +1684,12 @@ export const CalendarProvider = ({ children }) => {
       }
       const weightDiff = weight(a) - weight(b)
       if (weightDiff !== 0) return weightDiff
+
+      const aIsAllDay = eventBehavesLikeAllDay(a)
+      const bIsAllDay = eventBehavesLikeAllDay(b)
+      if (aIsAllDay !== bIsAllDay) {
+        return aIsAllDay ? -1 : 1
+      }
 
       const aStart = coerceDate(a.start)?.getTime() ?? 0
       const bStart = coerceDate(b.start)?.getTime() ?? 0
@@ -1570,8 +1742,10 @@ export const CalendarProvider = ({ children }) => {
       processedData.recurrenceMeta = eventData.recurrenceMeta
     }
 
+    const clientKey = uuidv4()
     const newEvent = {
-      id: uuidv4(),
+      id: clientKey,
+      clientKey,
       ...processedData,
       organizerEmail: user?.email || null,
       viewerResponseStatus: 'accepted',
@@ -1582,9 +1756,13 @@ export const CalendarProvider = ({ children }) => {
       isOptimistic: true
     }
 
-    setEvents(prev => [...prev, newEvent])
+    // Index and update refs BEFORE state update so UI sees it immediately
+    optimisticEventCacheRef.current.set(newEvent.id, newEvent)
     eventIdsRef.current.add(newEvent.id)
     indexEventByDays(newEvent)
+    
+    // Now update state - React will re-render and event will already be in eventsByDayRef
+    setEvents(prev => [...prev, newEvent], { skipDayIndexRebuild: true })
     
     // Force immediate snapshot save for all views
     saveSnapshotsForAllViews(newEvent)
@@ -1612,6 +1790,7 @@ export const CalendarProvider = ({ children }) => {
 
       const normalizedEvent = {
         id: created?.id || newEvent.id,
+        clientKey: newEvent.clientKey || newEvent.id,
         title: created?.summary || created?.title || processedData.title || 'New Event',
         start: createdStart,
         end: createdEnd,
@@ -1619,7 +1798,7 @@ export const CalendarProvider = ({ children }) => {
         isAllDay: resolveIsAllDay(created?.start, created) || processedData.isAllDay,
         calendar_id: created?.organizer?.email || created?.calendar_id || calendarId,
         isOptimistic: false,
-        location: created?.location || processedData.location,
+        location: resolveEventMeetingLocation(created, processedData.location),
         participants: processedData.participants,
         todoId: processedData.todoId || processedData.todo_id || undefined,
         recurrenceRule: Array.isArray(created?.recurrence) && created.recurrence.length
@@ -1641,6 +1820,7 @@ export const CalendarProvider = ({ children }) => {
         isInvitePending: false
       }
 
+      optimisticEventCacheRef.current.delete(newEvent.id)
       migrateOptimisticRecurrenceParentId(newEvent.id, normalizedEvent.id)
 
       if (!eventIdsRef.current.has(newEvent.id)) {
@@ -1655,19 +1835,40 @@ export const CalendarProvider = ({ children }) => {
       pendingSyncEventIdsRef.current.set(normalizedEvent.id, Date.now())
       const normalizedWithPending = { ...normalizedEvent, isPendingSync: true }
 
-      setEvents(prev =>
-        prev.map(event => event.id === newEvent.id ? normalizedWithPending : event)
-      )
+      // Update all refs BEFORE state update - this makes the transition atomic from React's perspective
       eventIdsRef.current.delete(newEvent.id)
       eventIdsRef.current.add(normalizedEvent.id)
 
+      // Remove old event from eventsByDayRef
       for (const [key, arr] of eventsByDayRef.current.entries()) {
-        const filtered = arr.filter(event => event.id !== newEvent.id)
-        if (filtered.length !== arr.length) {
-          eventsByDayRef.current.set(key, filtered)
+        const newArr = arr.filter(event => event.id !== newEvent.id)
+        if (newArr.length !== arr.length) {
+          eventsByDayRef.current.set(key, newArr)
         }
       }
+      
+      // Index new event immediately BEFORE state update
       indexEventByDays(normalizedWithPending)
+
+      // Single atomic state update - when React renders, refs are already updated
+      setEvents(prev => {
+        // Find and replace in one pass to minimize intermediate states
+        const result = []
+        let found = false
+        for (const event of prev) {
+          if (event.id === newEvent.id) {
+            result.push(normalizedWithPending)
+            found = true
+          } else {
+            result.push(event)
+          }
+        }
+        // If not found (shouldn't happen), add it
+        if (!found) {
+          result.push(normalizedWithPending)
+        }
+        return result
+      }, { skipDayIndexRebuild: true })
       
       // Remove optimistic event from all snapshots and add real event
       removeEventFromAllSnapshots(newEvent.id)
@@ -1689,7 +1890,8 @@ export const CalendarProvider = ({ children }) => {
       return normalizedWithPending
     } catch (error) {
       console.error('Failed to create event:', error)
-      setEvents(prev => prev.filter(event => event.id !== newEvent.id))
+      optimisticEventCacheRef.current.delete(newEvent.id)
+      setEvents(prev => prev.filter(event => event.id !== newEvent.id), { skipDayIndexRebuild: true })
       eventIdsRef.current.delete(newEvent.id)
       removeEventFromAllSnapshots(newEvent.id)
       for (const [key, arr] of eventsByDayRef.current.entries()) {
@@ -1779,14 +1981,15 @@ export const CalendarProvider = ({ children }) => {
     }
 
     // Optimistically update local state
-    setEvents(prev => 
-      prev.map(event => {
+    setEvents(
+      prev => prev.map(event => {
         if (event.id !== id) return event
         return {
           ...event,
           ...processedData
         }
-      })
+      }),
+      { skipDayIndexRebuild: true }
     );
     // Re-index the updated event
     const updated = {
@@ -1820,7 +2023,18 @@ export const CalendarProvider = ({ children }) => {
       const calendarId = existingEvent?.calendar_id || 'primary'
       const sendNotifications = processedData.sendNotifications || false
       const backendEventId = existingEvent?.recurringEventId || id
-      await calendarApi.updateEvent(backendEventId, processedData, calendarId, sendNotifications)
+      const response = await calendarApi.updateEvent(backendEventId, processedData, calendarId, sendNotifications)
+      const serverEvent = response?.event || response
+      if (serverEvent) {
+        const resolvedLocation = resolveEventMeetingLocation(serverEvent, processedData.location)
+        setEvents(prev => prev.map(evt => (
+          evt.id === id ? { ...evt, location: resolvedLocation } : evt
+        )), { skipDayIndexRebuild: true })
+        setSelectedEvent(prev => {
+          if (!prev || prev.id !== id) return prev
+          return { ...prev, location: resolvedLocation }
+        })
+      }
       if (processedData.recurrence || processedData.recurrenceRule || processedData.recurrenceSummary) {
         try {
           const { start: visibleStart, end: visibleEnd } = getVisibleRange(currentDate, view)
@@ -1894,7 +2108,7 @@ export const CalendarProvider = ({ children }) => {
       saveSnapshotsForAllViews(eventToSync)
     }
 
-    setEvents(prev => prev.map(ev => (ev.id === eventId ? updatedEvent : ev)))
+    setEvents(prev => prev.map(ev => (ev.id === eventId ? updatedEvent : ev)), { skipDayIndexRebuild: true })
     syncDayIndexWithEvent(updatedEvent)
 
     setSelectedEvent(prev => {
@@ -1907,7 +2121,7 @@ export const CalendarProvider = ({ children }) => {
       await calendarApi.respondToInvite(eventId, normalized, effectiveCalendarId)
     } catch (error) {
       console.error('Failed to respond to invite:', error)
-      setEvents(prev => prev.map(ev => (ev.id === eventId ? previousSnapshot : ev)))
+      setEvents(prev => prev.map(ev => (ev.id === eventId ? previousSnapshot : ev)), { skipDayIndexRebuild: true })
       syncDayIndexWithEvent(previousSnapshot)
       setSelectedEvent(prev => {
         if (!prev || prev.id !== eventId) return prev
@@ -1994,7 +2208,7 @@ export const CalendarProvider = ({ children }) => {
         removalIds.forEach(id => suppressedEventIdsRef.current.add(id))
 
         return prev.filter(ev => !removalIds.has(ev.id))
-      })
+      }, { skipDayIndexRebuild: true })
 
       if (!eventsToDelete.length) {
         if (!isOptimistic && seriesId) {
@@ -2033,7 +2247,7 @@ export const CalendarProvider = ({ children }) => {
               window.dispatchEvent(new CustomEvent('eventDeleted', { detail: { message: "Error couldn't delete" } }))
             }
             // Rollback on error
-            setEvents(prevEvents => [...prevEvents, ...snapshotsToRestore])
+            setEvents(prevEvents => [...prevEvents, ...snapshotsToRestore], { skipDayIndexRebuild: true })
             snapshotsToRestore.forEach(snapshot => {
               eventIdsRef.current.add(snapshot.id)
               indexEventByDays(snapshot)
@@ -2059,7 +2273,7 @@ export const CalendarProvider = ({ children }) => {
 
       snapshotsToRestore = [snapshot]
       idsToRemove.add(rawId)
-      setEvents(prev => prev.filter(e => e.id !== rawId))
+      setEvents(prev => prev.filter(e => e.id !== rawId), { skipDayIndexRebuild: true })
     }
 
     idsToRemove.forEach(id => {
@@ -2093,7 +2307,7 @@ export const CalendarProvider = ({ children }) => {
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('eventDeleted', { detail: { message: "Error couldn't delete" } }))
       }
-      setEvents(prev => [...prev, ...snapshotsToRestore])
+      setEvents(prev => [...prev, ...snapshotsToRestore], { skipDayIndexRebuild: true })
       snapshotsToRestore.forEach(snapshot => {
         eventIdsRef.current.add(snapshot.id)
         indexEventByDays(snapshot)

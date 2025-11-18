@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from supabase import Client
 from fastapi import HTTPException, status
 from google.oauth2.credentials import Credentials
@@ -13,8 +13,57 @@ SCOPES = [
     "https://www.googleapis.com/auth/calendar",
     "https://www.googleapis.com/auth/calendar.events",
     "https://www.googleapis.com/auth/calendar.events.readonly",
-    "https://www.googleapis.com/auth/calendar.readonly"
+    "https://www.googleapis.com/auth/calendar.readonly",
 ]
+
+
+def _parse_iso_datetime(value: str):
+    if not value:
+        return None
+    try:
+        normalized = value.replace('Z', '+00:00')
+        parsed = datetime.fromisoformat(normalized)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        else:
+            parsed = parsed.astimezone(timezone.utc)
+        return parsed
+    except ValueError:
+        return None
+
+
+def _as_naive_utc(value: datetime | None):
+    if not value:
+        return None
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _isoformat_utc(value: datetime | None):
+    if not value:
+        return None
+    aware = value
+    if aware.tzinfo is None:
+        aware = aware.replace(tzinfo=timezone.utc)
+    else:
+        aware = aware.astimezone(timezone.utc)
+    output = aware.isoformat()
+    return output.replace('+00:00', 'Z')
+
+
+def _resolve_event_meeting_location(event: dict, fallback: str = '') -> str:
+    if not event:
+        return fallback or ''
+    location = (event.get('location') or '').strip()
+    if location:
+        return location
+    conference = event.get('conferenceData') or {}
+    entry_points = conference.get('entryPoints') or []
+    for entry in entry_points:
+        if entry.get('entryPointType') == 'video' and entry.get('uri'):
+            return entry['uri']
+    return conference.get('hangoutLink') or fallback or ''
 
 
 class GoogleCalendarService:
@@ -50,24 +99,54 @@ class GoogleCalendarService:
                 )
             
             record = result.data[0]
+            expiry_value = record.get("expires_at")
+            parsed_expiry = _parse_iso_datetime(expiry_value)
+
+            scopes = record.get("scopes")
+            if isinstance(scopes, str):
+                scopes = [scope.strip() for scope in scopes.split(',') if scope.strip()]
+            if not scopes:
+                scopes = SCOPES
+
             self.credentials = Credentials(
                 token=record["access_token"],
                 refresh_token=record["refresh_token"],
                 token_uri="https://oauth2.googleapis.com/token",
                 client_id=settings.GOOGLE_CLIENT_ID,
                 client_secret=settings.GOOGLE_CLIENT_SECRET,
-                scopes=SCOPES
+                scopes=scopes
             )
+            if parsed_expiry:
+                self.credentials.expiry = _as_naive_utc(parsed_expiry)
+            else:
+                self.credentials.expiry = _as_naive_utc(self.credentials.expiry)
         return self.credentials
     
     def refresh_token_if_needed(self) -> None:
         creds = self.get_credentials()
-        
-        if creds.expired or (creds.expiry and creds.expiry <= datetime.utcnow() + timedelta(minutes=5)):
-            creds.refresh(GoogleRequest())
+
+        now = datetime.utcnow()
+        creds.expiry = _as_naive_utc(creds.expiry)
+        needs_refresh = creds.expired
+        expiry_value = creds.expiry
+        if expiry_value:
+            needs_refresh = needs_refresh or (expiry_value <= (now + timedelta(minutes=5)))
+        elif not creds.valid:
+            needs_refresh = True
+
+        if needs_refresh:
+            try:
+                creds.refresh(GoogleRequest())
+            except Exception as error:
+                logger.error("Failed to refresh Google token: %s", error)
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Google session expired. Please reconnect."
+                )
+            creds.expiry = _as_naive_utc(creds.expiry)
             self.supabase.table("google_credentials").update({
                 "access_token": creds.token,
-                "expires_at": creds.expiry.isoformat() if creds.expiry else None
+                "expires_at": _isoformat_utc(creds.expiry)
             }).eq("user_id", self.user_id).execute()
     
     def get_service(self):
@@ -91,10 +170,10 @@ class GoogleCalendarService:
     def fetch_events(self, time_min: str, time_max: str, calendar_ids: list = None):
         try:
             service = self.get_service()
-            
+
             if not calendar_ids:
                 calendar_ids = ['primary']
-            
+
             all_events = []
             for calendar_id in calendar_ids:
                 events_result = service.events().list(
@@ -103,7 +182,7 @@ class GoogleCalendarService:
                     timeMax=time_max,
                     singleEvents=True,
                     orderBy='startTime',
-                    fields='items(id,summary,description,start,end,recurrence,recurringEventId,originalStartTime,extendedProperties,status,created,updated,attendees(displayName,email,responseStatus,self,optional),organizer(displayName,email,self),location)'
+                    fields='items(id,summary,description,start,end,recurrence,recurringEventId,originalStartTime,extendedProperties,status,created,updated,attendees(displayName,email,responseStatus,self,optional),organizer(displayName,email,self),location,hangoutLink,conferenceData(entryPoints))'
                 ).execute()
                 events = events_result.get('items', [])
                 master_cache = {}
@@ -125,7 +204,7 @@ class GoogleCalendarService:
                         master_cache[recurring_id] = master
                     except HttpError:
                         master_cache[recurring_id] = None
-                
+
                 for event in events:
                     event['calendar_id'] = calendar_id
                     recurring_id = event.get('recurringEventId')
@@ -140,9 +219,12 @@ class GoogleCalendarService:
                                 for k in ['recurrenceRule', 'recurrenceSummary', 'recurrenceMeta']
                                 if k in master_private
                             })
-                
+                    resolved_location = _resolve_event_meeting_location(event)
+                    if resolved_location:
+                        event['location'] = resolved_location
+
                 all_events.extend(events)
-            
+
             return all_events
         except HttpError as error:
             logger.error(f"Error fetching events: {error}")
@@ -154,28 +236,35 @@ class GoogleCalendarService:
     def create_event(self, calendar_id: str, event_data: dict, send_notifications: bool = False):
         try:
             service = self.get_service()
-            created_event = service.events().insert(
-                calendarId=calendar_id,
-                body=event_data,
-                sendUpdates='all' if send_notifications else 'none'
-            ).execute()
+            params = {
+                "calendarId": calendar_id,
+                "body": event_data,
+                "sendUpdates": 'all' if send_notifications else 'none'
+            }
+            if event_data.get("conferenceData"):
+                params["conferenceDataVersion"] = 1
+            created_event = service.events().insert(**params).execute()
             return created_event
         except HttpError as error:
-            logger.error(f"Error creating event: {error}")
+            error_details = error.error_details if hasattr(error, 'error_details') else str(error)
+            logger.error(f"Error creating event: {error}, Details: {error_details}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to create event"
+                detail=f"Failed to create event: {error_details}"
             )
     
     def update_event(self, event_id: str, calendar_id: str, event_data: dict, send_notifications: bool = False):
         try:
             service = self.get_service()
-            updated_event = service.events().update(
-                calendarId=calendar_id,
-                eventId=event_id,
-                body=event_data,
-                sendUpdates='all' if send_notifications else 'none'
-            ).execute()
+            params = {
+                "calendarId": calendar_id,
+                "eventId": event_id,
+                "body": event_data,
+                "sendUpdates": 'all' if send_notifications else 'none'
+            }
+            if event_data.get("conferenceData"):
+                params["conferenceDataVersion"] = 1
+            updated_event = service.events().update(**params).execute()
             return updated_event
         except HttpError as error:
             logger.error(f"Error updating event: {error}")

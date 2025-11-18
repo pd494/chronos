@@ -95,6 +95,47 @@ async def get_todos(
         },
     )
 
+@router.get("/bootstrap")
+async def bootstrap_todos(
+    supabase: Client = Depends(get_supabase_client),
+    user: User = Depends(get_current_user)
+) -> JSONResponse:
+    user_id = str(user.id)
+    try:
+        # Execute queries sequentially but efficiently - Supabase client handles connection pooling
+        # The database indices will make these queries fast
+        todos_result = (
+            supabase.table("todos")
+            .select("*")
+            .eq("user_id", user_id)
+            .order("created_at", desc=False)
+            .execute()
+        )
+        categories_result = (
+            supabase.table("categories")
+            .select("*")
+            .eq("user_id", user_id)
+            .order("order", desc=False)
+            .execute()
+        )
+    except Exception as e:
+        error_msg = str(e)
+        if "JWT expired" in error_msg or "PGRST303" in error_msg:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Session expired. Please refresh.",
+                headers={"X-Token-Expired": "true"}
+            )
+        raise
+
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={
+            "message": "Todos bootstrap fetched successfully",
+            "todos": todos_result.data or [],
+            "categories": categories_result.data or []
+        }
+    )
 @router.put("/{todo_id}")
 async def edit_todo(
     todo_id: UUID,

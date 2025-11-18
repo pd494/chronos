@@ -516,12 +516,22 @@ const MonthlyView = () => {
   }, [updateEvent])
 
   const handleDragOver = useCallback((e) => {
+    // Only handle event drags, not todo drags (which are handled by Sortable)
+    // Sortable adds 'task-dragging' class to body when dragging todos
+    if (document.body.classList.contains('task-dragging')) {
+      // This is a todo drag handled by Sortable, don't interfere
+      return;
+    }
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
     e.currentTarget.classList.add('event-dragover')
   }, [])
 
   const handleDragLeave = useCallback((e) => {
+    // Only handle event drags, not todo drags
+    if (document.body.classList.contains('task-dragging')) {
+      return;
+    }
     e.currentTarget.classList.remove('event-dragover')
   }, [])
 
@@ -627,69 +637,124 @@ const MonthlyView = () => {
   }, [])
 
   // Initialize Sortable for droppable day cells
+  const sortableInstancesRef = useRef([]);
+  
   useEffect(() => {
-    const dayCells = document.querySelectorAll('.calendar-day');
-    const sortableInstances = [];
-    
-    dayCells.forEach(cell => {
-      const sortable = Sortable.create(cell, {
-        group: {
-          name: 'tasks',
-          pull: false,
-          put: true
-        },
-        animation: 150,
-        ghostClass: 'sortable-ghost',
-        dragClass: 'sortable-drag-active',
-        draggable: '.task-item',
-        onAdd: async function(evt) {
-          if (evt.pullMode && evt.pullMode !== 'clone') {
-            return
-          }
-          if (evt.item?.dataset?.converted === 'true') {
-            return
-          }
-          if (evt.item) {
-            evt.item.dataset.converted = 'true'
-          }
-          const taskId = evt.item.getAttribute('data-task-id') || evt.item.getAttribute('data-id');
-          const dateStr = evt.to.getAttribute('data-date');
-          
-          // Remove the CLONE safely - defer to avoid conflicts with React
-          setTimeout(() => {
-            try {
-              if (evt.item && evt.item.parentNode) {
-                evt.item.parentNode.removeChild(evt.item);
-              }
-            } catch (e) {
-              // Ignore - React may have already removed it
-            }
-          }, 0);
-          if (evt.clone && evt.clone.parentNode) {
-            evt.clone.parentNode.removeChild(evt.clone)
-          }
-          
-          if (taskId && dateStr) {
-            const [year, month, day] = dateStr.split('-').map(Number);
-            const startDate = new Date(year, month - 1, day, 0, 0, 0, 0);
-            const endDate = addDays(startDate, 1);
-            
-            try {
-              await convertTodoToEvent(taskId, startDate, endDate, true);
-            } catch (error) {
-              console.error('Failed to convert todo to event:', error);
-            }
-          }
-        },
-        sort: false
-      });
-      
-      sortableInstances.push(sortable);
+    // Clean up previous instances first
+    sortableInstancesRef.current.forEach(sortable => {
+      if (sortable && sortable.destroy) {
+        try {
+          sortable.destroy();
+        } catch (e) {
+          // Ignore cleanup errors
+        }
+      }
     });
+    sortableInstancesRef.current = [];
+    
+    // Small delay to ensure DOM is ready
+    const timeoutId = setTimeout(() => {
+      const dayCells = document.querySelectorAll('.calendar-day');
+      
+      dayCells.forEach(cell => {
+        // Skip if already has Sortable instance
+        if (cell.sortableInstance) {
+          return;
+        }
+        
+        const sortable = Sortable.create(cell, {
+          group: {
+            name: 'tasks',
+            pull: false,
+            put: true
+          },
+          animation: 150,
+          ghostClass: 'sortable-ghost',
+          dragClass: 'sortable-drag-active',
+          draggable: '.task-item',
+          onStart: function() {
+            document.body.classList.add('task-dragging');
+          },
+          onEnd: function() {
+            document.body.classList.remove('task-dragging');
+            // Clean up any dragover classes
+            document.querySelectorAll('.event-dragover').forEach(el => {
+              el.classList.remove('event-dragover');
+            });
+          },
+          onAdd: async function(evt) {
+            if (evt.pullMode && evt.pullMode !== 'clone') {
+              return
+            }
+            if (evt.item?.dataset?.converted === 'true') {
+              return
+            }
+            if (evt.item) {
+              evt.item.dataset.converted = 'true'
+            }
+            
+            // Find the actual calendar-day element (evt.to might be a child)
+            const targetDay = evt.to.closest('.calendar-day') || evt.to;
+            const dateStr = targetDay.getAttribute('data-date');
+            
+            if (!dateStr) {
+              console.error('Could not find data-date attribute on drop target');
+              return;
+            }
+            
+            const taskId = evt.item.getAttribute('data-task-id') || evt.item.getAttribute('data-id');
+            
+            // Remove the CLONE safely - defer to avoid conflicts with React
+            setTimeout(() => {
+              try {
+                if (evt.item && evt.item.parentNode) {
+                  evt.item.parentNode.removeChild(evt.item);
+                }
+              } catch (e) {
+                // Ignore - React may have already removed it
+              }
+            }, 0);
+            if (evt.clone && evt.clone.parentNode) {
+              evt.clone.parentNode.removeChild(evt.clone)
+            }
+            
+            if (taskId && dateStr) {
+              const [year, month, day] = dateStr.split('-').map(Number);
+              // Use local date to match the calendar display
+              const startDate = new Date(year, month - 1, day, 0, 0, 0, 0);
+              const endDate = addDays(startDate, 1);
+              
+              try {
+                await convertTodoToEvent(taskId, startDate, endDate, true);
+              } catch (error) {
+                console.error('Failed to convert todo to event:', error);
+              }
+            }
+          },
+          sort: false
+        });
+        
+        // Store reference on the element to prevent duplicate initialization
+        cell.sortableInstance = sortable;
+        sortableInstancesRef.current.push(sortable);
+      });
+    }, 100);
     
     return () => {
-      sortableInstances.forEach(sortable => {
-        if (sortable && sortable.destroy) sortable.destroy();
+      clearTimeout(timeoutId);
+      sortableInstancesRef.current.forEach(sortable => {
+        if (sortable && sortable.destroy) {
+          try {
+            sortable.destroy();
+          } catch (e) {
+            // Ignore cleanup errors
+          }
+        }
+      });
+      sortableInstancesRef.current = [];
+      // Clear references from DOM elements
+      document.querySelectorAll('.calendar-day').forEach(cell => {
+        delete cell.sortableInstance;
       });
     };
   }, [weeks, convertTodoToEvent]);
@@ -876,6 +941,7 @@ const MonthlyView = () => {
                 const events = (getEventsForDate(day) || []).filter(event => !spanLayout.multiDayIds.has(event.id));
                 const isSelected = isSameDay(day, currentDate);
                 const isTodayDate = isToday(day);
+                const showSelectedHighlight = isSelected && !isTodayDate;
                 const firstOfMonth = day.getDate() === 1;
                 // Only apply offset if this day has multi-day events above it
                 const dayIndex = differenceInCalendarDays(startOfDay(day), startOfDay(days[0]))
@@ -905,7 +971,7 @@ const MonthlyView = () => {
                       height: `${rowHeight}px`,
                       boxSizing: 'border-box'
                     }}
-                    className="calendar-day bg-white dark:bg-gray-800 border-r border-b border-gray-100 dark:border-gray-800 relative p-1 flex flex-col"
+                    className={`calendar-day bg-white dark:bg-gray-800 border-r border-b border-gray-100 dark:border-gray-800 relative p-1 flex flex-col ${showSelectedHighlight ? 'selected calendar-selected-surface' : ''}`}
                     data-date={formatDateKey(day)}
                     onDrop={(e) => handleEventDrop(e, day)}
                     onDragOver={handleDragOver}
@@ -941,7 +1007,11 @@ const MonthlyView = () => {
                       style={eventListOffset ? { marginTop: `${eventListOffset}px` } : undefined}
                     >
                       {events.slice(0, 3).map((ev) => (
-                        <EventIndicator key={ev.id} event={ev} isMonthView />
+                        <EventIndicator
+                          key={ev.clientKey || ev.id}
+                          event={ev}
+                          isMonthView
+                        />
                       ))}
                       {events.length > 3 && (
                         <div className="text-xs font-medium text-gray-500 dark:text-gray-400">

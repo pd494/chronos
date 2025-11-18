@@ -62,10 +62,26 @@ const AppSkeleton = () => (
   </div>
 )
 
+const SignedOutState = ({ onLogin, loading }) => (
+  <div className="h-full flex flex-col items-center justify-center text-center p-8 bg-gray-50">
+    <h1 className="text-2xl font-semibold text-gray-800 mb-4">You're signed out</h1>
+    <p className="text-gray-600 mb-6 max-w-md">
+      Sign in with Google to view your calendar, tasks, and meetings.
+    </p>
+    <button
+      onClick={onLogin}
+      disabled={loading}
+      className="px-6 py-3 rounded-lg bg-purple-600 text-white font-medium disabled:opacity-60 disabled:cursor-not-allowed shadow-lg hover:shadow-xl transition"
+    >
+      {loading ? 'Preparing…' : 'Sign in with Google'}
+    </button>
+  </div>
+)
+
 function AppContent() {
   const { view, showEventModal, changeView, initialLoading } = useCalendar()
   const { categories } = useTaskContext()
-  const { loading: authLoading } = useAuth()
+  const { loading: authLoading, user, login } = useAuth()
   const [toastMessage, setToastMessage] = useState('')
   const [toastVisible, setToastVisible] = useState(false)
   const [activeCategory, setActiveCategory] = useState('All')
@@ -75,7 +91,7 @@ function AppContent() {
   const deletionTimerRef = useRef(null)
   const deletionCountRef = useRef(0)
 
-  const shouldShowSkeleton = authLoading
+  const shouldShowSkeleton = authLoading && !user
 
   // Listen for event deletion to show toast
   useEffect(() => {
@@ -163,6 +179,10 @@ function AppContent() {
 
   if (shouldShowSkeleton) {
     return <AppSkeleton />
+  }
+
+  if (!user) {
+    return <SignedOutState onLogin={login} loading={authLoading} />
   }
 
   

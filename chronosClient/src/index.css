@@ -243,16 +243,8 @@ body {
 .text-yellow { color: var(--color-yellow-900); }
 
 .calendar-day {
-  /* transition: background-color 0.2s ease; */
+  transition: background-color 0.2s ease, box-shadow 0.2s ease;
 }
-
-/* .calendar-day:hover {
-  background-color: #f3f4f6;
-}
-
-.dark .calendar-day:hover {
-  background-color: #1f2937;
-} */
 
 .calendar-day.today {
   font-weight: 600;
@@ -262,8 +254,53 @@ body {
 }
 
 .calendar-day.selected {
-  border: 2px solid #3b82f6;
-  border-radius: 9999px;
+  border: none;
+  border-radius: 12px;
+  background-color: rgba(15, 23, 42, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.08);
+}
+
+.dark .calendar-day.selected {
+  background-color: rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.calendar-selected-surface {
+  background-color: rgba(15, 23, 42, 0.08);
+  border-radius: 12px;
+  transition: background-color 0.2s ease;
+}
+
+.dark .calendar-selected-surface {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.calendar-selected-column {
+  position: relative;
+  border-radius: 12px;
+  z-index: 0;
+}
+
+.calendar-selected-column::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-color: rgba(15, 23, 42, 0.08);
+  border-radius: 12px;
+  pointer-events: none;
+  z-index: -1;
+}
+
+.dark .calendar-selected-column::before {
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+.calendar-event-hover {
+  transition: opacity 0.15s ease;
+}
+
+.calendar-event-hover:hover {
+  opacity: 0.7 !important;
 }
 
 .todo-item {

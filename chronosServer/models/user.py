@@ -7,3 +7,4 @@ class User(BaseModel):
     name: Optional[str] = None
     avatar_url: Optional[str] = None
     last_login_at: Optional[str] = None
+    has_google_credentials: bool = False

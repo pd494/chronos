@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { FiChevronLeft, FiChevronRight, FiChevronDown, FiPlus, FiUser, FiLogOut } from 'react-icons/fi'
+import { FiChevronLeft, FiChevronRight, FiChevronDown, FiPlus, FiUser, FiLogOut, FiRefreshCcw } from 'react-icons/fi'
 import { useCalendar } from '../context/CalendarContext'
 import { useTaskContext } from '../context/TaskContext'
 import { useAuth } from '../context/AuthContext'
@@ -33,7 +33,8 @@ const Header = () => {
     navigateToNext,
     changeView,
     formatDateHeader,
-    openEventModal
+    openEventModal,
+    refreshEvents
   } = useCalendar()
   
   const { user, login, logout } = useAuth()
@@ -41,6 +42,7 @@ const Header = () => {
   // State for view dropdown
   const [showViewDropdown, setShowViewDropdown] = useState(false)
   const [showUserMenu, setShowUserMenu] = useState(false)
+  const [isManualRefresh, setIsManualRefresh] = useState(false)
   
   // Task context for categories
   const { tasks } = useTaskContext()
@@ -72,6 +74,18 @@ const Header = () => {
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [showViewDropdown, showUserMenu])
+
+  const handleManualRefresh = async () => {
+    if (isManualRefresh) return
+    setIsManualRefresh(true)
+    try {
+      await refreshEvents()
+    } catch (error) {
+      console.error('Manual refresh failed:', error)
+    } finally {
+      setIsManualRefresh(false)
+    }
+  }
 
   return (
     <header className="flex items-center justify-between h-12 bg-white px-4 md:px-6" style={{ WebkitAppRegion: 'drag' }}>
@@ -120,6 +134,17 @@ const Header = () => {
         >
           <FiPlus size={14} className="mr-1" />
           <span>Event</span>
+        </button>
+
+        <button
+          onClick={handleManualRefresh}
+          className={`clean-button ${isManualRefresh ? 'opacity-60 cursor-wait' : ''}`}
+          style={{ WebkitAppRegion: 'no-drag' }}
+          disabled={isManualRefresh}
+          title="Refresh events from Google Calendar"
+        >
+          <FiRefreshCcw size={14} className={isManualRefresh ? 'animate-spin' : ''} />
+          <span className="ml-1">{isManualRefresh ? 'Refreshing' : 'Refresh'}</span>
         </button>
         
         {/* View Dropdown - Borderless with completely redone dropdown */}

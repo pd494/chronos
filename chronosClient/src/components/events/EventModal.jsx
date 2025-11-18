@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { format } from 'date-fns'
-import { 
+import {
   FiX,
   FiUsers,
   FiMapPin,
@@ -11,9 +11,15 @@ import {
   FiChevronRight,
   FiPlus,
   FiCheck,
-  FiRepeat
+  FiRepeat,
+  FiXCircle,
+  FiLoader,
+  FiVideo
 } from 'react-icons/fi'
 import { useCalendar } from '../../context/CalendarContext'
+import { useAuth } from '../../context/AuthContext'
+import { usePlacesAutocomplete } from '../../hooks/usePlacesAutocomplete'
+import { calendarApi } from '../../lib/api'
 import {
   buildRecurrencePayload,
   cloneRecurrenceState,
@@ -117,90 +123,168 @@ const getParticipantColor = (email) => {
   return colors[index];
 };
 
+const DEFAULT_MODAL_DIMENSIONS = { width: 520, height: 640 }
+const MIN_MODAL_WIDTH = 320
+const MIN_MODAL_HEIGHT = 320
+const VIEWPORT_MARGIN = 16
+const MODAL_SIDE_OFFSET = 12
+
 // Get modal position based on view type and clicked element
-const getModalPosition = (view) => {
-  const modalWidth = 400;
-  const modalHeight = 500;
-  const viewportHeight = window.innerHeight;
-  const viewportWidth = window.innerWidth;
-  const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-  const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft;
-  const margin = 20;
-  const sideOffset = 12;
+const getModalPosition = (view, dimensions = DEFAULT_MODAL_DIMENSIONS) => {
+  if (typeof window === 'undefined') {
+    const fallbackWidth = dimensions?.width || DEFAULT_MODAL_DIMENSIONS.width
+    const fallbackHeight = dimensions?.height || DEFAULT_MODAL_DIMENSIONS.height
+    return {
+      top: 0,
+      left: 0,
+      pointerSide: null,
+      pointerOffset: (fallbackHeight || 0) / 2,
+      width: fallbackWidth || DEFAULT_MODAL_DIMENSIONS.width,
+      maxHeight: fallbackHeight || DEFAULT_MODAL_DIMENSIONS.height
+    }
+  }
 
-  const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+  const viewportHeight = Math.max(window.innerHeight || document.documentElement?.clientHeight || 0, 0)
+  const viewportWidth = Math.max(window.innerWidth || document.documentElement?.clientWidth || 0, 0)
+  const scrollTop = window.pageYOffset || document.documentElement?.scrollTop || 0
+  const scrollLeft = window.pageXOffset || document.documentElement?.scrollLeft || 0
 
-  let anchorRect = null;
+  const clamp = (value, min, max) => {
+    if (!Number.isFinite(value)) return min
+    if (max < min) return min
+    return Math.min(Math.max(value, min), max)
+  }
 
-  if (window.lastCalendarAnchorRect && Number.isFinite(window.lastCalendarAnchorRect.top)) {
-    anchorRect = window.lastCalendarAnchorRect;
-  } else {
-    const fallbackElement = window.lastClickedEvent || window.lastClickedCalendarDay;
-    if (fallbackElement) {
-      const rect = fallbackElement.getBoundingClientRect();
-      anchorRect = {
-        top: rect.top + scrollTop,
-        bottom: rect.bottom + scrollTop,
-        left: rect.left + scrollLeft,
-        right: rect.right + scrollLeft,
-        width: rect.width,
-        height: rect.height
-      };
+  const normalizeWidth = (rawWidth) => {
+    const availableWidth = Math.max(0, viewportWidth - VIEWPORT_MARGIN * 2)
+    if (availableWidth === 0) {
+      return rawWidth || DEFAULT_MODAL_DIMENSIONS.width
+    }
+    const desired = rawWidth || DEFAULT_MODAL_DIMENSIONS.width
+    const minWidth = Math.min(MIN_MODAL_WIDTH, availableWidth)
+    return Math.max(Math.min(desired, availableWidth), minWidth)
+  }
+
+  const normalizeHeight = (rawHeight) => {
+    const availableHeight = Math.max(0, viewportHeight - VIEWPORT_MARGIN * 2)
+    if (availableHeight === 0) {
+      return rawHeight || DEFAULT_MODAL_DIMENSIONS.height
+    }
+    const desired = rawHeight || DEFAULT_MODAL_DIMENSIONS.height
+    const minHeight = Math.min(MIN_MODAL_HEIGHT, availableHeight || MIN_MODAL_HEIGHT)
+    return Math.max(Math.min(desired, availableHeight), minHeight)
+  }
+
+  let modalWidth = normalizeWidth(dimensions?.width)
+  let modalHeight = normalizeHeight(dimensions?.height)
+
+  const resolveAnchorRect = () => {
+    let anchor = null
+    if (window.lastCalendarAnchorRect && Number.isFinite(window.lastCalendarAnchorRect.top)) {
+      anchor = window.lastCalendarAnchorRect
+    } else {
+      const fallbackElement = window.lastClickedEvent || window.lastClickedCalendarDay
+      if (fallbackElement) {
+        const rect = fallbackElement.getBoundingClientRect()
+        anchor = {
+          top: rect.top + scrollTop,
+          bottom: rect.bottom + scrollTop,
+          left: rect.left + scrollLeft,
+          right: rect.right + scrollLeft,
+          width: rect.width,
+          height: rect.height
+        }
+      }
+    }
+
+    if (!anchor) return null
+    const height = anchor.height ?? Math.max((anchor.bottom ?? 0) - (anchor.top ?? 0), 1)
+    const width = anchor.width ?? Math.max((anchor.right ?? 0) - (anchor.left ?? 0), 1)
+    const top = (anchor.top ?? 0) - scrollTop
+    const left = (anchor.left ?? 0) - scrollLeft
+    return {
+      top,
+      bottom: top + height,
+      left,
+      right: left + width,
+      width,
+      height
+    }
+  }
+
+  const anchorRect = resolveAnchorRect()
+
+  const fallbackCentered = () => {
+    const centeredTop = viewportHeight
+      ? clamp((viewportHeight - modalHeight) / 2, VIEWPORT_MARGIN, viewportHeight - modalHeight - VIEWPORT_MARGIN)
+      : VIEWPORT_MARGIN
+    const centeredLeft = viewportWidth
+      ? clamp((viewportWidth - modalWidth) / 2, VIEWPORT_MARGIN, viewportWidth - modalWidth - VIEWPORT_MARGIN)
+      : VIEWPORT_MARGIN
+    return {
+      top: centeredTop,
+      left: centeredLeft,
+      pointerSide: null,
+      pointerOffset: modalHeight / 2,
+      width: modalWidth,
+      maxHeight: modalHeight
     }
   }
 
   if (!anchorRect) {
-    return { top: '50%', left: '50%', transform: 'translate(-50%, -50%)', pointerSide: 'left', pointerOffset: 24 };
+    return fallbackCentered()
   }
 
-  const anchorTop = anchorRect.top;
-  const anchorBottom = anchorRect.bottom ?? (anchorTop + (anchorRect.height ?? 0));
-  const anchorHeight = anchorRect.height ?? Math.max(anchorBottom - anchorTop, 1);
-  const anchorLeft = anchorRect.left;
-  const anchorRight = anchorRect.right ?? (anchorLeft + (anchorRect.width ?? 0));
-  const anchorCenterY = anchorTop + anchorHeight / 2;
+  const availableRight = Math.max(0, viewportWidth - anchorRect.right - VIEWPORT_MARGIN - MODAL_SIDE_OFFSET)
+  const availableLeft = Math.max(0, anchorRect.left - VIEWPORT_MARGIN - MODAL_SIDE_OFFSET)
 
-  const spaceOnRight = (viewportWidth + scrollLeft) - anchorRight;
-  const spaceOnLeft = anchorLeft - scrollLeft;
-
-  let pointerSide = 'left';
-  let left;
-
-  if (spaceOnRight >= modalWidth + margin) {
-    left = anchorRight + sideOffset;
-    pointerSide = 'left';
-  } else if (spaceOnLeft >= modalWidth + margin) {
-    left = anchorLeft - modalWidth - sideOffset;
-    pointerSide = 'right';
-  } else {
-    const preferredLeft = anchorRight + sideOffset;
-    const preferredRight = anchorLeft - modalWidth - sideOffset;
-    const canFitRight = preferredLeft + modalWidth <= scrollLeft + viewportWidth - margin;
-    const canFitLeft = preferredRight >= scrollLeft + margin;
-
-    if (canFitRight || (!canFitLeft && preferredLeft >= preferredRight)) {
-      left = preferredLeft;
-      pointerSide = 'left';
-    } else {
-      left = preferredRight;
-      pointerSide = 'right';
-    }
+  const pickSide = () => {
+    const fitsRight = availableRight >= modalWidth
+    const fitsLeft = availableLeft >= modalWidth
+    if (fitsRight && !fitsLeft) return 'left'
+    if (!fitsRight && fitsLeft) return 'right'
+    if (availableRight <= 0 && availableLeft <= 0) return null
+    return availableRight >= availableLeft ? 'left' : 'right'
   }
 
-  left = clamp(left, scrollLeft + margin, scrollLeft + viewportWidth - modalWidth - margin);
+  let pointerSide = pickSide()
+  let availableSpace = pointerSide === 'left' ? availableRight : availableLeft
 
-  let top = anchorCenterY - modalHeight / 2;
-  top = clamp(top, scrollTop + margin, scrollTop + viewportHeight - modalHeight - margin);
+  if ((!availableSpace || availableSpace <= 0) && pointerSide === 'left' && availableLeft > 0) {
+    pointerSide = 'right'
+    availableSpace = availableLeft
+  } else if ((!availableSpace || availableSpace <= 0) && pointerSide === 'right' && availableRight > 0) {
+    pointerSide = 'left'
+    availableSpace = availableRight
+  }
 
-  const pointerOffset = clamp(anchorCenterY - top - 8, 16, modalHeight - 40);
+  if (!pointerSide || !availableSpace || availableSpace <= 0) {
+    return fallbackCentered()
+  }
+
+  const maxWidthForSide = Math.max(0, availableSpace)
+  const minWidthForSide = Math.min(MIN_MODAL_WIDTH, maxWidthForSide || MIN_MODAL_WIDTH)
+  modalWidth = Math.max(Math.min(modalWidth, maxWidthForSide), minWidthForSide || modalWidth)
+
+  let left = pointerSide === 'left'
+    ? anchorRect.right + MODAL_SIDE_OFFSET
+    : anchorRect.left - modalWidth - MODAL_SIDE_OFFSET
+  left = clamp(left, VIEWPORT_MARGIN, viewportWidth - modalWidth - VIEWPORT_MARGIN)
+
+  let top = anchorRect.top + anchorRect.height / 2 - modalHeight / 2
+  top = clamp(top, VIEWPORT_MARGIN, viewportHeight - modalHeight - VIEWPORT_MARGIN)
+
+  const pointerOffset = clamp(anchorRect.top + anchorRect.height / 2 - top - 8, 16, modalHeight - 40)
 
   return {
-    top: `${top}px`,
-    left: `${left}px`,
+    top,
+    left,
     pointerSide,
-    pointerOffset
-  };
-};
+    pointerOffset,
+    width: modalWidth,
+    maxHeight: modalHeight
+  }
+}
 
 const EventModal = () => {
   const { 
@@ -212,6 +296,7 @@ const EventModal = () => {
     deleteEvent,
     view
   } = useCalendar()
+  const { user } = useAuth()
   
   const [eventName, setEventName] = useState('')
   const [eventSubtitle, setEventSubtitle] = useState('')
@@ -222,6 +307,29 @@ const EventModal = () => {
   const [color, setColor] = useState('#3478F6')
   const [isAllDay, setIsAllDay] = useState(true)
   const [location, setLocation] = useState('')
+  const [conferenceRequestId, setConferenceRequestId] = useState(null)
+  const [tempEventId, setTempEventId] = useState(null)
+  const [isGeneratingMeeting, setIsGeneratingMeeting] = useState(false)
+  const locationInputRef = useRef(null)
+  const locationContainerRef = useRef(null)
+  const {
+    predictions,
+    showSuggestions,
+    isLoading,
+    getPlacePredictions,
+    selectPlace,
+    setShowSuggestions,
+  } = usePlacesAutocomplete(locationInputRef, (address) => {
+    setLocation(address)
+    setConferenceRequestId(null)
+    // Clear temp event if user selects a place (not a Google Meet link)
+    if (tempEventId && !address.includes('meet.google.com')) {
+      calendarApi.deleteEvent(tempEventId, 'primary').catch(err => {
+        console.error('Failed to delete temporary event:', err)
+      })
+      setTempEventId(null)
+    }
+  })
   const [internalVisible, setInternalVisible] = useState(false)
   const [participants, setParticipants] = useState([])
   const [expandedChips, setExpandedChips] = useState(new Set())
@@ -245,12 +353,11 @@ const EventModal = () => {
   const [optimisticRSVPStatus, setOptimisticRSVPStatus] = useState(null)
   const currentRSVPStatus = selectedEvent ? (optimisticRSVPStatus ?? selectedEvent.viewerResponseStatus) : null
   const deletePromptRef = useRef(null)
-  const [modalPosition, setModalPosition] = useState({ top: '50%', left: '50%', transform: 'translate(-50%, -50%)', pointerSide: 'left' })
+  const [modalPosition, setModalPosition] = useState(() => getModalPosition(view, DEFAULT_MODAL_DIMENSIONS))
   const [isFromDayClick, setIsFromDayClick] = useState(false)
   const [hasChanges, setHasChanges] = useState(false)
   const [showNotificationPicker, setShowNotificationPicker] = useState(false)
   const [notifications, setNotifications] = useState([])
-  const titleInputRef = useRef(null)
   const modalRef = useRef(null)
   const lastTimedRangeRef = useRef({ start: DEFAULT_TIMED_START, end: DEFAULT_TIMED_END })
   const colorPickerRef = useRef(null)
@@ -262,6 +369,124 @@ const EventModal = () => {
   const notificationTriggerRef = useRef(null)
   const initialValuesRef = useRef({})
   const recurrenceConfirmationTimerRef = useRef(null)
+  const measureModalSize = useCallback(() => {
+    const node = modalRef.current
+    if (!node) {
+      return DEFAULT_MODAL_DIMENSIONS
+    }
+    const rect = node.getBoundingClientRect()
+    return {
+      width: rect.width || DEFAULT_MODAL_DIMENSIONS.width,
+      height: rect.height || DEFAULT_MODAL_DIMENSIONS.height
+    }
+  }, [])
+  const updateModalPosition = useCallback(() => {
+    setModalPosition(getModalPosition(view, measureModalSize()))
+  }, [measureModalSize, view])
+  const trimmedLocation = location?.trim()
+  const isLocationUrl = useMemo(() => {
+    if (!trimmedLocation) return false
+    try {
+      const parsed = new URL(trimmedLocation)
+      return ['http:', 'https:'].includes(parsed.protocol)
+    } catch (error) {
+      return false
+    }
+  }, [trimmedLocation])
+  const googleMapsLink = useMemo(() => {
+    if (!trimmedLocation || isLocationUrl) return ''
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(trimmedLocation)}`
+  }, [trimmedLocation, isLocationUrl])
+  const generateConferenceRequestId = () => {
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789'
+    return Array.from({ length: 12 }, () => chars[Math.floor(Math.random() * chars.length)]).join('')
+  }
+  const handleGenerateMeetingLink = async () => {
+    setIsGeneratingMeeting(true)
+    setLocation('Generating Google Meet link…')
+    setShowSuggestions(false)
+    
+    try {
+      // Get start and end dates for the temporary event
+      let startDate, endDate
+      if (isAllDay) {
+        const start = buildDateWithTime(eventDate, '00:00') || new Date()
+        const end = buildDateWithTime(eventEndDate || eventDate, '00:00') || new Date()
+        startDate = start
+        endDate = new Date(end)
+        endDate.setDate(endDate.getDate() + 1)
+      } else {
+        startDate = buildDateWithTime(eventDate, timeStart) || new Date()
+        endDate = buildDateWithTime(eventEndDate || eventDate, timeEnd) || new Date(startDate.getTime() + 60 * 60 * 1000) // Default to 1 hour
+      }
+
+      // Create a temporary event with conference data
+      const requestId = generateConferenceRequestId()
+      const fullName = user?.full_name || user?.name || user?.email || 'User'
+      const tempEventData = {
+        title: `Meet with ${fullName}`,
+        start: startDate,
+        end: endDate,
+        isAllDay,
+        conferenceData: {
+          createRequest: {
+            requestId: requestId,
+            conferenceSolutionKey: {
+              type: 'hangoutsMeet'
+            }
+          }
+        }
+      }
+
+      const response = await calendarApi.createEvent(tempEventData, 'primary', false)
+      
+      // The backend returns {event: {...}}, so we need to access response.event
+      const createdEvent = response.event || response
+      
+      // Extract the Google Meet link from the response
+      let meetLink = ''
+      if (createdEvent.hangoutLink) {
+        meetLink = createdEvent.hangoutLink
+      } else if (createdEvent.conferenceData?.entryPoints) {
+        const videoEntry = createdEvent.conferenceData.entryPoints.find(
+          ep => ep.entryPointType === 'video' || ep.uri?.includes('meet.google.com')
+        )
+        if (videoEntry) {
+          meetLink = videoEntry.uri
+        }
+      }
+
+      if (meetLink) {
+        setLocation(meetLink)
+        setTempEventId(createdEvent.id)
+        setConferenceRequestId(null) // Clear this since we already have the link
+      } else {
+        console.error('No meeting link found in response:', createdEvent)
+        setLocation('Failed to generate meeting link')
+      }
+    } catch (error) {
+      console.error('Error generating meeting link:', error)
+      console.error('Error details:', error.response || error.message || error)
+      setLocation('Failed to generate meeting link. Please try again.')
+    } finally {
+      setIsGeneratingMeeting(false)
+    }
+  }
+
+  const timeToMinutes = (time24h) => {
+    if (!time24h || typeof time24h !== 'string' || !time24h.includes(':')) return 0
+    const [hours, minutes] = time24h.split(':').map(Number)
+    return (Number.isNaN(hours) ? 0 : hours) * 60 + (Number.isNaN(minutes) ? 0 : minutes)
+  }
+
+  const minutesToTime = (totalMinutes) => {
+    const minutesInDay = 24 * 60
+    let safe = totalMinutes % minutesInDay
+    if (safe < 0) safe += minutesInDay
+    const hours = Math.floor(safe / 60)
+    const minutes = safe % 60
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
+  }
 
   const buildDateWithTime = useCallback((dateStr, timeStr) => {
     if (!dateStr || typeof dateStr !== 'string') return null
@@ -277,6 +502,7 @@ const EventModal = () => {
     }
     return base
   }, [])
+
 
   const formatInviteStatus = (status) => {
     switch (status) {
@@ -325,31 +551,46 @@ const EventModal = () => {
   }, [])
 
   useEffect(() => {
-    // Set modal position and animate in when the component is mounted or event changes
-    setModalPosition(getModalPosition(view));
+    updateModalPosition()
     if (!internalVisible) {
       requestAnimationFrame(() => {
-        setInternalVisible(true);
-      });
+        setInternalVisible(true)
+      })
     }
     
     // Prevent horizontal scrolling
-    document.body.style.overflowX = 'hidden';
+    document.body.style.overflowX = 'hidden'
     
     return () => {
-      document.body.style.overflowX = '';
-    };
-  }, [view, selectedEvent]);
+      document.body.style.overflowX = ''
+    }
+  }, [view, selectedEvent, updateModalPosition, internalVisible])
+  
+  useEffect(() => {
+    if (!internalVisible) return
+    updateModalPosition()
+  }, [internalVisible, updateModalPosition])
   
   // Update position when window resizes
   useEffect(() => {
     const handleResize = () => {
-      setModalPosition(getModalPosition(view));
-    };
+      updateModalPosition()
+    }
     
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, [view]);
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [updateModalPosition])
+  
+  useEffect(() => {
+    if (typeof ResizeObserver === 'undefined') return undefined
+    const node = modalRef.current
+    if (!node) return undefined
+    const observer = new ResizeObserver(() => {
+      updateModalPosition()
+    })
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [updateModalPosition])
   
   // Close color picker when clicking outside
   useEffect(() => {
@@ -624,11 +865,21 @@ const EventModal = () => {
       end: timedFallbackEnd
     }
     setLocation(initialLocation);
+    setConferenceRequestId(null);
+    // Clean up temporary event if modal is being reset
+    if (tempEventId) {
+      calendarApi.deleteEvent(tempEventId, 'primary').catch(err => {
+        console.error('Failed to delete temporary event:', err)
+      })
+      setTempEventId(null)
+    }
+    setIsGeneratingMeeting(false)
     setEventSubtitle(initialSubtitle);
     setRecurrenceState(cloneRecurrenceState(recurrenceDetails.state))
     setRecurrenceDraft(cloneRecurrenceState(recurrenceDetails.state))
     setRecurrenceSummary(recurrenceDetails.summary)
     setShowRecurrencePicker(false)
+    
     
     // Set notifications from event or default
     const initialNotifications = selectedEvent?.reminders?.overrides || selectedEvent?.reminders?.useDefault ? [] : [];
@@ -671,13 +922,6 @@ const EventModal = () => {
       setEventEndDate(eventDate)
     }
   }, [eventDate, eventEndDate])
-
-  useEffect(() => {
-    if (!internalVisible) return
-    if (titleInputRef.current) {
-      titleInputRef.current.focus({ preventScroll: true })
-    }
-  }, [internalVisible])
 
   const conciseRecurrenceSummary = useCallback((state) => {
     if (!state?.enabled) return 'Does not repeat'
@@ -1004,6 +1248,7 @@ const EventModal = () => {
     }
   }, [ensureTimedMode, isAllDay, timeStart])
 
+
   const handleSubmit = (e) => {
     if (e) e.preventDefault();
     
@@ -1047,6 +1292,18 @@ const EventModal = () => {
       } : { useDefault: false, overrides: [] }
     };
 
+    // Only create conference data if we don't already have a Google Meet link
+    // If we're updating a temporary event (tempEventId exists), don't add conference data
+    // as the meeting link is already in the location field
+    const isGoogleMeetLink = location?.includes('meet.google.com')
+    if (conferenceRequestId && !isGoogleMeetLink && !tempEventId) {
+      eventData.conferenceData = {
+        createRequest: {
+          requestId: conferenceRequestId
+        }
+      }
+    }
+
     const recurrencePayload = buildRecurrencePayload(recurrenceState, finalStartDateTime)
     if (recurrencePayload) {
       eventData.recurrence = [recurrencePayload.rule]
@@ -1064,14 +1321,39 @@ const EventModal = () => {
       window.dispatchEvent(new CustomEvent('chronos:month-range-reset'))
     }
 
-    const action = selectedEvent
-      ? updateEvent(selectedEvent.id, eventData)
-      : createEvent(eventData);
+    // If we have a temporary event with a meeting link, update it instead of creating a new one
+    // This ensures the same meeting link is preserved for consistency
+    let action
+    if (tempEventId && !selectedEvent) {
+      // Update the temporary event with the real event data to keep the same meeting link
+      action = updateEvent(tempEventId, eventData)
+      setTempEventId(null) // Clear temp event ID after updating
+    } else if (selectedEvent) {
+      action = updateEvent(selectedEvent.id, eventData)
+      // Clean up temporary event if it exists (shouldn't happen when editing, but just in case)
+      if (tempEventId) {
+        calendarApi.deleteEvent(tempEventId, 'primary').catch(err => {
+          console.error('Failed to delete temporary event:', err)
+        })
+        setTempEventId(null)
+      }
+    } else {
+      action = createEvent(eventData)
+      // Clean up temporary event if it exists (shouldn't happen when creating new, but just in case)
+      if (tempEventId) {
+        calendarApi.deleteEvent(tempEventId, 'primary').catch(err => {
+          console.error('Failed to delete temporary event:', err)
+        })
+        setTempEventId(null)
+      }
+    }
 
     closeAndAnimateOut();
 
     action.catch((error) => {
       console.error('Failed to save event:', error);
+    }).finally(() => {
+      setConferenceRequestId(null)
     });
   };
 
@@ -1151,21 +1433,6 @@ const EventModal = () => {
     return `${String(newHour).padStart(2, '0')}:${minutes}`;
   };
 
-  const timeToMinutes = (time24h) => {
-    if (!time24h || typeof time24h !== 'string' || !time24h.includes(':')) return 0
-    const [hours, minutes] = time24h.split(':').map(Number)
-    return (Number.isNaN(hours) ? 0 : hours) * 60 + (Number.isNaN(minutes) ? 0 : minutes)
-  }
-
-  const minutesToTime = (totalMinutes) => {
-    const minutesInDay = 24 * 60
-    let safe = totalMinutes % minutesInDay
-    if (safe < 0) safe += minutesInDay
-    const hours = Math.floor(safe / 60)
-    const minutes = safe % 60
-    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
-  }
-
   const getTimeParts = (time24h) => {
     if (!time24h || typeof time24h !== 'string' || !time24h.includes(':')) return { hour: '12', minute: '00', period: 'AM' };
     const [hours, minutes] = time24h.split(':');
@@ -1239,23 +1506,45 @@ const EventModal = () => {
     const option = notificationOptions.find(o => o.minutes === minutes);
     return option ? option.label : `${minutes} minutes before`;
   };
+
+  // Helper to get color hex value for display
+  const getColorHex = useCallback((colorValue) => {
+    if (!colorValue) return '#3478F6'
+    if (colorValue.startsWith('#')) return colorValue
+    const colorMap = {
+      blue: '#3478F6',
+      green: '#34C759',
+      orange: '#FF9500',
+      purple: '#AF52DE',
+      red: '#FF3B30',
+      pink: '#FF2D55',
+      teal: '#00C7BE',
+      cyan: '#06b6d4',
+      amber: '#f59e0b',
+      lime: '#84cc16',
+      indigo: '#6366f1',
+      yellow: '#FFD60A'
+    }
+    return colorMap[colorValue] || '#3478F6'
+  }, [])
   
   return (
     <>
       {/* No overlay - calendar always stays in focus */}
       
       {/* Popover Modal */}
-      <div 
+      <div
         ref={modalRef}
         className={`fixed bg-white shadow-xl z-50 transition-all duration-200 ease-out
                    ${internalVisible ? 'opacity-100 scale-100' : 'opacity-0 scale-95 pointer-events-none'}`}
         style={{
-          ...modalPosition,
-          width: '580px',
-          maxHeight: '90vh',
+          top: `${modalPosition.top ?? 0}px`,
+          left: `${modalPosition.left ?? 0}px`,
+          width: `${modalPosition.width ?? DEFAULT_MODAL_DIMENSIONS.width}px`,
+          maxHeight: `${modalPosition.maxHeight ?? DEFAULT_MODAL_DIMENSIONS.height}px`,
           border: '1px solid #e5e7eb',
-          borderRadius: '16px',
-          overflowY: 'auto',
+          borderRadius: '22px',
+          overflowY: showSuggestions ? 'visible' : 'auto',
           overflowX: 'visible'
         }}
       >
@@ -1344,14 +1633,13 @@ const EventModal = () => {
             </button>
 
             {/* Event Name - Large with subtitle */}
-            <div className="px-4 pt-4 pb-2">
+            <div className="px-4 pt-[14px] pb-2">
               <input
                 type="text"
                 value={eventName}
                 onChange={(e) => setEventName(e.target.value)}
                 placeholder="Add title"
                 className="w-full px-0 py-1 text-xl font-semibold text-gray-900 border-none focus:outline-none focus:ring-0"
-                ref={titleInputRef}
               />
               <div className="relative">
                 <textarea
@@ -1379,12 +1667,14 @@ const EventModal = () => {
                 </button>
               </div>
             </div>
+            {/* Grey line after description */}
+            <div className="border-b border-gray-100"></div>
 
             {/* Add guests */}
-            <div className="px-4 py-3 border-b border-gray-100">
+            <div className="px-4 py-2.5 border-b border-gray-100">
               <div className="flex items-start gap-3">
                 <FiUsers className="text-gray-400 mt-1" size={20} />
-                <div className="flex-1 space-y-3">
+                <div className="flex-1 space-y-2.5">
                   <input
                     ref={participantInputRef}
                     type="email"
@@ -1394,63 +1684,296 @@ const EventModal = () => {
                     placeholder="Add guests"
                     className="w-full px-0 py-1 text-sm text-gray-900 bg-transparent border-none focus:outline-none focus:ring-0"
                   />
-                    {participants.length > 0 && (
-                    <div className="flex flex-wrap gap-2">
-                    {participants.map((email) => {
-                      const bgColor = getParticipantColor(email)
-                      const expanded = expandedChips.has(email)
+                    {participants.length > 0 && (() => {
+                      // For viewing existing events with attendee data
+                      const hasAttendeeData = selectedEvent?.attendees && Array.isArray(selectedEvent.attendees)
+                      const attendeesMap = hasAttendeeData 
+                        ? new Map(selectedEvent.attendees.map(a => [a.email, a]))
+                        : new Map()
+                      
+                      const goingCount = hasAttendeeData 
+                        ? selectedEvent.attendees.filter(a => a.responseStatus === 'accepted').length
+                        : 0
+                      
+                      // Count declined: count each participant with declined status
+                      let declinedCount = 0
+                      participants.forEach(email => {
+                        const attendee = attendeesMap.get(email)
+                        if (attendee?.responseStatus === 'declined') {
+                          declinedCount++
+                        }
+                      })
+                      
+                      // Count awaiting: count each participant based on their status
+                      let awaitingCount = 0
+                      participants.forEach(email => {
+                        const attendee = attendeesMap.get(email)
+                        if (!attendee) {
+                          // Participant not in attendees list (newly added, not yet synced)
+                          awaitingCount++
+                        } else {
+                          // Participant is in attendees list, check their status
+                          const status = attendee.responseStatus
+                          // Count as awaiting if status is needsAction, null, undefined, or not accepted/declined
+                          if (status !== 'accepted' && status !== 'declined') {
+                            awaitingCount++
+                          }
+                        }
+                      })
+                      
                       return (
-                        <div
-                          key={email}
-                            className="flex items-center gap-2"
-                        >
-                          <button
-                            type="button"
-                            onClick={() => toggleChip(email)}
-                              className="w-8 h-8 rounded-full text-xs font-semibold text-white flex items-center justify-center focus:outline-none"
-                            style={{ backgroundColor: bgColor }}
-                            aria-label={`Toggle ${email}`}
-                              title={email}
-                          >
-                            {getInitials(email)}
-                          </button>
-                            {expanded && (
-                              <span className="text-xs text-gray-600">{email}</span>
+                        <div className="space-y-2">
+                          <div className="flex items-center">
+                            {participants.slice(0, 5).map((email, index) => {
+                              const bgColor = getParticipantColor(email)
+                              const attendee = attendeesMap.get(email)
+                              const isAccepted = attendee?.responseStatus === 'accepted'
+                              const isDeclined = attendee?.responseStatus === 'declined'
+                              
+                              const isOrganizer = selectedEvent?.viewerIsOrganizer || !selectedEvent
+                              
+                              return (
+                                <div
+                                  key={email}
+                                  className="relative group"
+                                  style={{ 
+                                    marginLeft: index > 0 ? '-8px' : '0',
+                                    zIndex: 5 - index
+                                  }}
+                                >
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleChip(email)}
+                                    className="rounded-full text-xs font-semibold text-white flex items-center justify-center focus:outline-none border-2 border-white relative"
+                                    style={{ 
+                                      backgroundColor: bgColor,
+                                      width: '33.6px',
+                                      height: '33.6px'
+                                    }}
+                                    aria-label={`Toggle ${email}`}
+                                    title={email}
+                                  >
+                                    {getInitials(email)}
+                                  </button>
+                                  {isAccepted && (
+                                    <div className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 bg-green-500 rounded-full flex items-center justify-center border border-white">
+                                      <FiCheck size={10} className="text-white" strokeWidth={3} />
+                                    </div>
+                                  )}
+                                  {isDeclined && (
+                                    <div className="absolute -top-0.5 -right-0.5 w-3.5 h-3.5 bg-red-500 rounded-full flex items-center justify-center border border-white">
+                                      <FiX size={10} className="text-white" strokeWidth={3} />
+                                    </div>
+                                  )}
+                                  {isOrganizer && (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        handleRemoveParticipant(email)
+                                      }}
+                                      className="absolute -bottom-1 -right-1 w-4 h-4 bg-white hover:bg-red-50 rounded-full flex items-center justify-center border border-gray-300 hover:border-red-400 shadow-sm opacity-0 group-hover:opacity-100 transition-all duration-150 z-10"
+                                      aria-label={`Remove ${email}`}
+                                      title={`Remove ${email}`}
+                                    >
+                                      <FiXCircle size={10} className="text-gray-600 hover:text-red-600" strokeWidth={2.5} />
+                                    </button>
+                                  )}
+                                </div>
+                              )
+                            })}
+                            {participants.length > 5 && (
+                              <div
+                                className="rounded-full text-xs font-semibold bg-gray-200 text-gray-600 flex items-center justify-center border-2 border-white"
+                                style={{ 
+                                  marginLeft: '-5px',
+                                  zIndex: 0,
+                                  width: '33.6px',
+                                  height: '33.6px'
+                                }}
+                              >
+                                +{participants.length - 5}
+                              </div>
                             )}
-              </div>
+                            {(goingCount > 0 || declinedCount > 0 || awaitingCount > 0) && (
+                              <div className="text-xs text-gray-500 ml-2">
+                                {goingCount > 0 && `${goingCount} going`}
+                                {goingCount > 0 && (declinedCount > 0 || awaitingCount > 0) && ', '}
+                                {declinedCount > 0 && `${declinedCount} declined`}
+                                {declinedCount > 0 && awaitingCount > 0 && ', '}
+                                {awaitingCount > 0 && `${awaitingCount} awaiting`}
+                              </div>
+                            )}
+                          </div>
+                          {expandedChips.size > 0 && (
+                            <div className="pt-1">
+                              <span className="text-xs text-gray-600">
+                                {participants.filter(email => expandedChips.has(email)).map((email, index, array) => (
+                                  <span key={email}>
+                                    {email}
+                                    {index < array.length - 1 && ', '}
+                                  </span>
+                                ))}
+                              </span>
+                            </div>
+                          )}
+                        </div>
                       )
-                    })}
-                  </div>
-                  )}
+                    })()}
                 </div>
               </div>
             </div>
 
             {/* Add location and Google Meet */}
-            <div className="px-4 py-3 border-b border-gray-100">
-              <div className="flex items-center gap-3">
-                <FiMapPin className="text-gray-400" size={20} />
-                <input
-                  type="text"
-                  value={location}
-                  onChange={(e) => setLocation(e.target.value)}
-                  placeholder="Add location"
-                  className="flex-1 px-0 py-1 text-sm text-gray-900 border-none focus:outline-none focus:ring-0"
-                />
-                  <button
-                    type="button"
-                  className="flex items-center gap-2 px-3 py-1.5 bg-gray-50 border border-gray-200 rounded-lg hover:bg-gray-100 text-sm text-gray-700"
-                >
-                  <svg className="w-4 h-4" viewBox="0 0 24 24">
-                    <path fill="currentColor" d="M23 11.5A11.5 11.5 0 1 1 11.5 0 11.5 11.5 0 0 1 23 11.5zm-4.5 0a7 7 0 1 0-7 7 7 7 0 0 0 7-7z"/>
-                  </svg>
-                  Google Meet
-                  </button>
-                      </div>
+            <div className="px-4 py-2.5 border-b border-gray-100 relative overflow-visible">
+              <div className="flex items-center gap-2" ref={locationContainerRef}>
+                <FiMapPin className="text-gray-400 flex-shrink-0" size={20} />
+                <div className="flex-1 relative min-w-0">
+                  <input
+                    ref={locationInputRef}
+                    type="text"
+                    value={location}
+                    onChange={(e) => {
+                      const value = e.target.value
+                      // Clear temp event if user manually edits location (and it's not the Google Meet link we just set)
+                      if (tempEventId && value !== location && !value.includes('meet.google.com')) {
+                        calendarApi.deleteEvent(tempEventId, 'primary').catch(err => {
+                          console.error('Failed to delete temporary event:', err)
+                        })
+                        setTempEventId(null)
+                      }
+                      setLocation(value)
+                      setConferenceRequestId(null)
+                      getPlacePredictions(value)
+                    }}
+                    onFocus={(e) => {
+                      // Select all text when focusing for easy replacement
+                      e.target.select()
+                    }}
+                    onBlur={() => {
+                      // Delay to allow click on suggestion
+                      setTimeout(() => setShowSuggestions(false), 200)
+                    }}
+                    placeholder="Add location or URL"
+                    className="w-full px-0 py-1 text-sm text-gray-900 border-none focus:outline-none focus:ring-0 truncate"
+                  />
+                  {isLoading && (
+                    <div className="absolute right-0 top-1/2 -translate-y-1/2 pointer-events-none">
+                      <FiLoader className="animate-spin text-gray-400" size={16} />
                     </div>
+                  )}
+                </div>
+                {!trimmedLocation || (trimmedLocation && isLocationUrl) || isGeneratingMeeting ? (
+                  <div className="flex flex-col items-end">
+                    {trimmedLocation && isLocationUrl && !isGeneratingMeeting ? (
+                      <a
+                        href={trimmedLocation}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs flex-shrink-0 backdrop-blur transition-colors bg-blue-500/80 text-white hover:bg-blue-600/80 border border-blue-500/50"
+                      >
+                        <FiVideo className="text-white" size={16} />
+                        <span className="hidden sm:inline">Join meeting</span>
+                      </a>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleGenerateMeetingLink}
+                        disabled={isGeneratingMeeting}
+                        className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs flex-shrink-0 backdrop-blur disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${
+                          tempEventId || isGeneratingMeeting
+                            ? 'bg-emerald-500 text-white hover:bg-emerald-600' 
+                            : 'bg-white/80 border border-gray-200 text-gray-700 hover:bg-white/90'
+                        }`}
+                      >
+                        {isGeneratingMeeting ? (
+                          <>
+                            <FiLoader className="animate-spin text-white" size={16} />
+                            <span className="hidden sm:inline">Generating link...</span>
+                          </>
+                        ) : (
+                          <>
+                            <FiVideo size={16} style={{ color: tempEventId ? 'white' : '#4b5563' }} />
+                            <span className="hidden sm:inline">Generate Google Meet</span>
+                          </>
+                        )}
+                      </button>
+                    )}
+                  </div>
+                ) : trimmedLocation && !isLocationUrl ? (
+                  <a
+                    href={googleMapsLink}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center gap-1.5 px-2 py-1.5 bg-white/80 border border-gray-200 rounded-lg hover:bg-white/90 text-xs text-gray-700 flex-shrink-0 backdrop-blur"
+                  >
+                    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24">
+                      <path fill="currentColor" d="M12 2C8.13 2 5 5.13 5 9c0 4.75 3.75 9.1 6.5 11.36a1 1 0 001 0C15.25 18.1 19 13.75 19 9c0-3.87-3.13-7-7-7zm0 14c-2.76-2.5-5-6.02-5-7.5 0-2.76 2.24-5 5-5s5 2.24 5 5c0 1.48-2.24 5-5 7.5zm0-10a2.5 2.5 0 100 5 2.5 2.5 0 000-5z"/>
+                    </svg>
+                    <span className="hidden sm:inline">Get directions</span>
+                  </a>
+                ) : null}
+              </div>
+              {/* Dropdown positioned absolutely to overlay other components - scroll only within dropdown */}
+              {showSuggestions && predictions.length > 0 && (
+                <div 
+                  className="absolute left-4 right-4 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-xl z-[9999] overflow-y-auto overflow-x-hidden" 
+                  style={{ 
+                    maxHeight: '320px',
+                    scrollBehavior: 'smooth'
+                  }}
+                  onWheel={(e) => {
+                    const target = e.currentTarget
+                    const { scrollTop, scrollHeight, clientHeight } = target
+                    const isScrollingDown = e.deltaY > 0
+                    const isScrollingUp = e.deltaY < 0
+                    const isAtTop = scrollTop === 0
+                    const isAtBottom = scrollHeight - scrollTop <= clientHeight + 1
+                    
+                    // If we're at the boundaries and trying to scroll further, prevent modal scroll
+                    if ((isAtTop && isScrollingUp) || (isAtBottom && isScrollingDown)) {
+                      e.stopPropagation()
+                    }
+                    // Otherwise, allow normal scrolling within dropdown
+                  }}
+                  onTouchMove={(e) => {
+                    // Only prevent if we're at boundaries
+                    const target = e.currentTarget
+                    const { scrollTop, scrollHeight, clientHeight } = target
+                    const isAtTop = scrollTop === 0
+                    const isAtBottom = scrollHeight - scrollTop <= clientHeight + 1
+                    
+                    if (isAtTop || isAtBottom) {
+                      e.stopPropagation()
+                    }
+                  }}
+                >
+                  {predictions.map((prediction) => (
+                    <button
+                      key={prediction.place_id}
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        selectPlace(prediction)
+                      }}
+                      onMouseDown={(e) => {
+                        e.preventDefault() // Prevent input blur
+                      }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-gray-50 text-xs text-gray-900 border-b border-gray-100 last:border-b-0 first:rounded-t-lg last:rounded-b-lg"
+                    >
+                      <div className="font-medium text-xs leading-tight">{prediction.main_text}</div>
+                      {prediction.secondary_text && (
+                        <div className="text-xs text-gray-500 leading-tight mt-0.5">{prediction.secondary_text}</div>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
 
             {/* Time and Date */}
-            <div className="px-4 py-3 border-b border-gray-100">
+            <div className="px-4 py-2.5 border-b border-gray-100">
               <div className="flex items-start gap-[9px]">
                 <div className="flex flex-col gap-3 pt-0.5">
                 <FiClock className="text-gray-400" size={20} />
@@ -1465,26 +1988,68 @@ const EventModal = () => {
                         <input
                           type="time"
                           value={timeStart}
-                          onChange={(e) => handleTimeStartChange(e.target.value)}
-                            className="px-0 py-0.5 border-none focus:outline-none text-sm text-gray-900 [&::-webkit-calendar-picker-indicator]:hidden [&::-webkit-inner-spin-button]:hidden"
-                            style={{
-                              WebkitAppearance: 'none',
-                              MozAppearance: 'textfield',
-                              width: '70px'
-                            }}
-                          />
-                          <span className="text-gray-400 font-semibold ml-2">→</span>
+                          onChange={(e) => {
+                            let value = e.target.value
+                            if (value) {
+                              const [hour, minute] = value.split(':').map(Number)
+                              // Validate hour (0-23) and minute (0-59)
+                              const validHour = Math.min(23, Math.max(0, hour || 0))
+                              const validMinute = Math.min(59, Math.max(0, minute || 0))
+                              value = `${String(validHour).padStart(2, '0')}:${String(validMinute).padStart(2, '0')}`
+                              handleTimeStartChange(value)
+                            }
+                          }}
+                          onBlur={(e) => {
+                            let value = e.target.value
+                            if (value) {
+                              const [hour, minute] = value.split(':').map(Number)
+                              const validHour = Math.min(23, Math.max(0, hour || 0))
+                              const validMinute = Math.min(59, Math.max(0, minute || 0))
+                              value = `${String(validHour).padStart(2, '0')}:${String(validMinute).padStart(2, '0')}`
+                              handleTimeStartChange(value)
+                            }
+                          }}
+                          className="px-0 py-0.5 border-none focus:outline-none text-sm text-gray-900 font-bold [&::-webkit-calendar-picker-indicator]:hidden [&::-webkit-inner-spin-button]:hidden"
+                          style={{
+                            WebkitAppearance: 'none',
+                            MozAppearance: 'textfield',
+                            width: '70px',
+                            marginLeft: '2px'
+                          }}
+                        />
+                          <span className="text-gray-400 font-semibold mx-2">→</span>
                         <input
                           type="time"
                           value={timeEnd}
-                          onChange={(e) => handleTimeEndChange(e.target.value)}
-                            className="px-0 py-0 border-none focus:outline-none text-sm text-gray-900 [&::-webkit-calendar-picker-indicator]:hidden [&::-webkit-inner-spin-button]:hidden"
-                            style={{
-                              WebkitAppearance: 'none',
-                              MozAppearance: 'textfield',
-                              width: '70px'
-                            }}
-                          />
+                          onChange={(e) => {
+                            let value = e.target.value
+                            if (value) {
+                              const [hour, minute] = value.split(':').map(Number)
+                              // Validate hour (0-23) and minute (0-59)
+                              const validHour = Math.min(23, Math.max(0, hour || 0))
+                              const validMinute = Math.min(59, Math.max(0, minute || 0))
+                              value = `${String(validHour).padStart(2, '0')}:${String(validMinute).padStart(2, '0')}`
+                              handleTimeEndChange(value)
+                            }
+                          }}
+                          onBlur={(e) => {
+                            let value = e.target.value
+                            if (value) {
+                              const [hour, minute] = value.split(':').map(Number)
+                              const validHour = Math.min(23, Math.max(0, hour || 0))
+                              const validMinute = Math.min(59, Math.max(0, minute || 0))
+                              value = `${String(validHour).padStart(2, '0')}:${String(validMinute).padStart(2, '0')}`
+                              handleTimeEndChange(value)
+                            }
+                          }}
+                          className="px-0 py-0 border-none focus:outline-none text-sm text-gray-900 font-bold [&::-webkit-calendar-picker-indicator]:hidden [&::-webkit-inner-spin-button]:hidden"
+                          style={{
+                            WebkitAppearance: 'none',
+                            MozAppearance: 'textfield',
+                            width: '70px',
+                            marginLeft: '2px'
+                          }}
+                        />
                           </div>
                           <div className="flex items-center gap-2 ml-auto">
                           <label className="relative inline-flex items-center cursor-pointer">
@@ -1528,29 +2093,95 @@ const EventModal = () => {
                     <input
                       type="date"
                       value={eventDate}
-                      onChange={(e) => setEventDate(e.target.value)}
+                      onChange={(e) => {
+                        let value = e.target.value
+                        if (value) {
+                          const [year, month, day] = value.split('-').map(Number)
+                          // Validate month (1-12)
+                          const validMonth = Math.min(12, Math.max(1, month || 1))
+                          // Get max days for the month
+                          const maxDay = new Date(year, validMonth, 0).getDate()
+                          // Validate day (1 to maxDay for the month)
+                          const validDay = Math.min(maxDay, Math.max(1, day || 1))
+                          value = `${year}-${String(validMonth).padStart(2, '0')}-${String(validDay).padStart(2, '0')}`
+                          setEventDate(value)
+                          // If end date is before new start date, adjust it
+                          if (eventEndDate && new Date(eventEndDate) < new Date(value)) {
+                            setEventEndDate(value)
+                          }
+                        }
+                      }}
+                      onBlur={(e) => {
+                        let value = e.target.value
+                        if (value) {
+                          const [year, month, day] = value.split('-').map(Number)
+                          const validMonth = Math.min(12, Math.max(1, month || 1))
+                          const maxDay = new Date(year, validMonth, 0).getDate()
+                          const validDay = Math.min(maxDay, Math.max(1, day || 1))
+                          value = `${year}-${String(validMonth).padStart(2, '0')}-${String(validDay).padStart(2, '0')}`
+                          setEventDate(value)
+                          // If end date is before new start date, adjust it
+                          if (eventEndDate && new Date(eventEndDate) < new Date(value)) {
+                            setEventEndDate(value)
+                          }
+                        }
+                      }}
                       className="border-none focus:outline-none text-sm text-gray-900 [&::-webkit-calendar-picker-indicator]:hidden [&::-webkit-inner-spin-button]:hidden"
                       style={{
                         WebkitAppearance: 'none',
                         MozAppearance: 'textfield',
                         padding: '4px 0',
                         paddingTop: '8px',
-                        width: '85px'
+                        width: '85px',
+                        marginLeft: '2px'
                       }}
                     />
-                    <span className="text-gray-400 font-semibold -ml-1.5">→</span>
+                    <span className="text-gray-400 font-semibold mx-2">→</span>
                     <input
                       type="date"
                       value={eventEndDate}
                       min={eventDate}
-                      onChange={(e) => setEventEndDate(e.target.value)}
+                      onChange={(e) => {
+                        let value = e.target.value
+                        if (value) {
+                          const [year, month, day] = value.split('-').map(Number)
+                          // Validate month (1-12)
+                          const validMonth = Math.min(12, Math.max(1, month || 1))
+                          // Get max days for the month
+                          const maxDay = new Date(year, validMonth, 0).getDate()
+                          // Validate day (1 to maxDay for the month)
+                          const validDay = Math.min(maxDay, Math.max(1, day || 1))
+                          value = `${year}-${String(validMonth).padStart(2, '0')}-${String(validDay).padStart(2, '0')}`
+                          // Ensure end date is not before start date
+                          if (eventDate && new Date(value) < new Date(eventDate)) {
+                            value = eventDate
+                          }
+                          setEventEndDate(value)
+                        }
+                      }}
+                      onBlur={(e) => {
+                        let value = e.target.value
+                        if (value) {
+                          const [year, month, day] = value.split('-').map(Number)
+                          const validMonth = Math.min(12, Math.max(1, month || 1))
+                          const maxDay = new Date(year, validMonth, 0).getDate()
+                          const validDay = Math.min(maxDay, Math.max(1, day || 1))
+                          value = `${year}-${String(validMonth).padStart(2, '0')}-${String(validDay).padStart(2, '0')}`
+                          // Ensure end date is not before start date
+                          if (eventDate && new Date(value) < new Date(eventDate)) {
+                            value = eventDate
+                          }
+                          setEventEndDate(value)
+                        }
+                      }}
                       className="border-none focus:outline-none text-sm text-gray-900 [&::-webkit-calendar-picker-indicator]:hidden [&::-webkit-inner-spin-button]:hidden"
                       style={{
                         WebkitAppearance: 'none',
                         MozAppearance: 'textfield',
                         padding: '4px 0',
                         paddingTop: '8px',
-                        width: '85px'
+                        width: '85px',
+                        marginLeft: '2px'
                       }}
                     />
                     </div>
@@ -1834,7 +2465,42 @@ const EventModal = () => {
             </div>
                 
             {/* Bottom action bar with icons */}
-            <div className="px-4 py-3 flex items-center gap-4 border-t border-gray-100">
+            <div className="px-4 py-2.5 flex items-center gap-4 border-t border-gray-100">
+              {/* Color picker */}
+              <div className="relative" ref={colorPickerRef}>
+                <button
+                  type="button"
+                  onClick={() => setShowColorPicker(!showColorPicker)}
+                  className="p-2 bg-gray-50 border border-gray-200 rounded-full hover:bg-gray-100 transition-colors"
+                  title="Change color"
+                >
+                  <div 
+                    className="w-5 h-5 rounded-full"
+                    style={{ backgroundColor: getColorHex(color) }}
+                  />
+                </button>
+                {showColorPicker && (
+                  <div className="absolute bottom-full left-0 mb-2 z-50 bg-white border border-gray-200 rounded-xl shadow-xl p-3">
+                    <div className="grid grid-cols-4 gap-2">
+                      {CATEGORY_COLORS.map((colorHex) => (
+                        <button
+                          key={colorHex}
+                          type="button"
+                          onClick={() => {
+                            setColor(colorHex)
+                            setShowColorPicker(false)
+                          }}
+                          className={`w-8 h-8 rounded-full transition-transform hover:scale-110 ${
+                            getColorHex(color) === colorHex ? 'ring-2 ring-gray-400' : ''
+                          }`}
+                          style={{ backgroundColor: colorHex }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Notification icon */}
               <div className="relative" ref={notificationPickerRef}>
                       <button

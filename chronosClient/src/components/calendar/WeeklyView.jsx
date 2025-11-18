@@ -652,7 +652,7 @@ const WeeklyView = () => {
   // Function to render an all-day event
   const renderAllDayEvent = (event, indexKey) => (
     <AllDayEvent
-      key={event.id || `${event.start.getTime()}-${event.title}-${indexKey}`}
+      key={event.clientKey || event.id || `${event.start.getTime()}-${event.title}-${indexKey}`}
       event={event}
       onOpen={openEventModal}
       style={{
@@ -879,13 +879,13 @@ const WeeklyView = () => {
           const dayNumber = format(day, 'd')
           const dayName = format(day, 'EEE')
           const isCurrentDay = isToday(day)
+          const isSelectedDay = isSameDay(day, currentDate);
+          const showSelection = isSelectedDay && !isCurrentDay;
           
           return (
             <div 
               key={index}
-              className={`flex-1 p-2 text-center cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700
-                ${isCurrentDay ? 'font-semibold' : ''}
-              `}
+              className={`flex-1 p-2 text-center cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 ${isCurrentDay ? 'font-semibold' : ''} ${showSelection ? 'calendar-selected-surface' : ''}`}
               onClick={() => selectDate(day)}
             >
               <div className="text-sm">{dayName} {dayNumber}</div>
@@ -909,6 +909,9 @@ const WeeklyView = () => {
               }
               return isSameDay(event.start, day);
             });
+            const isSelectedDay = isSameDay(day, currentDate);
+            const isCurrentDay = isToday(day);
+            const showSelection = isSelectedDay && !isCurrentDay;
 
             const requiredHeight = Math.max(
               ALL_DAY_SECTION_HEIGHT,
@@ -918,7 +921,7 @@ const WeeklyView = () => {
             return (
               <div 
                 key={dayIndex}
-                className="flex-1 relative border-r border-gray-200 dark:border-gray-700 droppable-cell overflow-hidden"
+                className={`flex-1 relative border-r border-gray-200 dark:border-gray-700 droppable-cell overflow-hidden ${showSelection ? 'calendar-selected-surface' : ''}`}
                 data-date={format(day, 'yyyy-MM-dd')}
                 data-all-day="true"
                 style={{ 
@@ -979,11 +982,15 @@ const WeeklyView = () => {
             onMouseUp={handleGridMouseUp}
             onMouseLeave={handleGridMouseUp}
           >
-            {days.map((day, dayIndex) => (
-              <div 
-                key={dayIndex}
-                className="relative border-r border-gray-200 dark:border-gray-700 h-full week-day-column"
-              >
+            {days.map((day, dayIndex) => {
+              const isSelectedDay = isSameDay(day, currentDate);
+              const isCurrentDay = isToday(day);
+              const showSelection = isSelectedDay && !isCurrentDay;
+              return (
+                <div 
+                  key={dayIndex}
+                  className={`relative border-r border-gray-200 dark:border-gray-700 h-full week-day-column ${showSelection ? 'calendar-selected-column' : ''}`}
+                >
                 {/* Hour cells for drag-to-create */}
                 {hours.map((hour) => (
                   <div
@@ -1042,7 +1049,7 @@ const WeeklyView = () => {
 
                   return layouts.map(({ event, column, columns }) => (
                     <WeekEvent
-                      key={event.id || `${(event.start instanceof Date ? event.start : new Date(event.start)).getTime()}-${column}-${columns}`}
+                      key={event.clientKey || event.id || `${(event.start instanceof Date ? event.start : new Date(event.start)).getTime()}-${column}-${columns}`}
                       event={{
                         ...event,
                         color: event.color || 'blue'
@@ -1054,7 +1061,7 @@ const WeeklyView = () => {
                   ));
                 })()}
               </div>
-            ))}
+            );})}
           </div>
         </div>
       </div>

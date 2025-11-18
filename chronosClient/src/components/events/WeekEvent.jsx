@@ -1,29 +1,11 @@
 import { format, differenceInMinutes } from 'date-fns'
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useCalendar } from '../../context/CalendarContext'
 import { getEventColors } from '../../lib/eventColors'
 
 const WeekEvent = ({ event, hourHeight, dayStartHour, position }) => {
   const { openEventModal, selectedEvent, updateEvent } = useCalendar()
   const [isDragging, setIsDragging] = useState(false)
-  const [shouldBounce, setShouldBounce] = useState(false)
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return undefined
-    let timeoutId = null
-    const handleBounce = (evt) => {
-      if (evt?.detail?.eventId === event.id) {
-        setShouldBounce(true)
-        if (timeoutId) clearTimeout(timeoutId)
-        timeoutId = setTimeout(() => setShouldBounce(false), 600)
-      }
-    }
-    window.addEventListener('chronos:event-bounce', handleBounce)
-    return () => {
-      window.removeEventListener('chronos:event-bounce', handleBounce)
-      if (timeoutId) clearTimeout(timeoutId)
-    }
-  }, [event.id])
   
   // Ensure we're working with proper Date objects
   const startDate = event.start instanceof Date ? event.start : new Date(event.start)
@@ -149,7 +131,7 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, position }) => {
       draggable="true"
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
-      className={`absolute rounded-lg p-1 overflow-hidden text-sm z-10 group event-draggable ${shouldBounce ? 'event-bounce' : ''} ${(isPendingInvite || isTentative) ? 'pending-invite-block' : ''} ${isDeclined ? 'declined-event-block' : ''}`}
+      className={`absolute rounded-lg p-1 overflow-hidden text-sm z-10 group event-draggable calendar-event-hover ${(isPendingInvite || isTentative) ? 'pending-invite-block' : ''} ${isDeclined ? 'declined-event-block' : ''}`}
       onClick={handleClick}
       data-event-id={event.id}
       data-active={isSelected ? 'true' : 'false'}

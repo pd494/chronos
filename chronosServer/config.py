@@ -6,9 +6,23 @@ PROJECT_ROOT = Path(__file__).parent.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
 
+def _resolve_service_role_key():
+    candidates = [
+        "SERVICE_ROLE_KEY",
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "SUPABASE_SERVICE_KEY",
+        "VITE_SUPABASE_SERVICE_ROLE_KEY"
+    ]
+    for key in candidates:
+        value = os.getenv(key)
+        if value:
+            return value
+    return ""
+
+
 class Settings:
     SUPABASE_URL: str = os.getenv("VITE_SUPABASE_URL", "")
-    SUPABASE_KEY: str = os.getenv("SERVICE_ROLE_KEY", "")
+    SUPABASE_KEY: str = _resolve_service_role_key()
     SUPABASE_CALLBACK_URL: str = os.getenv("SUPABASE_CALLBACK_URL", "http://localhost:8000/auth/callback")
     IS_PRODUCTION: bool = os.getenv("IS_PRODUCTION", "false").lower() == "true"
     FRONTEND_URL: str = os.getenv("FRONTEND_URL", "http://localhost:5174")

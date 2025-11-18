@@ -11,6 +11,58 @@ from fastapi.responses import JSONResponse
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/calendar", tags=["Calendar"])
 
+
+def _extract_location_text(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        for key in (
+            "formatted_address",
+            "description",
+            "address",
+            "value",
+            "name",
+            "label",
+            "title",
+            "main_text",
+            "secondary_text",
+        ):
+            candidate = value.get(key)
+            if isinstance(candidate, str):
+                trimmed = candidate.strip()
+                if trimmed or candidate == "":
+                    return trimmed
+        for candidate in value.values():
+            if isinstance(candidate, str):
+                trimmed = candidate.strip()
+                if trimmed:
+                    return trimmed
+        return None
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            normalized = _extract_location_text(item)
+            if normalized:
+                return normalized
+        return None
+    return str(value).strip()
+
+
+def _normalize_event_location(event_data):
+    if not isinstance(event_data, dict):
+        return event_data
+    raw_location = event_data.get("location")
+    normalized = _extract_location_text(raw_location)
+    if normalized is None:
+        if raw_location is None:
+            event_data.pop("location", None)
+        else:
+            event_data["location"] = ""
+    else:
+        event_data["location"] = normalized
+    return event_data
+
 @router.post("/credentials")
 async def save_credentials(request: Request, user: User = Depends(get_current_user), supabase: Client = Depends(get_supabase_client)):
     try:
@@ -18,16 +70,21 @@ async def save_credentials(request: Request, user: User = Depends(get_current_us
         access_token = body.get("access_token")
         refresh_token = body.get("refresh_token")
         expires_at = body.get("expires_at")
+        scopes = body.get("scopes")
         
         if not access_token or not refresh_token or not expires_at:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing tokens")
         
-        supabase.table("google_credentials").upsert({
+        payload = {
             "user_id": str(user.id),
             "access_token": access_token,
             "refresh_token": refresh_token,
             "expires_at": expires_at
-        }).execute()
+        }
+        if scopes:
+            payload["scopes"] = scopes
+        
+        supabase.table("google_credentials").upsert(payload).execute()
         
         return JSONResponse(status_code=status.HTTP_200_OK, content={"message": "Credentials saved successfully"})
     except Exception as e:
@@ -64,6 +121,7 @@ async def create_event(
     body = await request.json()
     calendar_id = body.get("calendar_id", "primary")
     event_data = body.get("event_data")
+    event_data = _normalize_event_location(event_data)
     send_notifications = body.get("send_notifications", False)
     
     if not event_data:
@@ -84,6 +142,7 @@ async def update_event(
     body = await request.json()
     calendar_id = body.get("calendar_id", "primary")
     event_data = body.get("event_data")
+    event_data = _normalize_event_location(event_data)
     send_notifications = body.get("send_notifications", False)
     
     if not event_data:
@@ -104,6 +163,7 @@ async def patch_event(
     body = await request.json()
     calendar_id = body.get("calendar_id", "primary")
     event_data = body.get("event_data")
+    event_data = _normalize_event_location(event_data)
 
     if not event_data:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing event_data")

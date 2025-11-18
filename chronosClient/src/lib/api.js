@@ -50,14 +50,16 @@ async function performRefresh() {
 }
 
 function handleSessionExpired(error) {
-  sessionExpired = true
-  console.error('Token refresh failed:', error)
-  if (typeof window !== 'undefined' && !isRedirecting) {
-    isRedirecting = true
-    window.location.href = '/?session_expired=true'
+  if (!sessionExpired) {
+    sessionExpired = true
+    console.error('Token refresh failed:', error)
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('chronos:session-expired', { detail: { error } }))
+    }
   }
   const err = new Error('Session expired. Please sign in again.')
   err.cause = error
+  err.status = error?.status ?? 401
   throw err
 }
 
@@ -69,7 +71,11 @@ async function ensureSession() {
         return result
       })
       .catch((error) => {
-        handleSessionExpired(error)
+        const status = error?.status
+        if (status === 401 || status === 403) {
+          handleSessionExpired(error)
+        }
+        throw error
       })
       .finally(() => {
         refreshPromise = null
@@ -104,7 +110,8 @@ async function apiFetch(endpoint, options = {}) {
       }
       response = await makeRequest()
     } catch (refreshError) {
-      if (!sessionExpired) {
+      const status = refreshError?.status
+      if (!sessionExpired && (status === 401 || status === 403)) {
         handleSessionExpired(refreshError)
       }
       throw refreshError
@@ -113,7 +120,9 @@ async function apiFetch(endpoint, options = {}) {
 
   if (!response.ok) {
     const detail = await parseErrorResponse(response)
-    throw new Error(detail)
+    const error = new Error(detail)
+    error.status = response.status
+    throw error
   }
 
   return response.json()
@@ -150,8 +159,8 @@ export const authApi = {
     return ensureSession()
   },
 
-  async logout() {
-    return postJson('/auth/logout')
+  async logout(options = {}) {
+    return postJson('/auth/logout', {}, { keepalive: Boolean(options.keepalive) })
   }
 }
 
@@ -192,6 +201,10 @@ export const todosApi = {
 
   async convertToEvent(todoId, eventData){
     return postJson(`/todos/${todoId}/convert-to-event`, eventData)
+  },
+
+  async getBootstrap(){
+    return get('/todos/bootstrap')
   },
 
   async batchReorderCategories(updates){
@@ -236,6 +249,10 @@ function toGoogleEventBody(eventData) {
     body.recurrence = eventData.recurrence
   } else if (eventData.recurrenceRule) {
     body.recurrence = [eventData.recurrenceRule]
+  }
+
+  if (eventData.conferenceData) {
+    body.conferenceData = eventData.conferenceData
   }
 
   if (eventData.recurrenceRule || eventData.recurrenceSummary || eventData.recurrenceMeta) {

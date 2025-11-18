@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { todosApi } from '../lib/api';
 import { useAuth } from './AuthContext';
 
@@ -7,11 +7,28 @@ const TaskContext = createContext();
 export const useTaskContext = () => useContext(TaskContext);
 
 const ALL_CATEGORY = { id: 'all', name: 'All', icon: '★', order: -1 };
+const TASK_SNAPSHOT_PREFIX = 'chronos:tasks:snapshot:';
 
 const SPECIAL_CATEGORY_COLORS = {
   Inbox: '#3478F6',
   Today: '#FF9500',
   Completed: '#34C759'
+};
+
+const pickCategoryFromList = (categoryName, categoriesList = []) => {
+  if (!Array.isArray(categoriesList) || !categoriesList.length) {
+    return null;
+  }
+
+  const usable = categoriesList.filter(cat => cat && cat.id !== ALL_CATEGORY.id);
+  const inbox = usable.find(cat => cat.name === 'Inbox');
+  const fallback = inbox || usable[0] || categoriesList.find(cat => cat?.id !== ALL_CATEGORY.id) || null;
+
+  if (!categoryName || categoryName === 'All' || categoryName === 'Completed') {
+    return fallback;
+  }
+
+  return usable.find(cat => cat.name === categoryName) || fallback;
 };
 
 const ISO_DATE_ONLY_REGEX = /^\d{4}-\d{2}-\d{2}$/;
@@ -80,20 +97,66 @@ const buildCategories = (rawCategories = []) => {
   return [ALL_CATEGORY, ...formatted];
 };
 
+const readTasksSnapshotForUser = (user) => {
+  if (typeof window === 'undefined' || !user) return null;
+  const keys = [];
+  const emailId = user?.email;
+  const rawId = user?.id;
+  if (emailId) {
+    keys.push(`${TASK_SNAPSHOT_PREFIX}${emailId}`);
+  }
+  if (rawId) {
+    keys.push(`${TASK_SNAPSHOT_PREFIX}${rawId}`);
+  }
+  if (!keys.length) return null;
+
+  const readForKey = (key) => {
+    if (!key) return null;
+    const fromSession = window.sessionStorage.getItem(key);
+    if (fromSession) return fromSession;
+    try {
+      return window.localStorage.getItem(key);
+    } catch (_) {
+      return fromSession;
+    }
+  };
+
+  for (const key of keys) {
+    const raw = readForKey(key);
+    if (!raw) continue;
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') continue;
+      return parsed;
+    } catch (_) {
+      continue;
+    }
+  }
+  return null;
+};
+
 export const TaskProvider = ({ children }) => {
   const { user } = useAuth();
-  const [tasks, setTasks] = useState([]);
-  const [categories, setCategories] = useState([ALL_CATEGORY]);
-
-  const categoryByName = useMemo(() => {
-    const lookup = new Map();
-    categories.forEach((category) => {
-      if (category && category.name) {
-        lookup.set(category.name, category);
-      }
-    });
-    return lookup;
-  }, [categories]);
+  const initialSnapshot = readTasksSnapshotForUser(user);
+  const [tasks, setTasks] = useState(() =>
+    Array.isArray(initialSnapshot?.tasks) ? enhanceTasks(initialSnapshot.tasks) : []
+  );
+  const [categories, setCategories] = useState(() =>
+    Array.isArray(initialSnapshot?.categories) && initialSnapshot.categories.length
+      ? initialSnapshot.categories
+      : [ALL_CATEGORY]
+  );
+  const snapshotKey = useMemo(() => {
+    if (!user) return null;
+    const stableId = user.email || user.id;
+    if (!stableId) return null;
+    return `${TASK_SNAPSHOT_PREFIX}${stableId}`;
+  }, [user]);
+  const hasHydratedSnapshotRef = useRef(false);
+  const bootstrapPromiseRef = useRef(null);
+  const lastBootstrapAtRef = useRef(0);
+  const hasStartedLoadingRef = useRef(false);
+  const lastMutationTimeRef = useRef(0); // Track when we last created/updated/deleted a todo
 
   const setTasksEnhanced = useCallback((updater) => {
     setTasks(prev => {
@@ -110,101 +173,155 @@ export const TaskProvider = ({ children }) => {
     setCategories([ALL_CATEGORY]);
   }, []);
 
-  const loadTasks = useCallback(async () => {
+  const hydrateFromSnapshot = useCallback(() => {
+    if (!user) return false;
     try {
-      const response = await todosApi.getTodos();
-      const fetched = Array.isArray(response.data) ? response.data : [];
-
-      setTasksEnhanced(prev => {
-        if (!Array.isArray(prev) || prev.length === 0) {
-          if (fetched.length === 0) {
-            return fetched;
-          }
-
-          const sortedByCreatedAt = [...fetched].sort((a, b) => {
-            const aCreated = a?.created_at ? new Date(a.created_at).getTime() : Number.MAX_SAFE_INTEGER;
-            const bCreated = b?.created_at ? new Date(b.created_at).getTime() : Number.MAX_SAFE_INTEGER;
-            if (aCreated === bCreated) {
-              return 0;
-            }
-            return aCreated - bCreated;
-          });
-
-          return sortedByCreatedAt;
-        }
-
-        const previousOrder = new Map(prev.map((task, index) => [task?.id, index]));
-        let nextPosition = prev.length;
-
-        const decorated = fetched.map(task => {
-          const existingOrder = task?.id !== undefined ? previousOrder.get(task.id) : undefined;
-          const createdAt = task?.created_at ? new Date(task.created_at).getTime() : Number.MAX_SAFE_INTEGER;
-
-          if (existingOrder !== undefined) {
-            return { task, position: existingOrder, createdAt };
-          }
-
-          const position = nextPosition++;
-          return { task, position, createdAt };
-        });
-
-        decorated.sort((a, b) => {
-          if (a.position !== b.position) {
-            return a.position - b.position;
-          }
-          if (a.createdAt === b.createdAt) {
-            return 0;
-          }
-          return a.createdAt - b.createdAt;
-        });
-
-        return decorated.map(item => item.task);
-      });
+      const parsed = readTasksSnapshotForUser(user);
+      if (!parsed) return false;
+      if (Array.isArray(parsed.tasks)) {
+        setTasksEnhanced(parsed.tasks);
+      }
+      if (Array.isArray(parsed.categories) && parsed.categories.length) {
+        setCategories(parsed.categories);
+      }
+      return true;
     } catch (error) {
-      console.error('Failed to fetch todos:', error);
+      console.warn('Failed to hydrate tasks snapshot:', error);
+      return false;
     }
-  }, [setTasksEnhanced]);
+  }, [user, setTasksEnhanced, setCategories]);
 
   const loadCategories = useCallback(async () => {
     try {
       const response = await todosApi.getCategories();
-      setCategories(buildCategories(response.data || []));
+      const nextCategories = buildCategories(response.data || []);
+      setCategories(nextCategories);
+      return nextCategories;
     } catch (error) {
       console.error('Failed to fetch categories:', error);
+      return null;
     }
   }, []);
 
-  const loadData = useCallback(async () => {
+  const loadBootstrap = useCallback(async () => {
+    if (!user) return null;
     try {
-      await Promise.all([loadTasks(), loadCategories()]);
-    } catch (_) {
-      // individual helpers already log errors
+      const response = await todosApi.getBootstrap();
+      const fetchedTodos = Array.isArray(response?.todos)
+        ? response.todos
+        : Array.isArray(response?.data?.todos)
+          ? response.data.todos
+          : [];
+      const fetchedCategories = Array.isArray(response?.categories)
+        ? response.categories
+        : Array.isArray(response?.data?.categories)
+          ? response.data.categories
+          : [];
+      
+      // Only update state if we actually got data (or empty arrays are valid)
+      const builtCategories = buildCategories(fetchedCategories);
+      
+      // Set both atomically to prevent UI flicker
+      setTasksEnhanced(fetchedTodos);
+      setCategories(builtCategories);
+      lastBootstrapAtRef.current = Date.now();
+      
+      return { todos: fetchedTodos, categories: builtCategories };
+    } catch (error) {
+      console.error('Failed to bootstrap todos:', error);
+      // Don't clear existing data on error - keep what we have
+      return null;
     }
-  }, [loadTasks, loadCategories]);
+  }, [user, setTasksEnhanced]);
+
+  const refreshBootstrap = useCallback(
+    async (force = false) => {
+      if (!user) return null;
+      const now = Date.now();
+      const stale = now - lastBootstrapAtRef.current > 60 * 1000;
+      const timeSinceMutation = now - lastMutationTimeRef.current;
+      
+      // Don't refresh if we just made a mutation (within last 2 seconds) unless forced
+      // This prevents overwriting optimistic updates
+      if (!force && timeSinceMutation < 2000) {
+        return null;
+      }
+      
+      // Only skip if we have data, it's not stale, and we're not forcing
+      // But always load on first load (when lastBootstrapAtRef is 0)
+      if (!force && !stale && lastBootstrapAtRef.current > 0 && tasks.length && categories.length > 1) {
+        return null;
+      }
+      if (bootstrapPromiseRef.current) {
+        return bootstrapPromiseRef.current;
+      }
+      bootstrapPromiseRef.current = (async () => {
+        try {
+          return await loadBootstrap();
+        } finally {
+          bootstrapPromiseRef.current = null;
+        }
+      })();
+      return bootstrapPromiseRef.current;
+    },
+    [user, loadBootstrap, tasks.length, categories.length]
+  );
+
+  const loadData = useCallback(async (force = false) => {
+    await refreshBootstrap(force);
+  }, [refreshBootstrap]);
 
   // Fetch todos and categories when user is logged in
   useEffect(() => {
-    if (user) {
-      loadData();
-    } else {
+    if (!user) {
+      hasHydratedSnapshotRef.current = false;
+      bootstrapPromiseRef.current = null;
+      lastBootstrapAtRef.current = 0;
+      hasStartedLoadingRef.current = false;
       resetState();
+      return;
     }
-  }, [user, loadData, resetState]);
+    // Only run once per user session to prevent multiple calls
+    if (hasStartedLoadingRef.current) {
+      return;
+    }
+    hasStartedLoadingRef.current = true;
+    
+    if (!hasHydratedSnapshotRef.current) {
+      const hydrated = hydrateFromSnapshot();
+      hasHydratedSnapshotRef.current = hydrated;
+    }
+    loadData(true);
+  }, [user, hydrateFromSnapshot, loadData, resetState]);
+
+  useEffect(() => {
+    if (!snapshotKey || typeof window === 'undefined' || !user) return;
+    try {
+      const payload = {
+        tasks,
+        categories,
+        savedAt: Date.now()
+      };
+      const serialized = JSON.stringify(payload);
+      window.sessionStorage.setItem(snapshotKey, serialized);
+      try {
+        window.localStorage.setItem(snapshotKey, serialized);
+      } catch (_) {
+        // localStorage may be unavailable; ignore
+      }
+    } catch (error) {
+      console.warn('Failed to persist tasks snapshot:', error);
+    }
+  }, [snapshotKey, tasks, categories, user]);
+
+  // Disabled automatic refresh on focus/visibility/online - only refresh on CRUD operations
+  // useEffect(() => {
+  //   ... automatic refresh logic disabled ...
+  // }, [])
 
   const resolveCategory = useCallback(
-    (categoryName) => {
-      if (!categoryName || categoryName === 'All') {
-        return categoryByName.get('Inbox')
-          || categories.find(cat => cat.id !== ALL_CATEGORY.id);
-      }
-      if (categoryName === 'Completed') {
-        return categoryByName.get('Inbox')
-          || categories.find(cat => cat.id !== ALL_CATEGORY.id);
-      }
-      return categoryByName.get(categoryName)
-        || categories.find(cat => cat.id !== ALL_CATEGORY.id);
-    },
-    [categories, categoryByName]
+    (categoryName, sourceCategories) => pickCategoryFromList(categoryName, sourceCategories ?? categories),
+    [categories]
   );
 
   const addTask = async ({ content, categoryName }) => {
@@ -214,8 +331,10 @@ export const TaskProvider = ({ children }) => {
     try {
       let category = resolveCategory(categoryName);
       if (!category) {
-        await loadCategories();
-        category = resolveCategory(categoryName);
+        const latestCategories = await loadCategories();
+        if (latestCategories) {
+          category = resolveCategory(categoryName, latestCategories);
+        }
       }
       if (!category) {
         throw new Error(`Category "${categoryName}" not found`);
@@ -231,6 +350,7 @@ export const TaskProvider = ({ children }) => {
 
       setTasksEnhanced(prev => [...prev, optimisticTask]);
       optimisticAdded = true;
+      lastMutationTimeRef.current = Date.now(); // Track mutation time
 
       const response = await todosApi.createTodo({
         content,
@@ -243,9 +363,11 @@ export const TaskProvider = ({ children }) => {
         category_name: response.data?.category_name || category.name
       };
 
+      // Update the optimistic task with real data
       setTasksEnhanced(prev =>
         prev.map(task => (task.id === optimisticId ? created : task))
       );
+      lastMutationTimeRef.current = Date.now(); // Update mutation time after successful creation
     } catch (error) {
       if (optimisticAdded) {
         setTasksEnhanced(prev => prev.filter(task => task.id !== optimisticId));
@@ -265,6 +387,7 @@ export const TaskProvider = ({ children }) => {
 
       if (response?.data) {
         await loadCategories();
+        lastMutationTimeRef.current = Date.now();
       }
     } catch (error) {
       console.error('Failed to create category:', error);
@@ -275,6 +398,7 @@ export const TaskProvider = ({ children }) => {
     try {
       await todosApi.updateCategory(id, updatedCategory);
       await loadCategories();
+      lastMutationTimeRef.current = Date.now();
     } catch (error) {
       console.error('Failed to update category:', error);
     }
@@ -295,11 +419,11 @@ export const TaskProvider = ({ children }) => {
       )
     );
 
-    try {
-      await todosApi.deleteCategory(id);
-      loadCategories().catch(() => {});
-      loadTasks().catch(() => {});
-    } catch (error) {
+      try {
+        await todosApi.deleteCategory(id);
+        lastMutationTimeRef.current = Date.now();
+        refreshBootstrap(true).catch(() => {});
+      } catch (error) {
       console.error('Failed to delete category:', error);
       setCategories(previousCategories);
       setTasksEnhanced(previousTasks);
@@ -315,6 +439,7 @@ export const TaskProvider = ({ children }) => {
       
       try {
         await todosApi.deleteTodo(id);
+        lastMutationTimeRef.current = Date.now();
       } catch (error) {
         console.error('Failed to delete todo:', error);
         setTasksEnhanced(prev => [...prev, task]);
@@ -344,6 +469,7 @@ export const TaskProvider = ({ children }) => {
             category_name: 'Completed',
             category_id: completedCategory.id
           });
+          lastMutationTimeRef.current = Date.now();
         } catch (error) {
           console.error('Failed to complete todo:', error);
           setTasksEnhanced(prev =>
@@ -367,6 +493,7 @@ export const TaskProvider = ({ children }) => {
       
       try {
         await todosApi.updateTodo(id, { completed: false });
+        lastMutationTimeRef.current = Date.now();
       } catch (error) {
         console.error('Failed to uncomplete todo:', error);
         setTasksEnhanced(prev =>
@@ -382,6 +509,7 @@ export const TaskProvider = ({ children }) => {
     try {
       await todosApi.deleteTodo(id);
       setTasksEnhanced(prev => prev.filter(task => task.id !== id));
+      lastMutationTimeRef.current = Date.now();
     } catch (error) {
       console.error('Failed to delete todo:', error);
     }
@@ -391,6 +519,7 @@ export const TaskProvider = ({ children }) => {
     try {
       await todosApi.updateTodo(id, updatedTask);
       setTasksEnhanced(prev => prev.map(task => (task.id === id ? { ...task, ...updatedTask } : task)));
+      lastMutationTimeRef.current = Date.now();
     } catch (error) {
       console.error('Failed to update todo:', error);
     }
@@ -428,10 +557,10 @@ export const TaskProvider = ({ children }) => {
         await todosApi.batchReorderCategories(batchUpdates);
       } catch (error) {
         console.error('Failed to reorder categories:', error);
-        await loadCategories();
+        await refreshBootstrap(true);
       }
     },
-    [loadCategories]
+    [refreshBootstrap]
   );
 
   const convertTodoToEvent = async (todoId, startDate, endDate, isAllDay = false) => {

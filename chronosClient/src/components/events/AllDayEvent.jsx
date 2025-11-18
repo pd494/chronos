@@ -1,28 +1,10 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { format, differenceInCalendarDays, startOfDay } from 'date-fns'
 import { getEventColors } from '../../lib/eventColors'
 
 const AllDayEvent = ({ event, onOpen, className = '', style = {} }) => {
   const colors = getEventColors(event.color || 'blue')
   const [isDragging, setIsDragging] = useState(false)
-  const [shouldBounce, setShouldBounce] = useState(false)
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return undefined
-    let timeoutId = null
-    const handleBounce = (evt) => {
-      if (evt?.detail?.eventId === event.id) {
-        setShouldBounce(true)
-        if (timeoutId) clearTimeout(timeoutId)
-        timeoutId = setTimeout(() => setShouldBounce(false), 600)
-      }
-    }
-    window.addEventListener('chronos:event-bounce', handleBounce)
-    return () => {
-      window.removeEventListener('chronos:event-bounce', handleBounce)
-      if (timeoutId) clearTimeout(timeoutId)
-    }
-  }, [event.id])
 
   const handleClick = (e) => {
     if (isDragging) return
@@ -121,7 +103,7 @@ const AllDayEvent = ({ event, onOpen, className = '', style = {} }) => {
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
       onClick={handleClick}
-      className={`truncate rounded px-2 cursor-pointer text-xs relative flex items-center gap-2 event-draggable ${shouldBounce ? 'event-bounce' : ''} ${(isPendingInvite || isTentative) ? 'pending-invite-block' : ''} ${isDeclined ? 'declined-event-block' : ''} ${className}`.trim()}
+      className={`truncate rounded px-2 cursor-pointer text-xs relative flex items-center gap-2 event-draggable calendar-event-hover ${(isPendingInvite || isTentative) ? 'pending-invite-block' : ''} ${isDeclined ? 'declined-event-block' : ''} ${className}`.trim()}
       style={{
         backgroundColor,
         color: titleColor,

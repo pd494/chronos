@@ -50,17 +50,27 @@ async def refresh_token(request: Request, response: Response, supabase: Client =
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token refresh failed")
 
 @router.get("/me", response_model=User)
-async def get_me(request: Request, user: User = Depends(get_current_user)):
-    print(f"/me endpoint called, cookies: {list(request.cookies.keys())}")
-    print(f"Authenticated user: {user.id}")
-    return user
+async def get_me(
+    user: User = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_client)
+):
+    has_google_credentials = False
+    try:
+        result = (
+            supabase.table("google_credentials")
+            .select("user_id")
+            .eq("user_id", str(user.id))
+            .limit(1)
+            .execute()
+        )
+        has_google_credentials = bool(result.data)
+    except Exception as error:
+        logger.warning("Failed to check Google credentials: %s", error)
+    return user.model_copy(update={"has_google_credentials": has_google_credentials})
 
 @router.post("/logout")
 async def logout(response: Response, request: Request, supabase: Client = Depends(get_supabase_client)):
     """Logout current session"""
-    print("Logout endpoint called")
-    print(f"Cookies before logout: {request.cookies}")
-    
     try:
         token = request.cookies.get("sb-access-token")
         if token:
@@ -68,12 +78,10 @@ async def logout(response: Response, request: Request, supabase: Client = Depend
             supabase.table("users").update({
                 "last_logout_at": datetime.utcnow().isoformat()
             }).eq("id", str(user.user.id)).execute()
-            print(f"User {user.user.id} logged out")
     except Exception as e:
-        print(f"Logout error: {str(e)}")
+        logger.error(f"Logout error: {str(e)}")
     
     _clear_auth_cookies(response)
-    print("Auth cookies cleared")
     return {"message": "Logged out successfully"}
 
 
@@ -124,4 +132,3 @@ def _clear_auth_cookies(response: Response):
         path="/",
         expires=0   
     )
-    print("Cookie clear headers set with max_age=0 and expires=0")

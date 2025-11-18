@@ -1,29 +1,11 @@
 import { format, differenceInCalendarDays, startOfDay } from 'date-fns'
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useCalendar } from '../../context/CalendarContext'
 
 const EventIndicator = ({ event, isMonthView }) => {
   const { openEventModal, selectedEvent, updateEvent } = useCalendar()
   const isSelected = selectedEvent?.id === event.id
   const [isDragging, setIsDragging] = useState(false)
-  const [shouldBounce, setShouldBounce] = useState(false)
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return undefined
-    let timeoutId = null
-    const handleBounce = (evt) => {
-      if (evt?.detail?.eventId === event.id) {
-        setShouldBounce(true)
-        if (timeoutId) clearTimeout(timeoutId)
-        timeoutId = setTimeout(() => setShouldBounce(false), 600)
-      }
-    }
-    window.addEventListener('chronos:event-bounce', handleBounce)
-    return () => {
-      window.removeEventListener('chronos:event-bounce', handleBounce)
-      if (timeoutId) clearTimeout(timeoutId)
-    }
-  }, [event.id])
   const spansMultipleDays = (() => {
     if (!event?.start || !event?.end) return false
     try {
@@ -209,7 +191,7 @@ const EventIndicator = ({ event, isMonthView }) => {
       draggable={!isDragging}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
-      className={`text-xs mb-1 flex items-center space-x-1 px-1 py-0.5 overflow-hidden transition-opacity hover:opacity-30 ${isMonthView ? (isHexColor ? (treatAsAllDay ? 'rounded-md' : '') : `${treatAsAllDay ? getBgColorClass(eventColor) + ' bg-opacity-70' : ''} ${treatAsAllDay ? 'rounded-md' : ''}`) : ''} calendar-event ${shouldBounce ? 'event-bounce' : ''} ${
+      className={`text-xs mb-1 flex items-center gap-1 px-1 py-0.5 transition-opacity calendar-event calendar-event-hover ${isMonthView ? (isHexColor ? (treatAsAllDay ? 'rounded-md' : '') : `${treatAsAllDay ? getBgColorClass(eventColor) + ' bg-opacity-70' : ''} ${treatAsAllDay ? 'rounded-md' : ''}`) : ''} ${
         (isPendingInvite || isTentative) && isMonthView ? 'pending-month-invite' : ''
       } ${isDeclined && isMonthView ? 'declined-month-event' : ''}`}
       onClick={handleClick}
@@ -227,31 +209,31 @@ const EventIndicator = ({ event, isMonthView }) => {
     >
       {isMonthView ? (
         <>
-          {/* Colored line indicator */}
-          <div 
-            className={`${isHexColor ? '' : getColorClass(eventColor)} rounded-sm`}
-            style={{ 
-              width: '3.2px', 
-              height: '14px',
-              flex: '0 0 3.2px',
-              ...(isHexColor ? lineStyle : {})
-            }}
-          ></div>
-          
-          <div
-            className="flex-grow truncate overflow-hidden text-ellipsis font-medium"
-            style={{
-              minWidth: '30px',
-              ...titleStyle
-            }}
-          >
-            {event.title}
+          <div className="flex items-center gap-1 min-w-0 flex-1">
+            <div 
+              className={`${isHexColor ? '' : getColorClass(eventColor)} rounded-sm`}
+              style={{ 
+                width: '3.2px', 
+                height: '14px',
+                flex: '0 0 3.2px',
+                ...(isHexColor ? lineStyle : {})
+              }}
+            ></div>
+            
+            <div
+              className="flex-1 truncate overflow-hidden text-ellipsis font-medium min-w-0"
+              style={{
+                ...titleStyle
+              }}
+            >
+              {event.title}
+            </div>
           </div>
           
           {!treatAsAllDay && (
             <div
-              className="text-gray-600 dark:text-gray-700 flex-shrink-0 min-w-0 whitespace-nowrap text-right font-medium"
-              style={{ minWidth: '45px', ...timeStyle }}
+              className="text-gray-600 dark:text-gray-700 flex-shrink-0 whitespace-nowrap text-right font-medium pl-1"
+              style={{ minWidth: '48px', ...timeStyle }}
             >
               {formattedTime}
             </div>

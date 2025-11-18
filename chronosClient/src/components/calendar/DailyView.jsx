@@ -393,7 +393,7 @@ const DailyView = () => {
   // Function to render an all-day event
   const renderAllDayEvent = (event) => (
     <AllDayEvent
-      key={event.id}
+      key={event.clientKey || event.id}
       event={event}
       onOpen={openEventModal}
       style={{
@@ -674,7 +674,7 @@ const DailyView = () => {
             {/* Events for this day (only regular events, not all-day) */}
             {calculateTimeGridLayout(regularEvents).map(({ event, column, columns }) => (
               <DayEvent 
-                key={event.id || `${(event.start instanceof Date ? event.start : new Date(event.start)).getTime()}-${column}-${columns}`} 
+                key={event.clientKey || event.id || `${(event.start instanceof Date ? event.start : new Date(event.start)).getTime()}-${column}-${columns}`} 
                 event={event} 
                 hourHeight={HOUR_HEIGHT} 
                 dayStartHour={DAY_START_HOUR}
