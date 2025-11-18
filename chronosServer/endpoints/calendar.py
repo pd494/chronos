@@ -75,20 +75,42 @@ async def save_credentials(request: Request, user: User = Depends(get_current_us
         if not access_token or not refresh_token or not expires_at:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing tokens")
         
+        # Ensure scopes is an array
+        if scopes:
+            if isinstance(scopes, str):
+                scopes = [s.strip() for s in scopes.split(',') if s.strip()]
+            elif not isinstance(scopes, list):
+                scopes = [str(scopes)]
+        
+        # Default to required Google Calendar scopes if none provided
+        if not scopes:
+            scopes = [
+                "https://www.googleapis.com/auth/calendar",
+                "https://www.googleapis.com/auth/calendar.events",
+                "https://www.googleapis.com/auth/calendar.events.readonly",
+                "https://www.googleapis.com/auth/calendar.readonly"
+            ]
+        
         payload = {
             "user_id": str(user.id),
             "access_token": access_token,
             "refresh_token": refresh_token,
-            "expires_at": expires_at
+            "expires_at": expires_at,
+            "scopes": scopes
         }
-        if scopes:
-            payload["scopes"] = scopes
         
-        supabase.table("google_credentials").upsert(payload).execute()
+        # Get user's JWT token from cookies to set auth context for RLS
+        user_jwt = request.cookies.get("sb-access-token")
+        if user_jwt:
+            # Set the auth context so RLS knows which user is making the request
+            supabase.postgrest.auth(user_jwt)
+        
+        result = supabase.table("google_credentials").upsert(payload, on_conflict="user_id").execute()
         
         return JSONResponse(status_code=status.HTTP_200_OK, content={"message": "Credentials saved successfully"})
     except Exception as e:
-        logger.error(f"Error saving credentials: {str(e)}")
+        error_dict = e.__dict__ if hasattr(e, '__dict__') else {}
+        logger.error(f"Error saving credentials: {error_dict}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 @router.get("/calendars")

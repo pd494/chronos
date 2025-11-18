@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client'
 import { createBrowserRouter, RouterProvider } from 'react-router-dom'
 import App from './App.jsx'
 import './index.css'
-import { CalendarProvider } from './context/CalendarContext.jsx'
+import { CalendarProvider } from './context/CalendarContext'
 import { TaskProvider } from './context/TaskContext.jsx'
 import { AuthProvider } from './context/AuthContext.jsx'
 

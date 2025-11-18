@@ -409,7 +409,9 @@ export const CalendarProvider = ({ children }) => {
               todoId: newEvent.todoId,
               isOptimistic: newEvent.isOptimistic,
               isAllDay: newEvent.isAllDay,
-              isPendingSync: Boolean(newEvent.isPendingSync)
+              isPendingSync: Boolean(newEvent.isPendingSync),
+              transparency: newEvent.transparency || 'opaque',
+              visibility: newEvent.visibility || 'default'
             })
             window.sessionStorage.setItem(key, JSON.stringify({ events: list }))
           }
@@ -466,7 +468,9 @@ export const CalendarProvider = ({ children }) => {
             location: ev.location || '',
             participants: ev.participants || [],
             todoId: todoId ? String(todoId) : undefined,
-            isPendingSync
+            isPendingSync,
+            transparency: ev.transparency || 'opaque',
+            visibility: ev.visibility || 'default'
           }
           if (todoId) {
             linkTodoEvent(todoId, ev.id)
@@ -609,7 +613,9 @@ export const CalendarProvider = ({ children }) => {
                   viewerIsOrganizer: Boolean(ev.viewerIsOrganizer),
                   viewerIsAttendee: Boolean(ev.viewerIsAttendee),
                   inviteCanRespond: Boolean(ev.inviteCanRespond),
-                  isInvitePending: cachedViewerResponse === 'needsAction'
+                  isInvitePending: cachedViewerResponse === 'needsAction',
+                  transparency: ev.transparency === 'transparent' ? 'transparent' : 'opaque',
+                  visibility: ev.visibility || 'default'
                 })
               }
             }
@@ -739,6 +745,8 @@ export const CalendarProvider = ({ children }) => {
             const viewerIsAttendee = Boolean(viewerAttendee)
             const inviteCanRespond = viewerIsAttendee && !viewerIsOrganizer
             const isInvitePending = viewerResponseStatus === 'needsAction'
+            const transparency = event.transparency === 'transparent' ? 'transparent' : 'opaque'
+            const visibility = event.visibility || 'default'
 
             return {
               id: event.id,
@@ -764,7 +772,9 @@ export const CalendarProvider = ({ children }) => {
               viewerIsOrganizer,
               viewerIsAttendee,
               inviteCanRespond,
-              isInvitePending
+              isInvitePending,
+              transparency,
+              visibility
             }
           })
           .filter(ev => {
@@ -781,6 +791,7 @@ export const CalendarProvider = ({ children }) => {
         const newEvents = []
         const reinsertedOptimisticEvents = []
         const now = Date.now()
+        const allowDeletions = !background
 
         setEvents(prev => {
           const next = []
@@ -814,7 +825,7 @@ export const CalendarProvider = ({ children }) => {
                 if (ev.isOptimistic || isPendingSync) {
                   const carry = isPendingSync && !ev.isPendingSync ? { ...ev, isPendingSync: true } : ev
                   next.push(carry)
-                } else if (ev.isGoogleEvent) {
+                } else if (allowDeletions && ev.isGoogleEvent) {
                   // For Google events in this time range that are not in the incoming data,
                   // they have likely been deleted, so remove them
                   eventIdsRef.current.delete(ev.id)
@@ -919,7 +930,9 @@ export const CalendarProvider = ({ children }) => {
                 inviteCanRespond: Boolean(ev.inviteCanRespond),
                 isInvitePending: typeof ev.isInvitePending === 'boolean'
                   ? ev.isInvitePending
-                  : normalizeResponseStatus(ev.viewerResponseStatus) === 'needsAction'
+                  : normalizeResponseStatus(ev.viewerResponseStatus) === 'needsAction',
+                transparency: ev.transparency || 'opaque',
+                visibility: ev.visibility || 'default'
               })
               byMonth.set(m, arr)
             }
@@ -1468,14 +1481,14 @@ export const CalendarProvider = ({ children }) => {
   }, [currentDate, view, initialLoading, events, getVisibleRange, dateKey, snapshotKey])
 
   const refreshEvents = useCallback(() => {
-    if (!user) return
+    if (!user || !user.has_google_credentials) return
     fetchGoogleEventsRef.current(false, true)
   }, [user])
 
   const lastFetchParamsRef = useRef({ date: null, view: null })
   
   useEffect(() => {
-    if (!user) return
+    if (!user || !user.has_google_credentials) return
     
     const currentDateKey = currentDate?.getTime()
     const lastDateKey = lastFetchParamsRef.current.date
@@ -1498,6 +1511,7 @@ export const CalendarProvider = ({ children }) => {
       prevSelectedCalHashRef.current = null
       return
     }
+    if (!user.has_google_credentials) return
     const currentHash = calHashRef.current || 'all'
     if (!hasBootstrappedRef.current) {
       prevSelectedCalHashRef.current = currentHash
@@ -1547,7 +1561,9 @@ export const CalendarProvider = ({ children }) => {
           isGoogleEvent: true,
           calendar_id: eventData.calendar_id || 'primary',
           isOptimistic: isOptimistic || false,
-          isAllDay
+          isAllDay,
+          transparency: eventData.transparency === 'transparent' ? 'transparent' : 'opaque',
+          visibility: eventData.visibility || 'public'
           // Don't store todoId - each event is independent
         }
 
@@ -1624,13 +1640,7 @@ export const CalendarProvider = ({ children }) => {
         }
       }
       
-      // Don't trigger background refresh for optimistic or pending events
-      // They will sync naturally when the user navigates or manually refreshes
-      // This prevents flicker and unnecessary API calls
-      if (!isOptimistic) {
-        // Only refresh after a significant delay to ensure Google Calendar has synced
-        setTimeout(() => fetchGoogleEventsRef.current(true, false), 8000)
-      }
+      // No automatic background refresh; rely on manual refresh or scroll.
     }
     
     const handleTodoConversionFailed = (e) => {
@@ -1763,7 +1773,9 @@ export const CalendarProvider = ({ children }) => {
       start,
       end,
       color: eventData.color || 'blue',
-      isAllDay
+      isAllDay,
+      transparency: eventData.transparency === 'transparent' ? 'transparent' : 'opaque',
+      visibility: eventData.visibility || 'public'
     }
 
     if (recurrenceArray) {
@@ -1792,7 +1804,9 @@ export const CalendarProvider = ({ children }) => {
       viewerIsAttendee: false,
       inviteCanRespond: false,
       isInvitePending: false,
-      isOptimistic: true
+      isOptimistic: true,
+      transparency: processedData.transparency,
+      visibility: processedData.visibility
     }
 
     // Index and update refs BEFORE state update so UI sees it immediately
@@ -1856,7 +1870,9 @@ export const CalendarProvider = ({ children }) => {
         viewerIsOrganizer: true,
         viewerIsAttendee: false,
         inviteCanRespond: false,
-        isInvitePending: false
+        isInvitePending: false,
+        transparency: created?.transparency || processedData.transparency || 'opaque',
+        visibility: created?.visibility || processedData.visibility || 'public'
       }
 
       optimisticEventCacheRef.current.delete(newEvent.id)
@@ -2007,6 +2023,8 @@ export const CalendarProvider = ({ children }) => {
     if ('recurrenceMeta' in updatedData) {
       processedData.recurrenceMeta = updatedData.recurrenceMeta
     }
+    processedData.transparency = updatedData.transparency === 'transparent' ? 'transparent' : 'opaque'
+    processedData.visibility = updatedData.visibility || 'public'
 
     const recurrenceMeta = processedData.recurrenceMeta
     clearOptimisticRecurrenceInstances(id)
@@ -2066,12 +2084,16 @@ export const CalendarProvider = ({ children }) => {
       const serverEvent = response?.event || response
       if (serverEvent) {
         const resolvedLocation = resolveEventMeetingLocation(serverEvent, processedData.location)
+        const resolvedTransparency = serverEvent?.transparency || processedData.transparency
+        const resolvedVisibility = serverEvent?.visibility || processedData.visibility
         setEvents(prev => prev.map(evt => (
-          evt.id === id ? { ...evt, location: resolvedLocation } : evt
+          evt.id === id
+            ? { ...evt, location: resolvedLocation, transparency: resolvedTransparency, visibility: resolvedVisibility }
+            : evt
         )), { skipDayIndexRebuild: true })
         setSelectedEvent(prev => {
           if (!prev || prev.id !== id) return prev
-          return { ...prev, location: resolvedLocation }
+          return { ...prev, location: resolvedLocation, transparency: resolvedTransparency, visibility: resolvedVisibility }
         })
       }
       if (processedData.recurrence || processedData.recurrenceRule || processedData.recurrenceSummary) {

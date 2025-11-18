@@ -2,7 +2,6 @@ const API_URL = import.meta.env.VITE_API_URL
 
 let refreshPromise = null
 let sessionExpired = false
-let isRedirecting = false
 
 const JSON_HEADERS = { 'Content-Type': 'application/json' }
 
@@ -11,7 +10,6 @@ if (typeof window !== 'undefined') {
   const resetModuleState = () => {
     refreshPromise = null
     sessionExpired = false
-    isRedirecting = false
   }
   
   // Check if we're returning from a redirect
@@ -253,6 +251,14 @@ function toGoogleEventBody(eventData) {
 
   if (eventData.conferenceData) {
     body.conferenceData = eventData.conferenceData
+  }
+
+  if (eventData.transparency) {
+    body.transparency = eventData.transparency
+  }
+
+  if (eventData.visibility) {
+    body.visibility = eventData.visibility
   }
 
   if (eventData.recurrenceRule || eventData.recurrenceSummary || eventData.recurrenceMeta) {

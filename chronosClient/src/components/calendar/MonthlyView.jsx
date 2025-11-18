@@ -283,6 +283,7 @@ const MonthlyView = () => {
   const lastScrollTopRef = useRef(0);
   const lastScrollTsRef = useRef(0);
   const lastHeaderMonthRef = useRef(null);
+  const hasUserScrolledRef = useRef(false);
 
   // ── build weeks for current range ───────────────────────────────────────
   const weeks = useMemo(() => {
@@ -333,7 +334,7 @@ const MonthlyView = () => {
 
     let fetchTimeout = null;
 
-    const handleScroll = () => {
+    const handleScroll = (evt) => {
       const scrollTop = container.scrollTop;
       const containerHeight = container.clientHeight;
       
@@ -409,8 +410,12 @@ const MonthlyView = () => {
       lastScrollTopRef.current = scrollTop;
       lastScrollTsRef.current = now;
       const fastScroll = Math.abs(deltaY) > rowHeight * 2; // moved more than ~2 weeks quickly
+      const isUserScroll = Boolean(evt?.isTrusted);
+      if (isUserScroll) {
+        hasUserScrolledRef.current = true;
+      }
 
-      if (!initialLoading && weeks[startWeek] && weeks[endWeek - 1]) {
+      if (isUserScroll && !initialLoading && weeks[startWeek] && weeks[endWeek - 1]) {
         const rangeStart = weeks[startWeek].days[0];
         const rangeEnd = weeks[endWeek - 1].days[6];
 
@@ -468,6 +473,7 @@ const MonthlyView = () => {
 
   useEffect(() => {
     if (!displayMonthDate || initialLoading) return;
+    if (!hasUserScrolledRef.current) return;
     const yearPrefetchStart = startOfWeek(startOfMonth(subMonths(displayMonthDate, 12)));
     const yearPrefetchEnd = endOfWeek(endOfMonth(addMonths(displayMonthDate, 12)));
     const key = `year_${yearPrefetchStart.getTime()}_${yearPrefetchEnd.getTime()}`;

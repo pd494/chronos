@@ -14,7 +14,9 @@ import {
   FiRepeat,
   FiXCircle,
   FiLoader,
-  FiVideo
+  FiVideo,
+  FiLock,
+  FiUnlock
 } from 'react-icons/fi'
 import { useCalendar } from '../../context/CalendarContext'
 import { useAuth } from '../../context/AuthContext'
@@ -122,6 +124,24 @@ const getParticipantColor = (email) => {
   const index = email.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0) % colors.length;
   return colors[index];
 };
+
+const getEventNotificationOverrides = (event) => {
+  if (!event?.reminders?.overrides || !Array.isArray(event.reminders.overrides)) {
+    return []
+  }
+  return event.reminders.overrides
+    .map((override) => {
+      const minutes = Number(override?.minutes)
+      if (!Number.isFinite(minutes)) {
+        return null
+      }
+      return {
+        method: override?.method || 'popup',
+        minutes
+      }
+    })
+    .filter(Boolean)
+}
 
 const DEFAULT_MODAL_DIMENSIONS = { width: 520, height: 640 }
 const MIN_MODAL_WIDTH = 320
@@ -366,13 +386,29 @@ const EventModal = () => {
   const [inviteResponseLoading, setInviteResponseLoading] = useState(false)
   const [inviteResponseError, setInviteResponseError] = useState('')
   const [optimisticRSVPStatus, setOptimisticRSVPStatus] = useState(null)
-  const currentRSVPStatus = selectedEvent ? (optimisticRSVPStatus ?? selectedEvent.viewerResponseStatus) : null
+  
+  // Normalize response status to prevent invalid values like "ip"
+  const normalizeResponseStatus = useCallback((value) => {
+    if (!value) return null
+    const lower = String(value).toLowerCase()
+    // Only allow valid statuses
+    if (['accepted', 'declined', 'tentative', 'needsaction'].includes(lower)) {
+      return lower === 'needsaction' ? 'needsAction' : lower
+    }
+    return null
+  }, [])
+  
+  const rawStatus = selectedEvent ? (optimisticRSVPStatus ?? selectedEvent.viewerResponseStatus) : null
+  const currentRSVPStatus = normalizeResponseStatus(rawStatus)
   const deletePromptRef = useRef(null)
   const [modalPosition, setModalPosition] = useState(() => getModalPosition(view, DEFAULT_MODAL_DIMENSIONS))
   const [isFromDayClick, setIsFromDayClick] = useState(false)
   const [hasChanges, setHasChanges] = useState(false)
   const [showNotificationPicker, setShowNotificationPicker] = useState(false)
   const [notifications, setNotifications] = useState([])
+  const [showAsBusy, setShowAsBusy] = useState(true)
+  const [isPrivateEvent, setIsPrivateEvent] = useState(false)
+  const [notificationDropdownCoords, setNotificationDropdownCoords] = useState({ top: 0, left: 0, width: 200 })
   const modalRef = useRef(null)
   const lastTimedRangeRef = useRef({ start: DEFAULT_TIMED_START, end: DEFAULT_TIMED_END })
   const colorPickerRef = useRef(null)
@@ -688,16 +724,34 @@ const EventModal = () => {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [showRecurringDeletePrompt])
 
+  const updateNotificationDropdownPosition = useCallback(() => {
+    if (!notificationTriggerRef.current) return
+    const rect = notificationTriggerRef.current.getBoundingClientRect()
+    setNotificationDropdownCoords({
+      top: rect.bottom + window.scrollY + 8,
+      left: rect.left + window.scrollX,
+      width: Math.max(220, rect.width + 40)
+    })
+  }, [])
+
   useEffect(() => {
     if (!showNotificationPicker) return
+    updateNotificationDropdownPosition()
     const handleClick = (event) => {
       if (notificationTriggerRef.current && notificationTriggerRef.current.contains(event.target)) return
       if (notificationPickerRef.current && notificationPickerRef.current.contains(event.target)) return
       setShowNotificationPicker(false)
     }
+    const handleResize = () => updateNotificationDropdownPosition()
+    window.addEventListener('resize', handleResize)
+    window.addEventListener('scroll', handleResize, true)
     document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [showNotificationPicker])
+    return () => {
+      window.removeEventListener('resize', handleResize)
+      window.removeEventListener('scroll', handleResize, true)
+      document.removeEventListener('mousedown', handleClick)
+    }
+  }, [showNotificationPicker, updateNotificationDropdownPosition])
 
   useEffect(() => {
     return () => {
@@ -919,11 +973,15 @@ const EventModal = () => {
     setRecurrenceState(cloneRecurrenceState(recurrenceDetails.state))
     setRecurrenceDraft(cloneRecurrenceState(recurrenceDetails.state))
     setRecurrenceSummary(recurrenceDetails.summary)
+    const initialBusyState = selectedEvent ? selectedEvent.transparency !== 'transparent' : true
+    const initialPrivacyState = selectedEvent ? selectedEvent.visibility === 'private' : false
+    setShowAsBusy(initialBusyState)
+    setIsPrivateEvent(initialPrivacyState)
     setShowRecurrencePicker(false)
     
     
     // Set notifications from event or default
-    const initialNotifications = selectedEvent?.reminders?.overrides || selectedEvent?.reminders?.useDefault ? [] : [];
+    const initialNotifications = getEventNotificationOverrides(selectedEvent);
     setNotifications(initialNotifications);
     
     // Store initial values for change detection
@@ -940,7 +998,9 @@ const EventModal = () => {
       eventSubtitle: initialSubtitle,
       participants: initialParticipants,
       recurrenceRule: selectedEvent?.recurrenceRule || '',
-      notifications: initialNotifications
+      notifications: initialNotifications,
+      showAsBusy: initialBusyState,
+      isPrivateEvent: initialPrivacyState
     };
     setHasChanges(false);
     setParticipants(initialParticipants);
@@ -1015,9 +1075,16 @@ const EventModal = () => {
     const participantsChanged = 
       JSON.stringify(participants.sort()) !== JSON.stringify((initial.participants || []).sort());
     
+    const normalizeMinutes = (notification) => {
+      if (!notification) return 0
+      const parsed = Number(notification.minutes)
+      return Number.isFinite(parsed) ? parsed : 0
+    }
+    const sortedNotifications = (list = []) =>
+      [...list].sort((a, b) => normalizeMinutes(a) - normalizeMinutes(b))
     const notificationsChanged =
-      JSON.stringify(notifications.sort((a, b) => a.minutes - b.minutes)) !== 
-      JSON.stringify((initial.notifications || []).sort((a, b) => a.minutes - b.minutes));
+      JSON.stringify(sortedNotifications(notifications)) !==
+      JSON.stringify(sortedNotifications(initial.notifications || []));
     
     const anchorDate = buildDateWithTime(eventDate, timeStart) || new Date()
     const recurrencePayload = buildRecurrencePayload(recurrenceState, anchorDate)
@@ -1036,7 +1103,9 @@ const EventModal = () => {
       location !== initial.location ||
       participantsChanged ||
       notificationsChanged ||
-      recurrenceRule !== initialRecurrenceRule;
+      recurrenceRule !== initialRecurrenceRule ||
+      showAsBusy !== initial.showAsBusy ||
+      isPrivateEvent !== initial.isPrivateEvent;
     
     setHasChanges(changed);
     
@@ -1057,7 +1126,7 @@ const EventModal = () => {
         setShowNotifyMembers(true);
       }
     }
-  }, [selectedEvent, eventName, eventSubtitle, eventDate, eventEndDate, timeStart, timeEnd, color, isAllDay, location, participants, notifications, recurrenceState, buildDateWithTime]);
+  }, [selectedEvent, eventName, eventSubtitle, eventDate, eventEndDate, timeStart, timeEnd, color, isAllDay, location, participants, notifications, recurrenceState, buildDateWithTime, showAsBusy, isPrivateEvent]);
   
 
   // kept for backward compat (no-op now that we use portal)
@@ -1330,7 +1399,9 @@ const EventModal = () => {
       reminders: notifications.length > 0 ? {
         useDefault: false,
         overrides: notifications
-      } : { useDefault: false, overrides: [] }
+      } : { useDefault: false, overrides: [] },
+      transparency: showAsBusy ? 'opaque' : 'transparent',
+      visibility: isPrivateEvent ? 'private' : 'public'
     };
 
     // Only create conference data if we don't already have a Google Meet link
@@ -1568,20 +1639,20 @@ const EventModal = () => {
       {/* No overlay - calendar always stays in focus */}
       
       {/* Popover Modal */}
-      <div
-        ref={modalRef}
-        className={`fixed bg-white shadow-xl z-50 transition-all duration-200 ease-out
-                   ${internalVisible ? 'opacity-100 scale-100' : 'opacity-0 scale-95 pointer-events-none'}`}
-        style={{
-          top: `${modalPosition.top ?? 0}px`,
-          left: `${modalPosition.left ?? 0}px`,
-          width: `${modalPosition.width ?? DEFAULT_MODAL_DIMENSIONS.width}px`,
-          maxHeight: `${modalPosition.maxHeight ?? DEFAULT_MODAL_DIMENSIONS.height}px`,
-          border: '1px solid #e5e7eb',
-          borderRadius: '22px',
-          overflowY: showSuggestions ? 'visible' : 'auto',
-          overflowX: 'visible'
-        }}
+        <div
+          ref={modalRef}
+          className={`fixed bg-white shadow-xl z-50 transition-all duration-200 ease-out
+                    ${internalVisible ? 'opacity-100 scale-100' : 'opacity-0 scale-95 pointer-events-none'}`}
+          style={{
+            top: `${modalPosition.top ?? 0}px`,
+            left: `${modalPosition.left ?? 0}px`,
+            width: `${modalPosition.width ?? DEFAULT_MODAL_DIMENSIONS.width}px`,
+            border: '1px solid #e5e7eb',
+            borderRadius: '22px',
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden'
+          }}
       >
         {/* Pointer arrow - left side */}
         {modalPosition.pointerSide === 'left' && (
@@ -1648,9 +1719,10 @@ const EventModal = () => {
               handleSubmit()
             }
           }}
-          className="px-0 py-0"
+          className="px-0 py-0 flex flex-col"
         >
-          <div className="space-y-0">
+          <div>
+            <div className="space-y-0">
             {/* Shared edit notice for attendee edits */}
             {selectedEvent && selectedEvent.viewerIsAttendee && !selectedEvent.viewerIsOrganizer && (
               <div className="mx-4 mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 shadow-sm">
@@ -1675,6 +1747,7 @@ const EventModal = () => {
                 onChange={(e) => setEventName(e.target.value)}
                 placeholder="Add title"
                 className="w-full px-0 py-1 text-xl font-semibold text-gray-900 border-none focus:outline-none focus:ring-0"
+                style={{ letterSpacing: '0.01em' }}
               />
               <div className="relative">
                 <textarea
@@ -2495,24 +2568,23 @@ const EventModal = () => {
                 </div>
               </div>
             </div>
-                
-            {/* Bottom action bar with icons */}
-            <div className="px-4 py-2.5 flex items-center gap-4 border-t border-gray-100">
-              {/* Color picker */}
-              <div className="relative" ref={colorPickerRef}>
+          </div>
+          <div className="z-20 bg-white border-t border-gray-100 px-4 py-3 flex flex-col gap-2">
+            <div className="flex items-center gap-2">
+              <div className="relative">
                 <button
                   type="button"
                   onClick={() => setShowColorPicker(!showColorPicker)}
-                  className="p-2 bg-gray-50 border border-gray-200 rounded-full hover:bg-gray-100 transition-colors"
+                  className="px-2 py-2 bg-gray-50 border border-gray-200 rounded-full hover:bg-gray-100 transition-colors"
                   title="Change color"
                 >
-                  <div 
-                    className="w-5 h-5 rounded-full"
+                  <div
+                    className="w-4 h-4 rounded-full"
                     style={{ backgroundColor: getColorHex(color) }}
                   />
                 </button>
                 {showColorPicker && (
-                  <div className="absolute bottom-full left-0 mb-2 z-50 bg-white border border-gray-200 rounded-xl shadow-xl p-3">
+                  <div className="absolute top-full left-0 mt-2 z-50 bg-white border border-gray-200 rounded-xl shadow-xl p-3">
                     <div className="grid grid-cols-4 gap-2">
                       {CATEGORY_COLORS.map((colorHex) => (
                         <button
@@ -2532,126 +2604,115 @@ const EventModal = () => {
                   </div>
                 )}
               </div>
-
-              {/* Notification icon */}
-              <div className="relative" ref={notificationPickerRef}>
-                      <button
-                        type="button"
-              onClick={() => setShowNotificationPicker(!showNotificationPicker)}
-              className="p-2 bg-gray-50 border border-gray-200 rounded-full text-gray-500 hover:bg-gray-100 transition-colors relative"
-            title="Add notification"
-              ref={notificationTriggerRef}
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
-            </svg>
-              {notifications.length > 0 && (
-                <div className="absolute -top-1 -right-1 w-4 h-4 bg-blue-600 text-white text-xs rounded-full flex items-center justify-center">
-                  {notifications.length}
-                </div>
-              )}
-                      </button>
-            {showNotificationPicker && (
-              <div className="absolute bottom-full left-0 mb-2 z-50 bg-white rounded-lg shadow-lg border border-gray-200 py-1 min-w-[200px] max-h-80 overflow-y-auto">
-                {notificationOptions.map((option) => {
-                  const isSelected = option.minutes === null 
-                    ? notifications.length === 0
-                    : notifications.some(n => n.minutes === option.minutes);
-                  return (
-                      <button
-                      key={option.label}
-                        type="button"
-                      onClick={() => handleAddNotification(option.minutes)}
-                      className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-50 ${
-                        isSelected ? 'bg-red-50 text-red-700 font-medium' : 'text-gray-700'
-                      }`}
-                    >
-                      {isSelected && option.minutes !== null && (
-                        <span className="mr-2">✓</span>
-                      )}
-                      {option.label}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          <div className="flex-1"></div>
-
-          {/* Show Going status for shared events only */}
-          {selectedEvent?.inviteCanRespond && (
-            <div className="relative">
-                                <button
-                                  type="button"
-                onClick={() => setShowNotifyMembers(!showNotifyMembers)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm ${
-                  currentRSVPStatus === 'accepted' 
-                    ? 'bg-green-100 text-green-700'
-                    : currentRSVPStatus === 'declined'
-                    ? 'bg-red-100 text-red-700'
-                    : 'bg-gray-100 text-gray-600'
-                }`}
+              <button
+                type="button"
+                onClick={() => setShowNotificationPicker(prev => !prev)}
+                className="px-2 py-2 bg-gray-50 border border-gray-200 rounded-full text-gray-500 hover:bg-gray-100 transition-colors"
+                title="Add notification"
+                ref={notificationTriggerRef}
               >
-                <div className={`w-2 h-2 rounded-full ${
-                  currentRSVPStatus === 'accepted' 
-                    ? 'bg-green-500'
-                    : currentRSVPStatus === 'declined'
-                    ? 'bg-red-500'
-                    : 'bg-gray-400'
-                }`}></div>
-                <span>
-                  {currentRSVPStatus === 'accepted' ? 'Going' : currentRSVPStatus === 'declined' ? 'Not going' : 'Maybe'}
-                </span>
-                <FiChevronDown size={14} />
-                                </button>
-              {showNotifyMembers && (
-                <div className="absolute bottom-full right-0 mb-2 z-50 bg-white rounded-lg shadow-lg border border-gray-200 py-1 min-w-[140px]">
-                  {RSVP_OPTIONS.map((option) => (
-                      <button
-                      key={option.value}
-                        type="button"
-                        onClick={() => {
-                        handleInviteResponse(option.value);
-                        setShowNotifyMembers(false);
-                      }}
-                      className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 ${
-                        currentRSVPStatus === option.value ? 'font-semibold' : ''
-                      }`}
-                    >
-                        {option.label}
-                      </button>
-                  ))}
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                </svg>
+                {notifications.length > 0 && (
+                  <div className="absolute -top-1 -right-1 w-4 h-4 bg-blue-600 text-white text-xs rounded-full flex items-center justify-center">
+                    {notifications.length}
+                  </div>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowAsBusy(prev => !prev)}
+                className="flex items-center gap-1 px-3 py-1 rounded-full border border-gray-200 text-sm font-normal text-gray-700 hover:border-gray-300 transition-colors"
+                title={showAsBusy ? 'Show as busy' : 'Show as free'}
+                style={{ minWidth: 64 }}
+              >
+                <span className={`w-2 h-2 rounded-full ${showAsBusy ? 'bg-red-500' : 'bg-green-500'}`} />
+                <span>{showAsBusy ? 'Busy' : 'Free'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsPrivateEvent(prev => !prev)}
+                className={`p-2 rounded-full border transition-colors ${
+                  isPrivateEvent ? 'border-gray-900 text-gray-900' : 'border-gray-300 text-gray-500 hover:border-gray-400'
+                }`}
+                aria-pressed={isPrivateEvent}
+                title={isPrivateEvent ? 'Private event' : 'Public event'}
+              >
+                {isPrivateEvent ? <FiLock size={16} /> : <FiUnlock size={16} />}
+              </button>
+              <div className="flex-1"></div>
+              {selectedEvent?.inviteCanRespond && (
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setShowNotifyMembers(prev => !prev)}
+                    className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-sm shrink-0 ${
+                      currentRSVPStatus === 'accepted'
+                        ? 'bg-green-100 text-green-700'
+                        : currentRSVPStatus === 'declined'
+                        ? 'bg-red-100 text-red-700'
+                        : 'bg-gray-100 text-gray-600'
+                    }`}
+                  >
+                    <div className={`w-2 h-2 rounded-full ${
+                      currentRSVPStatus === 'accepted'
+                        ? 'bg-green-500'
+                        : currentRSVPStatus === 'declined'
+                        ? 'bg-red-500'
+                        : 'bg-gray-400'
+                    }`}></div>
+                    <span className="whitespace-nowrap">
+                      {currentRSVPStatus === 'accepted' ? 'Going' : currentRSVPStatus === 'declined' ? 'Not going' : 'Maybe'}
+                    </span>
+                    <FiChevronDown size={14} />
+                  </button>
+                  {showNotifyMembers && (
+                    <div className="absolute bottom-full right-0 mb-2 z-50 bg-white rounded-lg shadow-lg border border-gray-200 py-1 min-w-[140px]">
+                      {RSVP_OPTIONS.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => {
+                            handleInviteResponse(option.value);
+                            setShowNotifyMembers(false);
+                          }}
+                          className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 ${
+                            currentRSVPStatus === option.value ? 'font-semibold' : ''
+                          }`}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
-            </div>
-          )}
-
               {selectedEvent && (
-                <button 
+                <button
                   type="button"
                   onClick={handleDelete}
-              className="px-3 py-1.5 text-sm text-red-600 border border-red-200 rounded-lg hover:bg-red-50 transition-colors"
+                  className="px-3 py-1 text-sm text-red-600 border border-red-200 rounded-lg hover:bg-red-50 transition-colors"
                   ref={deleteButtonRef}
                 >
-              Delete event
+                  Delete event
                 </button>
               )}
             </div>
-
-        {/* Notify Members Checkbox */}
-        {participants.length > 0 && !selectedEvent?.inviteCanRespond && (
-          <div className="px-4 pb-3 flex items-center">
-            <input 
-              type="checkbox" 
-              checked={showNotifyMembers}
-              onChange={(e) => setShowNotifyMembers(e.target.checked)}
-              className="h-3 w-3 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-            />
-            <span className="ml-2 text-xs text-gray-600">Notify members</span>
+            {participants.length > 0 && !selectedEvent?.inviteCanRespond && (
+              <div className="flex items-center gap-2 text-xs text-gray-600">
+                <input
+                  type="checkbox"
+                  checked={showNotifyMembers}
+                  onChange={(e) => setShowNotifyMembers(e.target.checked)}
+                  className="h-3 w-3 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                />
+                <span>Notify members</span>
+              </div>
+            )}
           </div>
-        )}
         </form>
+
 
         {showRecurringDeletePrompt && typeof document !== 'undefined' && createPortal(
           <div

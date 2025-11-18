@@ -91,6 +91,7 @@ export const AuthProvider = ({ children }) => {
   const hasCachedUserRef = useRef(Boolean(initialStoredUser))
   const currentUserRef = useRef(initialStoredUser)
   const isSyncingSessionRef = useRef(false)
+  const forcedConsentAttemptRef = useRef(false)
   const lastSessionSignatureRef = useRef(null)
   const lastCheckAuthRef = useRef(0)
   const checkAuthCooldownMs = 30000 // 30 seconds cooldown between checkAuth calls
@@ -114,6 +115,7 @@ export const AuthProvider = ({ children }) => {
       hasCachedUserRef.current = false
       hasProcessedOAuthRef.current = false
       lastSessionSignatureRef.current = null
+      lastCheckAuthRef.current = 0 // Reset cooldown on logout to allow immediate checkAuth on next login
     }
   }, [])
 
@@ -134,6 +136,32 @@ export const AuthProvider = ({ children }) => {
       console.warn('Failed to clear Supabase session storage:', error)
     }
   }, [])
+
+  const startGoogleOAuth = useCallback(
+    async ({ forceConsent = false } = {}) => {
+      if (typeof window === 'undefined') {
+        throw new Error('OAuth login is only available in the browser')
+      }
+      const hasConsent = getGoogleConsentFlag()
+      const shouldForceConsent = forceConsent || !hasConsent
+      const promptValues = shouldForceConsent ? 'consent select_account' : 'select_account'
+      const queryParams = {
+        access_type: 'offline',
+        prompt: promptValues,
+        include_granted_scopes: 'true'
+      }
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: `${window.location.origin}/`,
+          scopes: GOOGLE_SCOPES.join(' '),
+          queryParams
+        }
+      })
+      if (error) throw error
+    },
+    []
+  )
 
   useEffect(() => {
     if (user?.has_google_credentials) {
@@ -159,7 +187,7 @@ export const AuthProvider = ({ children }) => {
 
         if (hasExistingUser && !hasProviderTokens) {
           try {
-            await checkAuth()
+            await checkAuth(true) // Force fresh check when switching accounts
           } finally {
             clearSupabaseSession()
           }
@@ -245,20 +273,38 @@ export const AuthProvider = ({ children }) => {
             
       const providerAccessToken = session.provider_token
       const providerRefreshToken = session.provider_refresh_token
+      const alreadyHasCredentials = Boolean(currentUserRef.current?.has_google_credentials)
 
-      if (providerAccessToken && providerRefreshToken) {
-        const approxExpiry = new Date(Date.now() + 55 * 60 * 1000).toISOString()
-        try {
-          await calendarApi.saveCredentials({
-            access_token: providerAccessToken,
-            refresh_token: providerRefreshToken,
-            expires_at: approxExpiry
-          })
-          setGoogleConsentFlag(true)
-        } catch (credError) {
-          console.error('Failed to save Google credentials:', credError)
-          setGoogleConsentFlag(false)
+      if (!providerAccessToken || !providerRefreshToken) {
+        if (alreadyHasCredentials) {
+          forcedConsentAttemptRef.current = false
+          return
         }
+        if (forcedConsentAttemptRef.current) {
+          console.error('Unable to obtain Google refresh token even after forcing consent.')
+          return
+        }
+        forcedConsentAttemptRef.current = true
+        setGoogleConsentFlag(false)
+        try {
+          await supabase.auth.signOut({ scope: 'local' })
+        } catch (_) {}
+        await startGoogleOAuth({ forceConsent: true })
+        return
+      }
+
+      forcedConsentAttemptRef.current = false
+      const approxExpiry = new Date(Date.now() + 55 * 60 * 1000).toISOString()
+      try {
+        await calendarApi.saveCredentials({
+          access_token: providerAccessToken,
+          refresh_token: providerRefreshToken,
+          expires_at: approxExpiry
+        })
+        setGoogleConsentFlag(true)
+      } catch (credError) {
+        console.error('Failed to save Google credentials:', credError)
+        setGoogleConsentFlag(false)
       }
     } catch (error) {
       persistUser(null)
@@ -282,7 +328,9 @@ export const AuthProvider = ({ children }) => {
     }
     
     const hadCachedUser = hasCachedUserRef.current
-    if (!hadCachedUser) {
+    // When forcing (e.g., account switch), always show loading state
+    const shouldSetLoading = !hadCachedUser || force
+    if (shouldSetLoading) {
       setLoading(true)
     }
     
@@ -318,29 +366,18 @@ export const AuthProvider = ({ children }) => {
         console.error('Auth verification failed:', error)
       }
     } finally {
-      if (!hadCachedUser) {
+      if (shouldSetLoading) {
         setLoading(false)
       }
     }
   }, [persistUser])
 
-  const login = async () => {
-    const hasConsent = getGoogleConsentFlag()
-    const queryParams = {
-      access_type: 'offline',
-      prompt: hasConsent ? 'select_account' : 'consent',
-      include_granted_scopes: 'true'
-    }
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: `${window.location.origin}/`,
-        scopes: GOOGLE_SCOPES.join(' '),
-        queryParams
-      }
-    })
-    if (error) throw error
-  }
+  const login = useCallback(
+    async (options = {}) => {
+      await startGoogleOAuth({ forceConsent: Boolean(options.forceConsent) })
+    },
+    [startGoogleOAuth]
+  )
 
   const logout = async () => {
     if (isLoggingOutRef.current) return
