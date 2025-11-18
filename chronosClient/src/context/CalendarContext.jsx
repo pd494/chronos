@@ -126,11 +126,25 @@ const safeJsonParse = (value, fallback = null) => {
 
 const resolveEventMeetingLocation = (apiEvent, fallback = '') => {
   if (!apiEvent) return fallback || ''
+  
+  // Priority order:
+  // 1. conferenceData.hangoutLink (most reliable for Google Meet)
+  // 2. Direct hangoutLink field (legacy support)
+  // 3. conferenceData.entryPoints video URI
+  // 4. location field (fallback)
+  const conferenceHangout = apiEvent?.conferenceData?.hangoutLink
+  if (conferenceHangout) return conferenceHangout
+  
+  const directHangout = apiEvent?.hangoutLink
+  if (directHangout) return directHangout
+  
   const entryPoints = Array.isArray(apiEvent?.conferenceData?.entryPoints)
     ? apiEvent.conferenceData.entryPoints
     : []
   const preferredEntryPoint = entryPoints.find(ep => ep?.entryPointType === 'video' && ep?.uri)
-  return apiEvent?.hangoutLink || preferredEntryPoint?.uri || apiEvent?.location || fallback || ''
+  if (preferredEntryPoint?.uri) return preferredEntryPoint.uri
+  
+  return apiEvent?.location || fallback || ''
 }
 
 const normalizeResponseStatus = (value) => {
@@ -570,6 +584,10 @@ export const CalendarProvider = ({ children }) => {
                 const todoId = ev.todoId || ev.todo_id
 
                 const cachedViewerResponse = normalizeResponseStatus(ev.viewerResponseStatus)
+                // Ensure location is preserved from cache - it should already have the resolved meeting link
+                // but if it doesn't, try to resolve it from conferenceData if available
+                const resolvedLocation = ev.location || resolveEventMeetingLocation(ev, '')
+                
                 cachedEvents.push({
                   id: ev.id,
                   title: ev.title || ev.summary || 'Untitled',
@@ -579,7 +597,7 @@ export const CalendarProvider = ({ children }) => {
                   isGoogleEvent: true,
                   calendar_id: ev.calendar_id,
                   isAllDay: Boolean(ev.isAllDay),
-                  location: ev.location || '',
+                  location: resolvedLocation,
                   participants: ev.participants || [],
                   attendees: ev.attendees || [],
                   todoId: todoId ? String(todoId) : undefined,
@@ -796,6 +814,20 @@ export const CalendarProvider = ({ children }) => {
                 if (ev.isOptimistic || isPendingSync) {
                   const carry = isPendingSync && !ev.isPendingSync ? { ...ev, isPendingSync: true } : ev
                   next.push(carry)
+                } else if (ev.isGoogleEvent) {
+                  // For Google events in this time range that are not in the incoming data,
+                  // they have likely been deleted, so remove them
+                  eventIdsRef.current.delete(ev.id)
+                  pendingSyncEventIdsRef.current.delete(ev.id)
+                  unlinkEvent(ev.id)
+                  removeEventFromAllSnapshots(ev.id)
+                  for (const [key, arr] of eventsByDayRef.current.entries()) {
+                    const filtered = arr.filter(item => item.id !== ev.id)
+                    if (filtered.length !== arr.length) {
+                      eventsByDayRef.current.set(key, filtered)
+                    }
+                  }
+                  // Don't add to next - event is deleted
                 } else {
                   // Do not aggressively remove existing events just
                   // because they are missing from this segment; keep them.
@@ -873,6 +905,9 @@ export const CalendarProvider = ({ children }) => {
                 color: ev.color,
                 calendar_id: ev.calendar_id,
                 isAllDay: ev.isAllDay,
+                location: ev.location || '',
+                participants: ev.participants || [],
+                attendees: ev.attendees || [],
                 todoId: ev.todoId,
                 recurrenceRule: ev.recurrenceRule || null,
                 recurrenceSummary: ev.recurrenceSummary || null,
@@ -1412,7 +1447,11 @@ export const CalendarProvider = ({ children }) => {
             color: ev.color,
             calendar_id: ev.calendar_id,
             todoId: ev.todoId,
-            isAllDay: Boolean(ev.isAllDay)
+            isAllDay: Boolean(ev.isAllDay),
+            location: ev.location || '',
+            participants: ev.participants || [],
+            isOptimistic: Boolean(ev.isOptimistic),
+            isPendingSync: Boolean(ev.isPendingSync)
           })
           if (list.length >= max) break
         }

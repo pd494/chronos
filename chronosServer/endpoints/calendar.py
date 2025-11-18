@@ -121,6 +121,9 @@ async def create_event(
     body = await request.json()
     calendar_id = body.get("calendar_id", "primary")
     event_data = body.get("event_data")
+    logger.info(f"Received event_data with conferenceData: {bool(event_data.get('conferenceData'))}")
+    if event_data.get('conferenceData'):
+        logger.info(f"conferenceData content: {event_data['conferenceData']}")
     event_data = _normalize_event_location(event_data)
     send_notifications = body.get("send_notifications", False)
     

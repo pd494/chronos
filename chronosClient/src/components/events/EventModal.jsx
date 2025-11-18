@@ -309,9 +309,34 @@ const EventModal = () => {
   const [location, setLocation] = useState('')
   const [conferenceRequestId, setConferenceRequestId] = useState(null)
   const [tempEventId, setTempEventId] = useState(null)
+  const tempEventIdRef = useRef(null)
+  useEffect(() => {
+    tempEventIdRef.current = tempEventId
+  }, [tempEventId])
   const [isGeneratingMeeting, setIsGeneratingMeeting] = useState(false)
+  const cleanupTemporaryEvent = useCallback(async (eventId = tempEventIdRef.current) => {
+    if (!eventId) return
+    try {
+      await calendarApi.deleteEvent(eventId, 'primary')
+    } catch (err) {
+      console.error('Failed to delete temporary event:', err)
+    } finally {
+      setTempEventId(current => (current === eventId ? null : current))
+      if (tempEventIdRef.current === eventId) {
+        tempEventIdRef.current = null
+      }
+    }
+  }, [])
   const locationInputRef = useRef(null)
   const locationContainerRef = useRef(null)
+  const handlePlaceSelection = useCallback((address) => {
+    setLocation(address)
+    setConferenceRequestId(null)
+    if (!address.includes('meet.google.com')) {
+      cleanupTemporaryEvent()
+    }
+  }, [cleanupTemporaryEvent])
+
   const {
     predictions,
     showSuggestions,
@@ -319,17 +344,7 @@ const EventModal = () => {
     getPlacePredictions,
     selectPlace,
     setShowSuggestions,
-  } = usePlacesAutocomplete(locationInputRef, (address) => {
-    setLocation(address)
-    setConferenceRequestId(null)
-    // Clear temp event if user selects a place (not a Google Meet link)
-    if (tempEventId && !address.includes('meet.google.com')) {
-      calendarApi.deleteEvent(tempEventId, 'primary').catch(err => {
-        console.error('Failed to delete temporary event:', err)
-      })
-      setTempEventId(null)
-    }
-  })
+  } = usePlacesAutocomplete(locationInputRef, handlePlaceSelection)
   const [internalVisible, setInternalVisible] = useState(false)
   const [participants, setParticipants] = useState([])
   const [expandedChips, setExpandedChips] = useState(new Set())
@@ -407,6 +422,9 @@ const EventModal = () => {
     setShowSuggestions(false)
     
     try {
+      if (tempEventId) {
+        await cleanupTemporaryEvent()
+      }
       // Get start and end dates for the temporary event
       let startDate, endDate
       if (isAllDay) {
@@ -422,12 +440,16 @@ const EventModal = () => {
 
       // Create a temporary event with conference data
       const requestId = generateConferenceRequestId()
-      const fullName = user?.full_name || user?.name || user?.email || 'User'
+      const baseTitle =
+        eventName?.trim() ||
+        selectedEvent?.title ||
+        'New Event'
       const tempEventData = {
-        title: `Meet with ${fullName}`,
+        title: baseTitle,
         start: startDate,
         end: endDate,
         isAllDay,
+        // Don't set location - let Google generate the hangoutLink from conferenceData
         conferenceData: {
           createRequest: {
             requestId: requestId,
@@ -437,22 +459,39 @@ const EventModal = () => {
           }
         }
       }
+      
+      console.log('Creating temp event with data:', tempEventData)
 
       const response = await calendarApi.createEvent(tempEventData, 'primary', false)
       
       // The backend returns {event: {...}}, so we need to access response.event
       const createdEvent = response.event || response
       
+      console.log('Created event response:', createdEvent)
+      console.log('hangoutLink:', createdEvent.hangoutLink)
+      console.log('conferenceData:', createdEvent.conferenceData)
+      
       // Extract the Google Meet link from the response
       let meetLink = ''
+      
+      // Check hangoutLink first (direct field)
       if (createdEvent.hangoutLink) {
         meetLink = createdEvent.hangoutLink
-      } else if (createdEvent.conferenceData?.entryPoints) {
+        console.log('Found meeting link in hangoutLink:', meetLink)
+      } 
+      // Check conferenceData.hangoutLink
+      else if (createdEvent.conferenceData?.hangoutLink) {
+        meetLink = createdEvent.conferenceData.hangoutLink
+        console.log('Found meeting link in conferenceData.hangoutLink:', meetLink)
+      }
+      // Check conferenceData.entryPoints
+      else if (createdEvent.conferenceData?.entryPoints) {
         const videoEntry = createdEvent.conferenceData.entryPoints.find(
-          ep => ep.entryPointType === 'video' || ep.uri?.includes('meet.google.com')
+          ep => ep.entryPointType === 'video' && ep.uri
         )
-        if (videoEntry) {
+        if (videoEntry?.uri) {
           meetLink = videoEntry.uri
+          console.log('Found meeting link in entryPoints:', meetLink)
         }
       }
 
@@ -461,7 +500,8 @@ const EventModal = () => {
         setTempEventId(createdEvent.id)
         setConferenceRequestId(null) // Clear this since we already have the link
       } else {
-        console.error('No meeting link found in response:', createdEvent)
+        console.error('No meeting link found in response')
+        console.error('Full response:', JSON.stringify(createdEvent, null, 2))
         setLocation('Failed to generate meeting link')
       }
     } catch (error) {
@@ -668,6 +708,12 @@ const EventModal = () => {
     }
   }, [])
   
+  useEffect(() => {
+    return () => {
+      cleanupTemporaryEvent()
+    }
+  }, [cleanupTemporaryEvent])
+  
   // Close modal when clicking outside (but not on events)
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -867,12 +913,7 @@ const EventModal = () => {
     setLocation(initialLocation);
     setConferenceRequestId(null);
     // Clean up temporary event if modal is being reset
-    if (tempEventId) {
-      calendarApi.deleteEvent(tempEventId, 'primary').catch(err => {
-        console.error('Failed to delete temporary event:', err)
-      })
-      setTempEventId(null)
-    }
+    cleanupTemporaryEvent()
     setIsGeneratingMeeting(false)
     setEventSubtitle(initialSubtitle);
     setRecurrenceState(cloneRecurrenceState(recurrenceDetails.state))
@@ -906,7 +947,7 @@ const EventModal = () => {
     setExpandedChips(new Set())
     setParticipantEmail('')
 
-  }, [selectedEvent])
+  }, [selectedEvent, cleanupTemporaryEvent])
 
   useEffect(() => {
     setInviteResponseLoading(false)
@@ -1332,19 +1373,13 @@ const EventModal = () => {
       action = updateEvent(selectedEvent.id, eventData)
       // Clean up temporary event if it exists (shouldn't happen when editing, but just in case)
       if (tempEventId) {
-        calendarApi.deleteEvent(tempEventId, 'primary').catch(err => {
-          console.error('Failed to delete temporary event:', err)
-        })
-        setTempEventId(null)
+        cleanupTemporaryEvent()
       }
     } else {
       action = createEvent(eventData)
       // Clean up temporary event if it exists (shouldn't happen when creating new, but just in case)
       if (tempEventId) {
-        calendarApi.deleteEvent(tempEventId, 'primary').catch(err => {
-          console.error('Failed to delete temporary event:', err)
-        })
-        setTempEventId(null)
+        cleanupTemporaryEvent()
       }
     }
 
@@ -1836,11 +1871,8 @@ const EventModal = () => {
                     onChange={(e) => {
                       const value = e.target.value
                       // Clear temp event if user manually edits location (and it's not the Google Meet link we just set)
-                      if (tempEventId && value !== location && !value.includes('meet.google.com')) {
-                        calendarApi.deleteEvent(tempEventId, 'primary').catch(err => {
-                          console.error('Failed to delete temporary event:', err)
-                        })
-                        setTempEventId(null)
+                      if (value !== location && !value.includes('meet.google.com')) {
+                        cleanupTemporaryEvent()
                       }
                       setLocation(value)
                       setConferenceRequestId(null)

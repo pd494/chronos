@@ -53,17 +53,36 @@ def _isoformat_utc(value: datetime | None):
 
 
 def _resolve_event_meeting_location(event: dict, fallback: str = '') -> str:
+    """
+    Resolves the meeting location with proper priority:
+    1. conferenceData.hangoutLink (most reliable for Google Meet)
+    2. Direct hangoutLink field (legacy support)
+    3. conferenceData.entryPoints video URI
+    4. location field (fallback)
+    """
     if not event:
         return fallback or ''
-    location = (event.get('location') or '').strip()
-    if location:
-        return location
+    
+    # Priority 1: conferenceData.hangoutLink
     conference = event.get('conferenceData') or {}
+    conference_hangout = conference.get('hangoutLink')
+    if conference_hangout:
+        return conference_hangout.strip()
+    
+    # Priority 2: Direct hangoutLink field
+    direct_hangout = event.get('hangoutLink')
+    if direct_hangout:
+        return direct_hangout.strip()
+    
+    # Priority 3: conferenceData.entryPoints video URI
     entry_points = conference.get('entryPoints') or []
     for entry in entry_points:
         if entry.get('entryPointType') == 'video' and entry.get('uri'):
-            return entry['uri']
-    return conference.get('hangoutLink') or fallback or ''
+            return entry['uri'].strip()
+    
+    # Priority 4: location field
+    location = (event.get('location') or '').strip()
+    return location or fallback or ''
 
 
 class GoogleCalendarService:
@@ -72,6 +91,49 @@ class GoogleCalendarService:
         self.supabase = supabase
         self.credentials = None
         self.service = None
+    
+    def _append_conference_data_version(self, request):
+        """
+        Ensures conference data (Google Meet links) are included in GET/list responses.
+        The discovery document used by googleapiclient doesn't expose conferenceDataVersion
+        for list/get, so we append it manually to the request URI.
+        """
+        if not request:
+            return request
+        uri = getattr(request, "uri", "")
+        if not uri or "conferenceDataVersion=" in uri:
+            return request
+        separator = "&" if "?" in uri else "?"
+        try:
+            request.uri = f"{uri}{separator}conferenceDataVersion=1"
+        except Exception as exc:
+            logger.debug("Unable to append conferenceDataVersion: %s", exc)
+        return request
+    
+    def _execute_with_retry(self, action, description: str, retries: int = 2):
+        last_error = None
+        for attempt in range(1, retries + 1):
+            try:
+                service = self.get_service()
+                return action(service)
+            except HttpError:
+                raise
+            except Exception as exc:
+                last_error = exc
+                logger.warning(
+                    "Transient error during %s (attempt %s/%s): %s",
+                    description,
+                    attempt,
+                    retries,
+                    exc
+                )
+                # Reset service so next attempt builds a fresh HTTP connection
+                self.service = None
+        logger.error("Failed %s after %s attempts: %s", description, retries, last_error)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Google Calendar temporarily unavailable. Please try again."
+        )
     
     def get_credentials(self) -> Credentials:
         if self.credentials is None:
@@ -169,22 +231,31 @@ class GoogleCalendarService:
     
     def fetch_events(self, time_min: str, time_max: str, calendar_ids: list = None):
         try:
-            service = self.get_service()
-
             if not calendar_ids:
                 calendar_ids = ['primary']
 
             all_events = []
             for calendar_id in calendar_ids:
-                events_result = service.events().list(
-                    calendarId=calendar_id,
-                    timeMin=time_min,
-                    timeMax=time_max,
-                    singleEvents=True,
-                    orderBy='startTime',
-                    fields='items(id,summary,description,start,end,recurrence,recurringEventId,originalStartTime,extendedProperties,status,created,updated,attendees(displayName,email,responseStatus,self,optional),organizer(displayName,email,self),location,hangoutLink,conferenceData(entryPoints))'
-                ).execute()
+                events_result = self._execute_with_retry(
+                    lambda svc: self._append_conference_data_version(
+                        svc.events().list(
+                            calendarId=calendar_id,
+                            timeMin=time_min,
+                            timeMax=time_max,
+                            singleEvents=True,
+                            orderBy='startTime'
+                        )
+                    ).execute(),
+                    f"fetch events for calendar {calendar_id}"
+                )
                 events = events_result.get('items', [])
+                logger.debug(
+                    "Fetched %s events from calendar %s (range %s - %s)",
+                    len(events),
+                    calendar_id,
+                    time_min,
+                    time_max
+                )
                 master_cache = {}
                 to_fetch_master_ids = set()
                 for event in events:
@@ -196,16 +267,46 @@ class GoogleCalendarService:
 
                 for recurring_id in to_fetch_master_ids:
                     try:
-                        master = service.events().get(
-                            calendarId=calendar_id,
-                            eventId=recurring_id,
-                            fields='id,recurrence,extendedProperties'
-                        ).execute()
+                        master = self._execute_with_retry(
+                            lambda svc, rid=recurring_id: self._append_conference_data_version(
+                                svc.events().get(
+                                    calendarId=calendar_id,
+                                    eventId=rid
+                                )
+                            ).execute(),
+                            f"fetch master event {recurring_id}",
+                            retries=2
+                        )
                         master_cache[recurring_id] = master
-                    except HttpError:
+                    except HttpError as error:
+                        if error.resp.status == 404:
+                            logger.info(
+                                "Master event %s not found (calendar %s), skipping enrichment",
+                                recurring_id,
+                                calendar_id
+                            )
+                            master_cache[recurring_id] = None
+                            continue
+                        logger.error(
+                            "Failed to fetch master event %s from calendar %s: %s",
+                            recurring_id,
+                            calendar_id,
+                            error
+                        )
+                        raise
+                    except HTTPException:
                         master_cache[recurring_id] = None
 
+                processed_events = []
                 for event in events:
+                    status_value = (event.get('status') or '').lower()
+                    if status_value == 'cancelled':
+                        logger.debug(
+                            "Skipping cancelled event %s from calendar %s",
+                            event.get('id'),
+                            calendar_id
+                        )
+                        continue
                     event['calendar_id'] = calendar_id
                     recurring_id = event.get('recurringEventId')
                     master = master_cache.get(recurring_id)
@@ -223,11 +324,21 @@ class GoogleCalendarService:
                     if resolved_location:
                         event['location'] = resolved_location
 
-                all_events.extend(events)
+                    processed_events.append(event)
+
+                all_events.extend(processed_events)
 
             return all_events
         except HttpError as error:
             logger.error(f"Error fetching events: {error}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to fetch events"
+            )
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.error(f"Unexpected error fetching events: {exc}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to fetch events"
@@ -244,6 +355,11 @@ class GoogleCalendarService:
             if event_data.get("conferenceData"):
                 params["conferenceDataVersion"] = 1
             created_event = service.events().insert(**params).execute()
+            logger.info(f"Created event with ID: {created_event.get('id')}")
+            logger.info(f"Event has hangoutLink: {created_event.get('hangoutLink')}")
+            logger.info(f"Event has conferenceData: {bool(created_event.get('conferenceData'))}")
+            if created_event.get('conferenceData'):
+                logger.info(f"conferenceData keys: {list(created_event['conferenceData'].keys())}")
             return created_event
         except HttpError as error:
             error_details = error.error_details if hasattr(error, 'error_details') else str(error)
