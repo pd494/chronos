@@ -5,7 +5,7 @@ import './CategoryTabs.css';
 import { useTaskContext } from '../../../context/TaskContext';
 
 const CATEGORY_COLORS = [
-  '#3478F6',
+  '#1761C7',
   '#FF3B30',
   '#34C759',
   '#FF9500',
@@ -22,7 +22,7 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, isCollapse
   const [truncatedTabs, setTruncatedTabs] = useState(new Set());
   const [isAddingCategory, setIsAddingCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
-  const [selectedColor, setSelectedColor] = useState('#3478F6');
+  const [selectedColor, setSelectedColor] = useState('#1761C7');
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [contextMenu, setContextMenu] = useState(null);
   const tabRefs = useRef({});
@@ -83,13 +83,13 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, isCollapse
       case 'All':
         return '#666';
       case 'Inbox':
-        return '#3478F6';
+        return '#1761C7';
       case 'Today':
         return '#FF9500';
       case 'Completed':
         return '#34C759';
       default:
-        return '#3478F6';
+        return '#1761C7';
     }
   };
   
@@ -108,7 +108,7 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, isCollapse
     createCategory(trimmed, selectedColor)
       .finally(() => {
         setNewCategoryName('');
-        setSelectedColor('#3478F6');
+        setSelectedColor('#1761C7');
         setIsAddingCategory(false);
       });
   };
@@ -116,7 +116,7 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, isCollapse
   const handleCancelAddCategory = () => {
     setIsAddingCategory(false);
     setNewCategoryName('');
-    setSelectedColor('#3478F6');
+    setSelectedColor('#1761C7');
     setShowColorPicker(false);
   };
   
@@ -169,55 +169,57 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, isCollapse
 
   return (
     <div className={`category-tabs-container ${isCompact ? 'compact' : ''} ${inHeader ? 'in-header' : ''}`} ref={tabsContainerRef}>
-      <div className="category-tabs-horizontal" ref={listRef}>
-        {!isAddingCategory && categories.map(category => (
-          <div
-            key={category.id}
-            data-category-id={category.id}
-            data-draggable={category.id !== 'all'}
-            className={`category-tab-horizontal ${activeCategory === category.name ? 'active' : ''}`}
-            onClick={() => {
-              if (category.name) {
-                onCategoryChange(category.name);
-              }
-            }}
-            onContextMenu={(e) => handleContextMenu(e, category)}
-            ref={(el) => {
-              if (el) {
-                tabRefs.current[category.id] = el;
-              } else {
-                delete tabRefs.current[category.id];
-              }
-            }}
-          >
-            {category.icon && typeof category.icon === 'string' && category.icon.startsWith('#') ? (
-              <span className="category-icon" style={{ backgroundColor: getCategoryColor(category) }}></span>
-            ) : (
-              <span className="category-icon-emoji">{category.icon}</span>
-            )}
-            {(inHeader || !isCollapsed) && (
-              <span 
-                className="category-name" 
-                ref={(el) => {
-                  if (el) {
-                    labelRefs.current[category.id] = el;
-                  } else {
-                    delete labelRefs.current[category.id];
-                  }
-                }}
-                title={truncatedTabs.has(category.id) ? category.name : ''}
-              >
-                {category.name}
-              </span>
-            )}
-            {category.count !== undefined && (
-              <span className="category-count-bubble">{category.count}</span>
-            )}
-          </div>
-        ))}
+      <div className="category-tabs-horizontal">
+        <div className="category-tabs-scroll" ref={listRef}>
+          {categories.map(category => (
+            <div
+              key={category.id}
+              data-category-id={category.id}
+              data-draggable={category.id !== 'all'}
+              className={`category-tab-horizontal ${activeCategory === category.name ? 'active' : ''}`}
+              onClick={() => {
+                if (category.name) {
+                  onCategoryChange(category.name);
+                }
+              }}
+              onContextMenu={(e) => handleContextMenu(e, category)}
+              ref={(el) => {
+                if (el) {
+                  tabRefs.current[category.id] = el;
+                } else {
+                  delete tabRefs.current[category.id];
+                }
+              }}
+            >
+              {category.icon && typeof category.icon === 'string' && category.icon.startsWith('#') ? (
+                <span className="category-icon" style={{ backgroundColor: getCategoryColor(category) }}></span>
+              ) : (
+                <span className="category-icon-emoji">{category.icon}</span>
+              )}
+              {(inHeader || !isCollapsed) && (
+                <span 
+                  className="category-name" 
+                  ref={(el) => {
+                    if (el) {
+                      labelRefs.current[category.id] = el;
+                    } else {
+                      delete labelRefs.current[category.id];
+                    }
+                  }}
+                  title={truncatedTabs.has(category.id) ? category.name : ''}
+                >
+                  {category.name}
+                </span>
+              )}
+              {category.count !== undefined && (
+                <span className="category-count-bubble">{category.count}</span>
+              )}
+            </div>
+          ))}
+        </div>
         
         {isAddingCategory ? (
-          <div className="category-tab-horizontal add-category-form">
+          <div className="add-category-form">
             <div className="color-picker-wrapper">
               <button 
                 type="button"
@@ -271,51 +273,32 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, isCollapse
             </div>
           </div>
         ) : (
-          <div
-            className="category-tab-horizontal add-category-button"
-            data-category-id="add-category"
+          <button 
+            className="add-category-button" 
             onClick={handleStartAddCategory}
+            data-category-id="add-category"
           >
             <span className="add-category-icon">+</span>
-          </div>
+          </button>
         )}
       </div>
       
-      <div className="category-content">
-      </div>
-      
-       {contextMenu && ReactDOM.createPortal(
-         <div 
-           ref={contextMenuRef}
-           className="category-context-menu"
-           style={{
-             position: 'fixed',
-             left: `${contextMenu.x}px`,
-             top: `${contextMenu.y}px`,
-           }}
-         >
-           <button
-             onClick={async () => {
-               try {
-                 // Check if deleting the active category
-                 const isDeletingActive = contextMenu.category.name === activeCategory;
-                 await deleteCategory(contextMenu.category.id);
-                 setContextMenu(null);
-                 
-                 // Switch to "All" if we deleted the active category
-                 if (isDeletingActive) {
-                   onCategoryChange('All');
-                 }
-               } catch (error) {
-                 console.error('Failed to delete category:', error);
-               }
-             }}
-           >
-             <span>Delete Category</span>
-           </button>
-         </div>,
-         document.body
-       )}
+      {contextMenu && ReactDOM.createPortal(
+        <div 
+          className="context-menu"
+          style={{ top: `${contextMenu.y}px`, left: `${contextMenu.x}px` }}
+          ref={contextMenuRef}
+        >
+          <button onClick={() => {
+            const categoryId = contextMenu.category.id;
+            deleteCategory(categoryId);
+            setContextMenu(null);
+          }}>
+            Delete
+          </button>
+        </div>,
+        document.body
+      )}
     </div>
   );
 };

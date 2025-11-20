@@ -38,18 +38,20 @@
   align-items: center;
   background: transparent;
   padding-left: 0;
+  padding-top: 2px;
   width: 100%;
   overflow: hidden;
   white-space: nowrap;
 }
 
 .category-tabs-container.in-header .category-tabs-horizontal {
-  background: #f5f5f7;
-  padding: 0;
+  background: transparent;
+  padding: 8px 12px;
   height: 100%;
   gap: 4px;
   align-items: center;
   flex-wrap: nowrap;
+  justify-content: flex-start;
 }
 
 .category-tabs-container.in-header .category-tab-horizontal {
@@ -67,7 +69,7 @@
 }
 
 .category-tabs-container.in-header .category-tab-horizontal:first-child {
-  margin-left: 12px;
+  margin-left: 0;
 }
 
 .category-tabs-container.in-header .category-tab-horizontal.active {
@@ -109,47 +111,65 @@
 .category-tabs-horizontal {
   display: flex;
   align-items: center;
-  padding: 16px 12px;
-  background-color: #f5f5f7;
+  padding: 12px 12px 10px 12px;
+  background-color: transparent;
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+  gap: 0;
+}
+
+.category-tabs-scroll {
   overflow-x: auto;
   overflow-y: hidden;
   white-space: nowrap;
   scrollbar-width: thin;
-  scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+  scrollbar-color: rgba(255, 255, 255, 0.9) transparent;
+  display: flex;
   gap: 8px;
-  border-bottom: none;
-  width: 100%;
-  max-width: 100%;
+  flex: 1;
+  min-width: 0;
   position: relative;
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+  /* Less than fade width (32px) so last tab sits under the gradient even before full overflow */
+  padding-right: 8px;
+  padding-bottom: 1px;
 }
 
-.category-tabs-horizontal::after {
+.category-tabs-scroll::-webkit-scrollbar {
+  height: 4px;
+}
+
+.category-tabs-scroll::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 999px;
+}
+
+.category-tabs-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 999px;
+}
+
+.category-tabs-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.9);
+}
+
+/* Gradient fade at scroll edge (right next to + button) */
+.category-tabs-scroll::after {
   content: '';
-  position: sticky;
+  position: absolute;
   right: 0;
-  height: 100%;
-  width: 80px;
-  background: linear-gradient(to right, rgba(245, 245, 247, 0), rgba(245, 245, 247, 1));
+  top: 0;
+  bottom: 0;
+  width: 32px;
+  background: linear-gradient(to right, rgba(245, 245, 247, 0), rgba(245, 245, 247, 0.9), rgba(245, 245, 247, 1));
   pointer-events: none;
-  flex-shrink: 0;
-  margin-left: -80px;
+  z-index: 5;
 }
 
-.category-tabs-horizontal::-webkit-scrollbar {
-  height: 6px;
-}
-
-.category-tabs-horizontal::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.category-tabs-horizontal::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: 3px;
-}
-
-.category-tabs-horizontal::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.3);
+.category-tabs-container.in-header .category-tabs-scroll::after {
+  background: linear-gradient(to right, rgba(255, 255, 255, 0), rgba(255, 255, 255, 1));
 }
 
 .category-tab-horizontal {
@@ -183,19 +203,20 @@
 
   display: flex;
   align-items: center;
-  padding: 0 8px;
+  padding: 0 10px;
   cursor: pointer;
-  font-size: 15px;
+  font-size: 12px;
   white-space: nowrap;
-  color: #000000;
-  transition: transform 250ms cubic-bezier(0.25, 0.46, 0.45, 0.94), background-color 0.18s ease, color 0.18s ease, box-shadow 0.2s ease;
-  font-weight: 400;
+  color: #6d6d6d;
+  transition: background-color 0.18s ease, color 0.18s ease;
+  font-weight: 500;
   min-width: 0;
   flex-shrink: 0;
-  gap: 8px;
+  gap: 4px;
   background: transparent;
-  border-radius: 6px;
-  height: 32px;
+  border-radius: 999px;
+  height: 26px;
+  line-height: 26px;
   position: relative;
 }
 
@@ -236,7 +257,7 @@
 }
 
 .category-icon.inbox {
-  color: #3478F6;
+  color: #1761C7;
 }
 
 .dot {
@@ -333,12 +354,15 @@
 }
 
 
+
 .category-tab-horizontal:hover {
-  background: #f0f0f0;
+  background: rgba(0, 0, 0, 0.04);
 }
 
 .category-tab-horizontal.active {
-  background-color: rgba(0, 0, 0, 0.1);
+  background-color: rgba(0, 0, 0, 0.08);
+  color: #202124;
+  font-weight: 600;
 }
 
 .category-tab-horizontal.active .category-name {
@@ -373,9 +397,9 @@
   left: 0;
   right: 0;
   height: 2px;
-  background: #3478F6;
+  background: #1761C7;
   border-radius: 1px;
-  box-shadow: 0 0 4px rgba(52, 120, 246, 0.5);
+  box-shadow: 0 0 4px rgba(23, 97, 199, 0.5);
 }
 
 .category-tab-chosen {
@@ -472,11 +496,16 @@
 }
 
 .add-category-icon {
-  font-size: 20px;
+  font-size: 18px;
   color: #666;
   cursor: pointer;
   transition: all 0.2s ease;
   font-weight: 300;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-bottom: 0.5px;
 }
 
 .add-category-icon:hover {
@@ -490,27 +519,54 @@
   align-items: center;
   justify-content: center;
   min-width: 32px;
-  position: sticky;
-  right: 0;
-  background: #f5f5f7;
+  height: 32px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  flex-shrink: 0;
+  border-radius: 6px;
+  padding: 0;
+  margin-left: 2px;
+  position: relative;
   z-index: 10;
-  padding-left: 12px;
+  width: 32px;
+  font-size: 18px;
+  font-weight: 600;
+  top: -4px;
+}
+
+.category-tabs-container.in-header .add-category-button {
+  background: transparent;
+}
+
+.add-category-button:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.category-tabs-container.in-header .add-category-button:hover {
+  background: rgba(0, 0, 0, 0.04);
 }
 
 /* Category add form */
 .add-category-form {
   display: flex;
   align-items: center;
-  background-color: transparent;
+  background-color: #f5f5f7;
   border: none;
   border-radius: 6px;
   padding: 0 8px;
-  margin-left: 12px;
-  flex: 1;
+  margin-left: 0;
+  flex-shrink: 0;
   z-index: 15;
   animation: slideIn 0.2s ease-out;
-  gap: 12px;
+  gap: 8px;
   height: 32px;
+  min-width: 200px;
+  position: relative;
+}
+
+.category-tabs-container.in-header .add-category-form {
+  background-color: #fff;
 }
 
 @keyframes slideIn {

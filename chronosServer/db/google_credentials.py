@@ -369,9 +369,38 @@ class GoogleCalendarService:
                 detail=f"Failed to create event: {error_details}"
             )
     
-    def update_event(self, event_id: str, calendar_id: str, event_data: dict, send_notifications: bool = False):
+    def update_event(self, event_id: str, calendar_id: str, event_data: dict, send_notifications: bool = False, recurring_edit_scope: str = None):
         try:
             service = self.get_service()
+            
+            # Handle recurring event edit scopes
+            if recurring_edit_scope:
+                # Get the original event to check if it's recurring
+                original_event = service.events().get(calendarId=calendar_id, eventId=event_id).execute()
+                
+                if recurring_edit_scope == 'single':
+                    # Update only this instance - use the instance ID as-is
+                    # Remove recurrence rules from the update to avoid changing the series
+                    event_data.pop('recurrence', None)
+                    event_data.pop('recurrenceRule', None)
+                    event_data.pop('recurrenceMeta', None)
+                    event_data.pop('recurrenceSummary', None)
+                    
+                elif recurring_edit_scope == 'future':
+                    # Best-effort: update the master recurring event so all future
+                    # instances pick up the change. To avoid shifting the series anchor,
+                    # skip start/end fields and only apply metadata (e.g., summary).
+                    base_id = original_event.get('recurringEventId')
+                    if base_id:
+                        event_id = base_id
+                        event_data.pop('start', None)
+                        event_data.pop('end', None)
+                    
+                elif recurring_edit_scope == 'all':
+                    # Update all events in the series - use the recurring event ID
+                    if original_event.get('recurringEventId'):
+                        event_id = original_event['recurringEventId']
+            
             params = {
                 "calendarId": calendar_id,
                 "eventId": event_id,

@@ -203,7 +203,7 @@ const EventIndicator = ({ event, isMonthView }) => {
         cursor: isDragging ? 'grabbing' : 'pointer',
         opacity: isDragging ? 0.5 : baseOpacity,
         ...(isMonthView && isHexColor && treatAsAllDay ? bgStyle : {}),
-        ...(isSelected ? { boxShadow: '0 0 0 2px rgba(52, 120, 246, 0.4)', borderRadius: '8px' } : {}),
+        ...(isSelected ? { boxShadow: '0 0 0 2px rgba(23, 97, 199, 0.4)', borderRadius: '8px' } : {}),
         ...((isPendingInvite || isTentative) && isMonthView ? { backgroundColor: 'rgba(248, 250, 252, 0.9)', color: '#475569' } : {})
       }}
     >

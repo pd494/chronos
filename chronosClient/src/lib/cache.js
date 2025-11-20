@@ -88,3 +88,24 @@ export async function pruneOlderThan(ttlMs) {
   })
 }
 
+export async function clearCacheForCalHash({ user, calHash }) {
+  if (!user) return
+  const db = await openDB()
+  return new Promise((resolve) => {
+    const tx = db.transaction(STORE_EVENTS, 'readwrite')
+    const store = tx.objectStore(STORE_EVENTS)
+    const idx = store.index('byUserCal')
+    const cursorReq = idx.openCursor()
+    cursorReq.onsuccess = (e) => {
+      const cursor = e.target.result
+      if (!cursor) return
+      const value = cursor.value
+      if (value?.user === user && (!calHash || value?.calHash === calHash)) {
+        store.delete(cursor.primaryKey)
+      }
+      cursor.continue()
+    }
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => resolve()
+  })
+}

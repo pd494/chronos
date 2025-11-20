@@ -1,6 +1,14 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { format } from 'date-fns'
+import {
+  format,
+  startOfDay,
+  endOfDay,
+  startOfWeek,
+  endOfWeek,
+  startOfMonth,
+  endOfMonth
+} from 'date-fns'
 import {
   FiX,
   FiUsers,
@@ -52,7 +60,7 @@ const COLOR_OPTIONS = [
 
 // Category color options (same as category picker)
 const CATEGORY_COLORS = [
-  '#3478F6',
+  '#1761C7',  // Blue - matches EVENT_COLORS.blue.text (5% darker)
   '#FF3B30',
   '#34C759',
   '#FF9500',
@@ -112,7 +120,7 @@ const getHandle = (email) => {
 // Helper to get color for participant avatar - using our color palette
 const getParticipantColor = (email) => {
   const colors = [
-    '#3478F6',  // blue
+    '#1761C7',  // blue - standardized
     '#FF3B30',  // red
     '#34C759',  // green
     '#FF9500',  // orange
@@ -143,11 +151,48 @@ const getEventNotificationOverrides = (event) => {
     .filter(Boolean)
 }
 
-const DEFAULT_MODAL_DIMENSIONS = { width: 520, height: 640 }
+const clearCalendarSnapshots = () => {
+  if (typeof window === 'undefined' || !window.sessionStorage) return
+  try {
+    const keys = Object.keys(window.sessionStorage)
+    keys.forEach((key) => {
+      if (key.startsWith('chronos:snap:')) {
+        window.sessionStorage.removeItem(key)
+      }
+    })
+  } catch (_) {
+    // Ignore storage errors
+  }
+}
+
+const deriveVisibleRange = (date, activeView) => {
+  if (!(date instanceof Date)) return null
+  if (activeView === 'day') {
+    return {
+      start: startOfDay(date),
+      end: endOfDay(date)
+    }
+  }
+  if (activeView === 'week') {
+    return {
+      start: startOfWeek(date),
+      end: endOfWeek(date)
+    }
+  }
+  return {
+    start: startOfWeek(startOfMonth(date)),
+    end: endOfWeek(endOfMonth(date))
+  }
+}
+
+const DEFAULT_MODAL_DIMENSIONS = { width: 520, height: 'auto' }
 const MIN_MODAL_WIDTH = 320
 const MIN_MODAL_HEIGHT = 320
 const VIEWPORT_MARGIN = 16
 const MODAL_SIDE_OFFSET = 12
+const DESCRIPTION_LINE_HEIGHT = 24
+// 4px top padding + 2 lines (48px) = 52px
+const MAX_DESCRIPTION_PREVIEW_HEIGHT = 52
 
 // Get modal position based on view type and clicked element
 const getModalPosition = (view, dimensions = DEFAULT_MODAL_DIMENSIONS) => {
@@ -188,9 +233,13 @@ const getModalPosition = (view, dimensions = DEFAULT_MODAL_DIMENSIONS) => {
   const normalizeHeight = (rawHeight) => {
     const availableHeight = Math.max(0, viewportHeight - VIEWPORT_MARGIN * 2)
     if (availableHeight === 0) {
-      return rawHeight || DEFAULT_MODAL_DIMENSIONS.height
+      return availableHeight
     }
-    const desired = rawHeight || DEFAULT_MODAL_DIMENSIONS.height
+    // For auto height, return available height to let content fit
+    if (rawHeight === 'auto') {
+      return availableHeight
+    }
+    const desired = rawHeight || availableHeight
     const minHeight = Math.min(MIN_MODAL_HEIGHT, availableHeight || MIN_MODAL_HEIGHT)
     return Math.max(Math.min(desired, availableHeight), minHeight)
   }
@@ -314,7 +363,10 @@ const EventModal = () => {
     updateEvent,
     respondToInvite,
     deleteEvent,
-    view
+    view,
+    currentDate,
+    fetchEventsForRange,
+    refreshEvents
   } = useCalendar()
   const { user } = useAuth()
   
@@ -324,7 +376,7 @@ const EventModal = () => {
   const [eventEndDate, setEventEndDate] = useState(format(new Date(), 'yyyy-MM-dd'))
   const [timeStart, setTimeStart] = useState(DEFAULT_TIMED_START)
   const [timeEnd, setTimeEnd] = useState(DEFAULT_TIMED_END)
-  const [color, setColor] = useState('#3478F6')
+  const [color, setColor] = useState('#1761C7')
   const [isAllDay, setIsAllDay] = useState(true)
   const [location, setLocation] = useState('')
   const [conferenceRequestId, setConferenceRequestId] = useState(null)
@@ -349,6 +401,7 @@ const EventModal = () => {
   }, [])
   const locationInputRef = useRef(null)
   const locationContainerRef = useRef(null)
+  const descriptionInputRef = useRef(null)
   const handlePlaceSelection = useCallback((address) => {
     setLocation(address)
     setConferenceRequestId(null)
@@ -365,13 +418,16 @@ const EventModal = () => {
     selectPlace,
     setShowSuggestions,
   } = usePlacesAutocomplete(locationInputRef, handlePlaceSelection)
-  const [internalVisible, setInternalVisible] = useState(false)
+  const [internalVisible, setInternalVisible] = useState(true)
   const [participants, setParticipants] = useState([])
   const [expandedChips, setExpandedChips] = useState(new Set())
   const [timeError, setTimeError] = useState('')
+  const [isDescriptionExpanded, setIsDescriptionExpanded] = useState(false)
+  const [descriptionOverflowing, setDescriptionOverflowing] = useState(false)
   const [participantEmail, setParticipantEmail] = useState('')
   const [showNotifyMembers, setShowNotifyMembers] = useState(false)
   const [showColorPicker, setShowColorPicker] = useState(false)
+  const [colorPickerDropdownCoords, setColorPickerDropdownCoords] = useState({ top: 0, left: 0, placement: 'bottom' })
   const [showRecurrencePicker, setShowRecurrencePicker] = useState(false)
   const [recurrenceViewMode, setRecurrenceViewMode] = useState('shortcuts')
   const [recurrenceState, setRecurrenceState] = useState(() => createDefaultRecurrenceState(new Date()))
@@ -383,6 +439,9 @@ const EventModal = () => {
   const [recurrenceDropdownCoords, setRecurrenceDropdownCoords] = useState({ top: 0, left: 0, width: 280 })
   const [showRecurringDeletePrompt, setShowRecurringDeletePrompt] = useState(false)
   const [deletePromptCoords, setDeletePromptCoords] = useState({ top: 0, left: 0 })
+  const [showRecurringEditPrompt, setShowRecurringEditPrompt] = useState(false)
+  const [recurringEditScope, setRecurringEditScope] = useState('single')
+  const [pendingEventData, setPendingEventData] = useState(null)
   const [inviteResponseLoading, setInviteResponseLoading] = useState(false)
   const [inviteResponseError, setInviteResponseError] = useState('')
   const [optimisticRSVPStatus, setOptimisticRSVPStatus] = useState(null)
@@ -403,18 +462,21 @@ const EventModal = () => {
   const deletePromptRef = useRef(null)
   const [modalPosition, setModalPosition] = useState(() => getModalPosition(view, DEFAULT_MODAL_DIMENSIONS))
   const [isFromDayClick, setIsFromDayClick] = useState(false)
+  const hasRenderedOnceRef = useRef(false)
   const [hasChanges, setHasChanges] = useState(false)
   const [showNotificationPicker, setShowNotificationPicker] = useState(false)
   const [notifications, setNotifications] = useState([])
   const [showAsBusy, setShowAsBusy] = useState(true)
   const [isPrivateEvent, setIsPrivateEvent] = useState(false)
-  const [notificationDropdownCoords, setNotificationDropdownCoords] = useState({ top: 0, left: 0, width: 200 })
+  const [notificationDropdownCoords, setNotificationDropdownCoords] = useState({ top: 0, left: 0, width: 200, placement: 'bottom' })
   const modalRef = useRef(null)
   const lastTimedRangeRef = useRef({ start: DEFAULT_TIMED_START, end: DEFAULT_TIMED_END })
-  const colorPickerRef = useRef(null)
+  const colorPickerDropdownRef = useRef(null)
+  const colorPickerTriggerRef = useRef(null)
   const recurrencePickerRef = useRef(null)
   const recurrenceTriggerRef = useRef(null)
   const deleteButtonRef = useRef(null)
+  const recurringEditPromptRef = useRef(null)
   const participantInputRef = useRef(null)
   const notificationPickerRef = useRef(null)
   const notificationTriggerRef = useRef(null)
@@ -434,6 +496,27 @@ const EventModal = () => {
   const updateModalPosition = useCallback(() => {
     setModalPosition(getModalPosition(view, measureModalSize()))
   }, [measureModalSize, view])
+  const updateColorPickerDropdownPosition = useCallback(() => {
+    if (!colorPickerTriggerRef.current) return
+    const rect = colorPickerTriggerRef.current.getBoundingClientRect()
+    const viewportWidth = window.innerWidth || document.documentElement?.clientWidth || 0
+    const viewportHeight = window.innerHeight || document.documentElement?.clientHeight || 0
+    const scrollX = window.scrollX || document.documentElement?.scrollLeft || 0
+    const scrollY = window.scrollY || document.documentElement?.scrollTop || 0
+    const dropdownWidth = 192
+    const dropdownHeight = 176
+    let placement = 'bottom'
+    let top = rect.bottom + scrollY + 8
+    if (rect.bottom + dropdownHeight > viewportHeight && rect.top - dropdownHeight > VIEWPORT_MARGIN * 2) {
+      placement = 'top'
+      top = rect.top + scrollY - 8
+    }
+    let left = rect.left + scrollX
+    if (left + dropdownWidth > viewportWidth - VIEWPORT_MARGIN) {
+      left = Math.max(VIEWPORT_MARGIN, viewportWidth - dropdownWidth - VIEWPORT_MARGIN)
+    }
+    setColorPickerDropdownCoords({ top, left, placement })
+  }, [])
   const trimmedLocation = location?.trim()
   const isLocationUrl = useMemo(() => {
     if (!trimmedLocation) return false
@@ -626,13 +709,19 @@ const EventModal = () => {
     }
   }, [])
 
-  useEffect(() => {
-    updateModalPosition()
-    if (!internalVisible) {
-      requestAnimationFrame(() => {
-        setInternalVisible(true)
-      })
+  useLayoutEffect(() => {
+    // Skip position updates on very first render to prevent animation
+    if (!hasRenderedOnceRef.current) {
+      hasRenderedOnceRef.current = true
+      return
     }
+    updateModalPosition()
+  }, [updateModalPosition])
+  
+  useEffect(() => {
+    // Reset flag when switching events
+    hasRenderedOnceRef.current = false
+    updateModalPosition()
     
     // Prevent horizontal scrolling
     document.body.style.overflowX = 'hidden'
@@ -640,7 +729,7 @@ const EventModal = () => {
     return () => {
       document.body.style.overflowX = ''
     }
-  }, [view, selectedEvent, updateModalPosition, internalVisible])
+  }, [view, selectedEvent, updateModalPosition])
   
   useEffect(() => {
     if (!internalVisible) return
@@ -661,26 +750,48 @@ const EventModal = () => {
     if (typeof ResizeObserver === 'undefined') return undefined
     const node = modalRef.current
     if (!node) return undefined
-    const observer = new ResizeObserver(() => {
-      updateModalPosition()
-    })
-    observer.observe(node)
-    return () => observer.disconnect()
+    
+    // Delay observer to skip initial render animation
+    const setupTimer = setTimeout(() => {
+      if (!hasRenderedOnceRef.current) return
+      
+      const observer = new ResizeObserver(() => {
+        requestAnimationFrame(() => {
+          updateModalPosition()
+        })
+      })
+      observer.observe(node)
+      node._resizeObserver = observer
+    }, 200)
+    
+    return () => {
+      clearTimeout(setupTimer)
+      if (node._resizeObserver) {
+        node._resizeObserver.disconnect()
+        delete node._resizeObserver
+      }
+    }
   }, [updateModalPosition])
   
-  // Close color picker when clicking outside
+  // Close/reposition color picker dropdown
   useEffect(() => {
+    if (!showColorPicker) return
+    updateColorPickerDropdownPosition()
     const handleClickOutside = (event) => {
-      if (colorPickerRef.current && !colorPickerRef.current.contains(event.target)) {
-        setShowColorPicker(false);
-      }
-    };
-    
-    if (showColorPicker) {
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => document.removeEventListener('mousedown', handleClickOutside);
+      if (colorPickerTriggerRef.current?.contains(event.target)) return
+      if (colorPickerDropdownRef.current?.contains(event.target)) return
+      setShowColorPicker(false)
     }
-  }, [showColorPicker]);
+    const handleReposition = () => updateColorPickerDropdownPosition()
+    document.addEventListener('mousedown', handleClickOutside)
+    window.addEventListener('resize', handleReposition)
+    window.addEventListener('scroll', handleReposition, true)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      window.removeEventListener('resize', handleReposition)
+      window.removeEventListener('scroll', handleReposition, true)
+    }
+  }, [showColorPicker, updateColorPickerDropdownPosition])
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -727,10 +838,27 @@ const EventModal = () => {
   const updateNotificationDropdownPosition = useCallback(() => {
     if (!notificationTriggerRef.current) return
     const rect = notificationTriggerRef.current.getBoundingClientRect()
+    const viewportWidth = window.innerWidth || document.documentElement?.clientWidth || 0
+    const viewportHeight = window.innerHeight || document.documentElement?.clientHeight || 0
+    const scrollX = window.scrollX || document.documentElement?.scrollLeft || 0
+    const scrollY = window.scrollY || document.documentElement?.scrollTop || 0
+    const width = Math.max(220, rect.width + 40)
+    const dropdownHeight = 320
+    let placement = 'bottom'
+    let top = rect.bottom + scrollY + 8
+    if (rect.bottom + dropdownHeight > viewportHeight && rect.top - dropdownHeight > VIEWPORT_MARGIN * 2) {
+      placement = 'top'
+      top = rect.top + scrollY - 8
+    }
+    let left = rect.left + scrollX
+    if (left + width > viewportWidth - VIEWPORT_MARGIN) {
+      left = Math.max(VIEWPORT_MARGIN, viewportWidth - width - VIEWPORT_MARGIN)
+    }
     setNotificationDropdownCoords({
-      top: rect.bottom + window.scrollY + 8,
-      left: rect.left + window.scrollX,
-      width: Math.max(220, rect.width + 40)
+      top,
+      left,
+      width,
+      placement
     })
   }, [])
 
@@ -781,11 +909,31 @@ const EventModal = () => {
         return
       }
 
+      // If clicking inside the color picker dropdown, don't close the modal
+      if (colorPickerDropdownRef.current && colorPickerDropdownRef.current.contains(event.target)) {
+        return
+      }
+
+      // If clicking on the color picker trigger button, don't close the modal
+      if (colorPickerTriggerRef.current && colorPickerTriggerRef.current.contains(event.target)) {
+        return
+      }
+
       const clickedInRecurrenceDropdown = recurrencePickerRef.current && recurrencePickerRef.current.contains(event.target)
       if (clickedInRecurrenceDropdown) {
         return
       }
+      
+      // If clicking inside the recurring edit prompt, don't close the modal
+      if (recurringEditPromptRef.current && recurringEditPromptRef.current.contains(event.target)) {
+        return
+      }
+      
       if (modalRef.current && !modalRef.current.contains(event.target) && !clickedOnEvent) {
+        // Prevent the click from propagating to calendar elements
+        event.stopPropagation();
+        event.preventDefault();
+        
         setInternalVisible(false);
         setTimeout(() => {
           window.prefilledEventDates = null;
@@ -797,12 +945,12 @@ const EventModal = () => {
           setParticipantEmail('')
           setShowRecurrencePicker(false)
           contextCloseEventModal();
-        }, 300);
+        }, 150);
       }
     };
     
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    document.addEventListener('mousedown', handleClickOutside, true); // Use capture phase to intercept early
+    return () => document.removeEventListener('mousedown', handleClickOutside, true);
   }, [contextCloseEventModal]);
 
   const closeAndAnimateOut = useCallback(() => {
@@ -817,7 +965,7 @@ const EventModal = () => {
       setParticipantEmail('')
       setShowRecurrencePicker(false)
       contextCloseEventModal();
-    }, 300); // Match animation duration
+    }, 150); // Faster close animation
   }, [contextCloseEventModal]);
   
   // Set up keyboard shortcuts
@@ -984,8 +1132,20 @@ const EventModal = () => {
     const initialNotifications = getEventNotificationOverrides(selectedEvent);
     setNotifications(initialNotifications);
     
+    // Set initial participants - don't include current user if they are the organizer
+    let initialParticipants = selectedEvent?.participants || [];
+    
+    // Remove current user from participants if they are the organizer
+    if (selectedEvent?.organizerEmail === user?.email) {
+      initialParticipants = initialParticipants.filter(p => p !== user.email);
+    } else {
+      // Add organizer to participants if they're not already included and not the current user
+      if (selectedEvent?.organizerEmail && !initialParticipants.includes(selectedEvent.organizerEmail) && selectedEvent.organizerEmail !== user?.email) {
+        initialParticipants = [selectedEvent.organizerEmail, ...initialParticipants];
+      }
+    }
+    
     // Store initial values for change detection
-    const initialParticipants = selectedEvent?.participants || [];
     initialValuesRef.current = {
       eventName: initialEventName,
       eventDate: initialEventDate,
@@ -1008,6 +1168,35 @@ const EventModal = () => {
     setParticipantEmail('')
 
   }, [selectedEvent, cleanupTemporaryEvent])
+
+  useEffect(() => {
+    setIsDescriptionExpanded(false)
+  }, [selectedEvent?.id])
+
+  useLayoutEffect(() => {
+    const textarea = descriptionInputRef.current
+    if (!textarea) return
+    const previewHeight = MAX_DESCRIPTION_PREVIEW_HEIGHT
+    textarea.style.height = 'auto'
+    const fullHeight = textarea.scrollHeight
+    const canExpand = fullHeight > previewHeight + 4
+    setDescriptionOverflowing(canExpand)
+    if (isDescriptionExpanded) {
+      textarea.style.overflowY = 'auto'
+      textarea.style.height = `${fullHeight}px`
+    } else {
+      textarea.style.overflowY = 'hidden'
+      textarea.style.height = `${Math.min(fullHeight, previewHeight)}px`
+    }
+    if (!canExpand && isDescriptionExpanded) {
+      setIsDescriptionExpanded(false)
+    }
+  }, [eventSubtitle, isDescriptionExpanded])
+
+  useEffect(() => {
+    if (!internalVisible) return
+    updateModalPosition()
+  }, [isDescriptionExpanded, internalVisible, updateModalPosition])
 
   useEffect(() => {
     setInviteResponseLoading(false)
@@ -1362,6 +1551,79 @@ const EventModal = () => {
   const handleSubmit = (e) => {
     if (e) e.preventDefault();
     
+    // Check if this is a recurring event being edited
+    if (selectedEvent && isRecurringEvent && !pendingEventData) {
+      // Build the event data first
+      let finalStartDateTime
+      let finalEndDateTime
+
+      if (isAllDay) {
+        finalStartDateTime = buildDateWithTime(eventDate, '00:00') || new Date()
+        finalStartDateTime.setHours(0, 0, 0, 0)
+        const rawEnd = buildDateWithTime(eventEndDate || eventDate, '00:00') || new Date(finalStartDateTime)
+        rawEnd.setHours(0, 0, 0, 0)
+        if (rawEnd < finalStartDateTime) {
+          setTimeError('End date must be after start date')
+          return
+        }
+        finalEndDateTime = new Date(rawEnd.getTime())
+        finalEndDateTime.setDate(finalEndDateTime.getDate() + 1)
+      } else {
+        finalStartDateTime = buildDateWithTime(eventDate, timeStart) || new Date()
+        finalEndDateTime = buildDateWithTime(eventEndDate || eventDate, timeEnd)
+        if (!finalEndDateTime || finalEndDateTime <= finalStartDateTime) {
+          setTimeError('End time must be after start time')
+          return
+        }
+      }
+
+      const trimmedSubtitle = eventSubtitle.trim()
+      const eventData = {
+        title: eventName.trim() === '' ? (selectedEvent ? selectedEvent.title : 'New Event') : eventName,
+        start: finalStartDateTime,
+        end: finalEndDateTime,
+        color,
+        isAllDay,
+        location,
+        description: trimmedSubtitle,
+        participants,
+        sendNotifications: showNotifyMembers && participants.length > 0,
+        reminders: notifications.length > 0 ? {
+          useDefault: false,
+          overrides: notifications
+        } : { useDefault: false, overrides: [] },
+        transparency: showAsBusy ? 'opaque' : 'transparent',
+        visibility: isPrivateEvent ? 'private' : 'public'
+      }
+
+      const isGoogleMeetLink = location?.includes('meet.google.com')
+      if (conferenceRequestId && !isGoogleMeetLink && !tempEventId) {
+        eventData.conferenceData = {
+          createRequest: {
+            requestId: conferenceRequestId
+          }
+        }
+      }
+
+      const recurrencePayload = buildRecurrencePayload(recurrenceState, finalStartDateTime)
+      if (recurrencePayload) {
+        eventData.recurrence = [recurrencePayload.rule]
+        eventData.recurrenceRule = recurrencePayload.rule
+        eventData.recurrenceSummary = recurrencePayload.summary
+        eventData.recurrenceMeta = recurrencePayload.meta
+      } else {
+        eventData.recurrence = []
+        eventData.recurrenceRule = ''
+        eventData.recurrenceSummary = 'Does not repeat'
+        eventData.recurrenceMeta = { enabled: false }
+      }
+
+      // Store the event data and show the prompt
+      setPendingEventData(eventData)
+      setShowRecurringEditPrompt(true)
+      return
+    }
+    
     let finalStartDateTime
     let finalEndDateTime
 
@@ -1508,6 +1770,47 @@ const EventModal = () => {
     closeAndAnimateOut()
   }, [selectedEvent, deleteEvent, closeAndAnimateOut])
 
+  const executeRecurringEdit = useCallback((scope) => {
+    if (!pendingEventData || !selectedEvent) return
+    
+    const eventDataWithScope = {
+      ...pendingEventData,
+      recurringEditScope: scope
+    }
+    
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('chronos:month-range-reset'))
+    }
+
+    const action = updateEvent(selectedEvent.id, eventDataWithScope)
+    
+    setShowRecurringEditPrompt(false)
+    setPendingEventData(null)
+    setRecurringEditScope('single')
+    closeAndAnimateOut()
+
+    action
+      .then(() => {
+        if (scope === 'future' || scope === 'all') {
+          clearCalendarSnapshots()
+          if (typeof refreshEvents === 'function') {
+            refreshEvents()
+          } else if (typeof fetchEventsForRange === 'function') {
+            const range = deriveVisibleRange(currentDate, view)
+            if (range?.start && range?.end) {
+              fetchEventsForRange(range.start, range.end, true, true).catch(() => {})
+            }
+          }
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to save recurring event:', error)
+      })
+      .finally(() => {
+        setConferenceRequestId(null)
+      })
+  }, [pendingEventData, selectedEvent, updateEvent, closeAndAnimateOut, fetchEventsForRange, currentDate, view, refreshEvents])
+
   const handleDelete = () => { // Ensure this is a stable function if used in useEffect deps
     if (!selectedEvent) return
     if (isRecurringEvent) {
@@ -1554,6 +1857,8 @@ const EventModal = () => {
       setParticipants([...participants, email]);
       setParticipantEmail('');
       setExpandedChips(new Set())
+      // Auto-enable notifications when adding a new participant
+      setShowNotifyMembers(true);
     }
   };
 
@@ -1598,10 +1903,16 @@ const EventModal = () => {
   const handleAddNotification = (minutes) => {
     if (minutes === null) {
       setNotifications([]);
-    } else if (!notifications.find(n => n.minutes === minutes)) {
-      setNotifications([...notifications, { method: 'popup', minutes }]);
+    } else {
+      const exists = notifications.find(n => n.minutes === minutes)
+      if (exists) {
+        // Remove if already exists (toggle off)
+        setNotifications(notifications.filter(n => n.minutes !== minutes));
+      } else {
+        // Add if doesn't exist (toggle on)
+        setNotifications([...notifications, { method: 'popup', minutes }]);
+      }
     }
-    setShowNotificationPicker(false);
   };
   
   const handleRemoveNotification = (minutes) => {
@@ -1615,10 +1926,10 @@ const EventModal = () => {
 
   // Helper to get color hex value for display
   const getColorHex = useCallback((colorValue) => {
-    if (!colorValue) return '#3478F6'
+    if (!colorValue) return '#1761C7'
     if (colorValue.startsWith('#')) return colorValue
     const colorMap = {
-      blue: '#3478F6',
+      blue: '#1761C7',  // Updated to match EVENT_COLORS.blue.text (5% darker)
       green: '#34C759',
       orange: '#FF9500',
       purple: '#AF52DE',
@@ -1631,10 +1942,14 @@ const EventModal = () => {
       indigo: '#6366f1',
       yellow: '#FFD60A'
     }
-    return colorMap[colorValue] || '#3478F6'
+    return colorMap[colorValue] || '#1761C7'
   }, [])
   
-  return (
+  if (typeof document === 'undefined') {
+    return null
+  }
+
+  return createPortal(
     <>
       {/* No overlay - calendar always stays in focus */}
       
@@ -1749,30 +2064,36 @@ const EventModal = () => {
                 className="w-full px-0 py-1 text-xl font-semibold text-gray-900 border-none focus:outline-none focus:ring-0"
                 style={{ letterSpacing: '0.01em' }}
               />
-              <div className="relative">
+              <div className={`border-b border-transparent ${eventSubtitle.trim() ? 'pb-2' : 'pb-0'}`}>
                 <textarea
+                  ref={descriptionInputRef}
                   value={eventSubtitle}
                   onChange={(e) => setEventSubtitle(e.target.value)}
                   placeholder="Add description"
-                  className="w-full px-0 py-1 pr-32 text-sm text-gray-500 border-none focus:outline-none focus:ring-0 resize-none overflow-hidden"
+                  className="w-full px-0 py-1 text-sm text-gray-500 border-none focus:outline-none focus:ring-0 resize-none"
                   rows={1}
-                  style={{ minHeight: '20px' }}
-                  onInput={(e) => {
-                    e.target.style.height = 'auto'
-                    e.target.style.height = e.target.scrollHeight + 'px'
+                  style={{
+                    minHeight: eventSubtitle.trim() ? '32px' : '24px',
+                    lineHeight: `${DESCRIPTION_LINE_HEIGHT}px`,
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    paddingBottom: (!isDescriptionExpanded && descriptionOverflowing) ? '0px' : (eventSubtitle.trim() ? '6px' : '0px'),
+                    overflow: 'hidden',
+                    pointerEvents: (!isDescriptionExpanded && descriptionOverflowing) ? 'none' : 'auto'
                   }}
                 />
-                <button 
-                  type="submit"
-                  disabled={(selectedEvent && !hasChanges) || (!!timeError && !isAllDay)}
-                  className={`absolute right-0 top-0 px-4 py-1.5 text-sm rounded-md transition-colors font-medium ${
-                    (selectedEvent && !hasChanges) || (!!timeError && !isAllDay)
-                      ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                      : 'bg-green-600 text-white hover:bg-green-700'
-                  }`}
-                >
-                  {selectedEvent ? 'Update event' : 'Create event'}
-                </button>
+              </div>
+              {descriptionOverflowing && (
+                <div className="pb-2 pt-0" style={{ marginTop: '-15px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setIsDescriptionExpanded((prev) => !prev)}
+                    className="text-xs font-medium text-blue-600 hover:text-blue-700"
+                  >
+                    {isDescriptionExpanded ? 'See less' : 'See more'}
+                  </button>
+                </div>
+              )}
               </div>
             </div>
             {/* Grey line after description */}
@@ -1780,9 +2101,10 @@ const EventModal = () => {
 
             {/* Add guests */}
             <div className="px-4 py-2.5 border-b border-gray-100">
-              <div className="flex items-start gap-3">
-                <FiUsers className="text-gray-400 mt-1" size={20} />
-                <div className="flex-1 space-y-2.5">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start gap-3 flex-1">
+                  <FiUsers className="text-gray-400 mt-1" size={20} />
+                  <div className="flex-1 space-y-2.5">
                   <input
                     ref={participantInputRef}
                     type="email"
@@ -1916,19 +2238,39 @@ const EventModal = () => {
                           {expandedChips.size > 0 && (
                             <div className="pt-1">
                               <span className="text-xs text-gray-600">
-                                {participants.filter(email => expandedChips.has(email)).map((email, index, array) => (
-                                  <span key={email}>
-                                    {email}
-                                    {index < array.length - 1 && ', '}
-                                  </span>
-                                ))}
+                                {participants.filter(email => expandedChips.has(email)).map((email, index, array) => {
+                                  const isOrganizer = selectedEvent?.organizerEmail === email && email !== user?.email
+                                  const attendee = attendeesMap.get(email)
+                                  const isAccepted = attendee?.responseStatus === 'accepted'
+                                  
+                                  return (
+                                    <span key={email} className={isOrganizer ? "font-semibold text-gray-900" : ""}>
+                                      {email}
+                                      {isOrganizer && " (Organizer)"}
+                                      {isAccepted && <FiCheck className="inline ml-1 text-green-500" size={12} strokeWidth={3} />}
+                                      {index < array.length - 1 && <span className="font-normal text-gray-600">, </span>}
+                                    </span>
+                                  )
+                                })}
                               </span>
                             </div>
                           )}
                         </div>
                       )
                     })()}
+                  </div>
                 </div>
+                <button
+                  type="submit"
+                  disabled={(selectedEvent && !hasChanges) || (!!timeError && !isAllDay)}
+                  className={`px-4 py-1.5 text-sm rounded-md transition-colors font-medium whitespace-nowrap self-start ${
+                    (selectedEvent && !hasChanges) || (!!timeError && !isAllDay)
+                      ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                      : 'bg-green-600 text-white hover:bg-green-700'
+                  }`}
+                >
+                  {selectedEvent ? 'Update event' : 'Create event'}
+                </button>
               </div>
             </div>
 
@@ -2088,8 +2430,8 @@ const EventModal = () => {
                   <div className="space-y-2">
                     {!isAllDay ? (
                       <>
-                        <div className="flex items-center gap-2 text-sm text-gray-900">
-                        <div className="inline-flex items-center gap-2">
+                        <div className="flex items-center gap-2 text-sm text-gray-900 overflow-visible">
+                        <div className="inline-flex items-center gap-2 overflow-visible">
                         <input
                           type="time"
                           value={timeStart}
@@ -2118,11 +2460,13 @@ const EventModal = () => {
                           style={{
                             WebkitAppearance: 'none',
                             MozAppearance: 'textfield',
-                            width: '70px',
-                            marginLeft: '2px'
+                            width: '95px',
+                            minWidth: '95px',
+                            marginLeft: '2px',
+                            overflow: 'visible'
                           }}
                         />
-                          <span className="text-gray-400 font-semibold mx-2">→</span>
+                          <span className="text-gray-400 font-semibold" style={{ marginLeft: '-1.9px', marginRight: '8px' }}>→</span>
                         <input
                           type="time"
                           value={timeEnd}
@@ -2151,8 +2495,9 @@ const EventModal = () => {
                           style={{
                             WebkitAppearance: 'none',
                             MozAppearance: 'textfield',
-                            width: '70px',
-                            marginLeft: '2px'
+                            width: '95px',
+                            minWidth: '95px',
+                            overflow: 'visible'
                           }}
                         />
                           </div>
@@ -2568,14 +2913,14 @@ const EventModal = () => {
                 </div>
               </div>
             </div>
-          </div>
+          {/* Footer */}
           <div className="z-20 bg-white border-t border-gray-100 px-4 py-3 flex flex-col gap-2">
-            <div className="flex items-center gap-2">
-              <div className="relative">
+            <div className="flex items-center gap-3">
+              <div className="relative" ref={colorPickerTriggerRef}>
                 <button
                   type="button"
                   onClick={() => setShowColorPicker(!showColorPicker)}
-                  className="px-2 py-2 bg-gray-50 border border-gray-200 rounded-full hover:bg-gray-100 transition-colors"
+                  className="px-2 py-2 hover:bg-gray-50 transition-colors"
                   title="Change color"
                 >
                   <div
@@ -2583,31 +2928,11 @@ const EventModal = () => {
                     style={{ backgroundColor: getColorHex(color) }}
                   />
                 </button>
-                {showColorPicker && (
-                  <div className="absolute top-full left-0 mt-2 z-50 bg-white border border-gray-200 rounded-xl shadow-xl p-3">
-                    <div className="grid grid-cols-4 gap-2">
-                      {CATEGORY_COLORS.map((colorHex) => (
-                        <button
-                          key={colorHex}
-                          type="button"
-                          onClick={() => {
-                            setColor(colorHex)
-                            setShowColorPicker(false)
-                          }}
-                          className={`w-8 h-8 rounded-full transition-transform hover:scale-110 ${
-                            getColorHex(color) === colorHex ? 'ring-2 ring-gray-400' : ''
-                          }`}
-                          style={{ backgroundColor: colorHex }}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                )}
               </div>
               <button
                 type="button"
                 onClick={() => setShowNotificationPicker(prev => !prev)}
-                className="px-2 py-2 bg-gray-50 border border-gray-200 rounded-full text-gray-500 hover:bg-gray-100 transition-colors"
+                className="px-2 py-2 text-gray-500 hover:bg-gray-50 transition-colors"
                 title="Add notification"
                 ref={notificationTriggerRef}
               >
@@ -2623,7 +2948,7 @@ const EventModal = () => {
               <button
                 type="button"
                 onClick={() => setShowAsBusy(prev => !prev)}
-                className="flex items-center gap-1 px-3 py-1 rounded-full border border-gray-200 text-sm font-normal text-gray-700 hover:border-gray-300 transition-colors"
+                className="flex items-center gap-1 px-3 py-1 text-sm font-normal text-gray-700 hover:bg-gray-50 transition-colors"
                 title={showAsBusy ? 'Show as busy' : 'Show as free'}
                 style={{ minWidth: 64 }}
               >
@@ -2633,8 +2958,8 @@ const EventModal = () => {
               <button
                 type="button"
                 onClick={() => setIsPrivateEvent(prev => !prev)}
-                className={`p-2 rounded-full border transition-colors ${
-                  isPrivateEvent ? 'border-gray-900 text-gray-900' : 'border-gray-300 text-gray-500 hover:border-gray-400'
+                className={`p-2 transition-colors ${
+                  isPrivateEvent ? 'text-gray-900' : 'text-gray-500 hover:text-gray-600'
                 }`}
                 aria-pressed={isPrivateEvent}
                 title={isPrivateEvent ? 'Private event' : 'Public event'}
@@ -2642,26 +2967,26 @@ const EventModal = () => {
                 {isPrivateEvent ? <FiLock size={16} /> : <FiUnlock size={16} />}
               </button>
               <div className="flex-1"></div>
-              {selectedEvent?.inviteCanRespond && (
+              {selectedEvent?.inviteCanRespond && selectedEvent?.organizerEmail !== user?.email && (
                 <div className="relative">
-                  <button
-                    type="button"
-                    onClick={() => setShowNotifyMembers(prev => !prev)}
-                    className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-sm shrink-0 ${
-                      currentRSVPStatus === 'accepted'
-                        ? 'bg-green-100 text-green-700'
-                        : currentRSVPStatus === 'declined'
-                        ? 'bg-red-100 text-red-700'
-                        : 'bg-gray-100 text-gray-600'
-                    }`}
-                  >
-                    <div className={`w-2 h-2 rounded-full ${
-                      currentRSVPStatus === 'accepted'
-                        ? 'bg-green-500'
-                        : currentRSVPStatus === 'declined'
-                        ? 'bg-red-500'
-                        : 'bg-gray-400'
-                    }`}></div>
+                <button
+                  type="button"
+                  onClick={() => setShowNotifyMembers(prev => !prev)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 text-sm shrink-0 transition-colors ${
+                    currentRSVPStatus === 'accepted'
+                      ? 'text-green-700'
+                      : currentRSVPStatus === 'declined'
+                      ? 'text-red-600'
+                      : 'text-gray-600'
+                  }`}
+                >
+                  <div className={`w-2 h-2 rounded-full ${
+                    currentRSVPStatus === 'accepted'
+                      ? 'bg-green-500'
+                      : currentRSVPStatus === 'declined'
+                      ? 'bg-red-500'
+                      : 'bg-gray-400'
+                  }`}></div>
                     <span className="whitespace-nowrap">
                       {currentRSVPStatus === 'accepted' ? 'Going' : currentRSVPStatus === 'declined' ? 'Not going' : 'Maybe'}
                     </span>
@@ -2713,6 +3038,203 @@ const EventModal = () => {
           </div>
         </form>
 
+        {showColorPicker && typeof document !== 'undefined' && createPortal(
+          <div
+            ref={colorPickerDropdownRef}
+            className="fixed z-[1100] bg-white border border-gray-200 rounded-2xl shadow-xl p-3"
+            style={{
+              top: colorPickerDropdownCoords.top,
+              left: colorPickerDropdownCoords.left,
+              width: 192,
+              transform: colorPickerDropdownCoords.placement === 'top' ? 'translateY(-100%)' : 'none'
+            }}
+          >
+            <div className="grid grid-cols-4 gap-2">
+              {CATEGORY_COLORS.map((colorHex) => (
+                <button
+                  key={colorHex}
+                  type="button"
+                  onClick={() => {
+                    // Map blue hex back to named color for consistency
+                    const selectedColor = colorHex === '#1761C7' ? 'blue' : colorHex
+                    setColor(selectedColor)
+                    setShowColorPicker(false)
+                  }}
+                  className={`w-8 h-8 rounded-full transition-transform hover:scale-110 ${
+                    getColorHex(color) === colorHex ? 'ring-2 ring-gray-400 ring-offset-2 ring-offset-white' : ''
+                  }`}
+                  style={{ backgroundColor: colorHex }}
+                />
+              ))}
+            </div>
+          </div>,
+          document.body
+        )}
+
+        {showNotificationPicker && typeof document !== 'undefined' && createPortal(
+          <div
+            ref={notificationPickerRef}
+            className="fixed z-[1100] bg-white border border-gray-200 rounded-2xl shadow-xl p-3 space-y-3"
+            style={{
+              top: notificationDropdownCoords.top,
+              left: notificationDropdownCoords.left,
+              width: notificationDropdownCoords.width,
+              transform: notificationDropdownCoords.placement === 'top' ? 'translateY(-100%)' : 'none',
+              maxHeight: 360,
+              overflowY: 'auto'
+            }}
+          >
+            <div>
+              <p className="text-xs font-medium text-gray-500">Reminders</p>
+            </div>
+            <div className="space-y-1">
+              {notificationOptions.map((option) => (
+                <button
+                  key={option.label}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    handleAddNotification(option.minutes)
+                  }}
+                  className="w-full flex items-center justify-between px-3 py-2 text-sm rounded-lg hover:bg-gray-50 transition-colors"
+                >
+                  <span>{option.label}</span>
+                  {(
+                    option.minutes === null
+                      ? notifications.length === 0
+                      : notifications.some((note) => note.minutes === option.minutes)
+                  ) && <FiCheck className="text-green-600" />}
+                </button>
+              ))}
+            </div>
+            {notifications.length > 0 && (
+              <div className="pt-2 border-t border-gray-100">
+                <p className="text-xs font-medium text-gray-500 mb-2">Active</p>
+                <div className="space-y-1">
+                  {notifications
+                    .slice()
+                    .sort((a, b) => a.minutes - b.minutes)
+                    .map((notification) => (
+                      <div
+                        key={notification.minutes}
+                        className="flex items-center justify-between px-3 py-2 text-sm rounded-lg bg-gray-50"
+                      >
+                        <span>{formatNotificationLabel(notification.minutes)}</span>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveNotification(notification.minutes)}
+                          className="text-xs text-gray-500 hover:text-gray-700"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+          </div>,
+          document.body
+        )}
+
+        {showRecurringEditPrompt && typeof document !== 'undefined' && createPortal(
+          <>
+            {/* Backdrop overlay */}
+            <div
+              className="fixed inset-0 z-[1199] bg-black bg-opacity-30"
+              onMouseDown={(e) => {
+                e.stopPropagation()
+                setShowRecurringEditPrompt(false)
+                setPendingEventData(null)
+                setRecurringEditScope('single')
+              }}
+            />
+            
+            {/* Modal */}
+            <div
+              ref={recurringEditPromptRef}
+              className="fixed z-[1200] bg-white rounded-3xl shadow-2xl"
+              style={{
+                top: '50%',
+                left: '50%',
+                transform: 'translate(-50%, -50%)',
+                width: 400,
+                maxWidth: '90vw'
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
+            <div className="p-6">
+              <h2 className="text-2xl font-semibold text-gray-900 mb-6">Edit recurring event</h2>
+              
+              <div className="space-y-3">
+                <label className="flex items-center gap-3 cursor-pointer group">
+                  <div className="relative flex items-center justify-center">
+                    <input
+                      type="radio"
+                      name="recurring-edit-scope"
+                      value="single"
+                      checked={recurringEditScope === 'single'}
+                      onChange={(e) => setRecurringEditScope(e.target.value)}
+                      className="w-5 h-5 text-blue-600 border-gray-300 focus:ring-blue-500 cursor-pointer"
+                    />
+                  </div>
+                  <span className="text-base text-gray-700 group-hover:text-gray-900">This event</span>
+                </label>
+
+                <label className="flex items-center gap-3 cursor-pointer group">
+                  <div className="relative flex items-center justify-center">
+                    <input
+                      type="radio"
+                      name="recurring-edit-scope"
+                      value="future"
+                      checked={recurringEditScope === 'future'}
+                      onChange={(e) => setRecurringEditScope(e.target.value)}
+                      className="w-5 h-5 text-blue-600 border-gray-300 focus:ring-blue-500 cursor-pointer"
+                    />
+                  </div>
+                  <span className="text-base text-gray-700 group-hover:text-gray-900">This and following events</span>
+                </label>
+
+                <label className="flex items-center gap-3 cursor-pointer group">
+                  <div className="relative flex items-center justify-center">
+                    <input
+                      type="radio"
+                      name="recurring-edit-scope"
+                      value="all"
+                      checked={recurringEditScope === 'all'}
+                      onChange={(e) => setRecurringEditScope(e.target.value)}
+                      className="w-5 h-5 text-blue-600 border-gray-300 focus:ring-blue-500 cursor-pointer"
+                    />
+                  </div>
+                  <span className="text-base text-gray-700 group-hover:text-gray-900">All events</span>
+                </label>
+              </div>
+
+              <div className="flex items-center justify-end gap-3 mt-8">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowRecurringEditPrompt(false)
+                    setPendingEventData(null)
+                    setRecurringEditScope('single')
+                  }}
+                  className="px-6 py-2 text-base font-medium text-blue-600 hover:bg-blue-50 rounded-full transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => executeRecurringEdit(recurringEditScope)}
+                  className="px-8 py-2 text-base font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-full transition-colors"
+                >
+                  OK
+                </button>
+              </div>
+            </div>
+          </div>
+          </>,
+          document.body
+        )}
 
         {showRecurringDeletePrompt && typeof document !== 'undefined' && createPortal(
           <div
@@ -2761,7 +3283,8 @@ const EventModal = () => {
           document.body
         )}
       </div>
-    </>
+    </>,
+    document.body
   )
 }
 

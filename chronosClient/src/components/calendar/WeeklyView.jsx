@@ -24,7 +24,7 @@ const DRAG_DISTANCE_THRESHOLD = 0.12 // ~7 minutes of travel before drag activat
 // 3. If you change timezone handling, review this offset
 const DAY_OFFSET = 0
 
-const SNAP_INTERVAL_MINUTES = 30
+const SNAP_INTERVAL_MINUTES = 5
 const MAX_SNAP_MINUTES = (DAY_END_HOUR * 60) + SNAP_INTERVAL_MINUTES
 const clampSnapMinutes = (minutes) => Math.max(0, Math.min(minutes, MAX_SNAP_MINUTES))
 const snapMinutesToLatestHalfHour = (totalMinutes) => {
@@ -42,7 +42,6 @@ const snapHourMinutePair = (hour, minutes = 0) => {
   const snappedMinute = snappedMinutes % 60
   return { hour: snappedHour, minutes: snappedMinute }
 }
-
 const WeeklyView = () => {
   const {
     currentDate,
@@ -282,12 +281,14 @@ const WeeklyView = () => {
         title: 'New Event',
         start: startDate,
         end: endDate,
-        color: 'blue'
+        color: 'blue',
+        isAllDay: false // Explicitly set to false for timed events from week view drag
       };
       
       console.log('Opening modal for DRAGGED event:', {
         startDate: startDate.toLocaleTimeString(),
-        endDate: endDate.toLocaleTimeString()
+        endDate: endDate.toLocaleTimeString(),
+        isAllDay: false
       });
 
       const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
@@ -337,7 +338,9 @@ const WeeklyView = () => {
         startDate,
         endDate,
         title: 'New Event',
-        color: '#3478F6'
+        color: '#1761C7',
+        isAllDay: false, // Explicitly set to false for timed events
+        fromDayClick: true
       };
       
       openEventModal(newEvent, true);
@@ -372,7 +375,18 @@ const WeeklyView = () => {
       title: 'New Event',
       start: startDate,
       end: endDate,
-      color: 'blue'
+      color: 'blue',
+      isAllDay: false // Explicitly set to false for timed events from double-click
+    };
+    
+    // Store the exact times for the modal to use
+    window.prefilledEventDates = {
+      startDate,
+      endDate,
+      title: 'New Event',
+      color: 'blue',
+      isAllDay: false,
+      fromDayClick: true
     };
     
     const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
@@ -416,14 +430,6 @@ const WeeklyView = () => {
     window.lastClickedEvent = null;
     window.lastClickedEventId = newEvent.id;
     window.lastDragPosition = null;
-    
-    // Store the exact times for the modal to use
-    window.prefilledEventDates = {
-      startDate,
-      endDate,
-      title: 'New Event',
-      color: '#3478F6'
-    };
 
     console.log('Opening modal for DOUBLE-CLICK event:', {
       startDate: startDate.toLocaleTimeString(),
@@ -460,8 +466,20 @@ const WeeklyView = () => {
       const minutes = Math.floor(minutePercentage * 60);
       const { hour: snappedHour, minutes: snappedMinutes } = snapHourMinutePair(targetHour, minutes);
 
-      const newStart = new Date(targetDay);
-      newStart.setHours(snappedHour, snappedMinutes, 0, 0);
+      const axis = resolveDragAxis(e);
+      const dragMeta = typeof window !== 'undefined' ? window.__chronosDraggedEventMeta : null;
+      const originalStart = dragMeta?.start ? new Date(dragMeta.start) : null;
+      let dropDay = new Date(targetDay);
+      let hourForDrop = snappedHour;
+      let minuteForDrop = snappedMinutes;
+      if (axis === 'vertical' && originalStart) {
+        dropDay = new Date(originalStart);
+      } else if (axis === 'horizontal' && originalStart) {
+        hourForDrop = originalStart.getHours();
+        minuteForDrop = originalStart.getMinutes();
+      }
+      const newStart = new Date(dropDay);
+      newStart.setHours(hourForDrop, minuteForDrop, 0, 0);
       const newEnd = new Date(newStart.getTime() + durationMs);
 
       updateEvent(draggedEvent.id, {
@@ -474,7 +492,7 @@ const WeeklyView = () => {
       console.error('Error dropping event on hour cell:', error);
     }
 
-    e.currentTarget.classList.remove('event-dragover');
+    clearEventDragPreview();
   };
 
   const handleAllDayEventDrop = (e, targetDay) => {
@@ -512,18 +530,95 @@ const WeeklyView = () => {
       console.error('Error dropping all-day event:', error);
     }
 
-    e.currentTarget.classList.remove('event-dragover');
+    clearEventDragPreview();
   };
 
-  const handleDragOver = (e) => {
-    e.preventDefault()
-    e.dataTransfer.dropEffect = 'move'
-    e.currentTarget.classList.add('event-dragover')
+  const emitDragPreviewUpdate = (startDate, endDate) => {
+    if (typeof window === 'undefined') return
+    const dragMeta = window.__chronosDraggedEventMeta || null
+    if (!dragMeta?.id) return
+    window.dispatchEvent(new CustomEvent('chronos-drag-preview', {
+      detail: {
+        id: dragMeta.id,
+        start: startDate ? startDate.toISOString() : null,
+        end: endDate ? endDate.toISOString() : null
+      }
+    }))
   }
 
-  const handleDragLeave = (e) => {
-    e.currentTarget.classList.remove('event-dragover')
+  const resolveDragAxis = (pointerEvent) => {
+    if (typeof window === 'undefined') return null
+    let axis = window.__chronosDragAxis || null
+    const startPoint = window.__chronosDragStartPoint
+    if (!startPoint) return axis
+    if (axis) return axis
+    if (!pointerEvent) return null
+    const currentX = pointerEvent.clientX ?? startPoint.x
+    const currentY = pointerEvent.clientY ?? startPoint.y
+    const deltaX = Math.abs(currentX - startPoint.x)
+    const deltaY = Math.abs(currentY - startPoint.y)
+    if (Math.max(deltaX, deltaY) < 8) {
+      return null
+    }
+    axis = deltaY >= deltaX ? 'vertical' : 'horizontal'
+    window.__chronosDragAxis = axis
+    return axis
   }
+
+  const updateEventDragPreviewForWeek = (e, hourCell, day, hour) => {
+    if (!hourCell || !day) {
+      emitDragPreviewUpdate(null, null)
+      return
+    }
+    const rect = hourCell.getBoundingClientRect()
+    const relativeY = Math.min(rect.height, Math.max(0, e.clientY - rect.top))
+    const minutePercentage = rect.height ? relativeY / rect.height : 0
+    const minutes = Math.floor(minutePercentage * 60)
+    const { hour: snappedHour, minutes: snappedMinutes } = snapHourMinutePair(hour, minutes)
+    const dragMeta = typeof window !== 'undefined' ? window.__chronosDraggedEventMeta : null
+    if (!dragMeta) {
+      emitDragPreviewUpdate(null, null)
+      return
+    }
+    const axis = resolveDragAxis(e)
+    const originalStart = dragMeta.start ? new Date(dragMeta.start) : null
+    const durationMs = dragMeta.durationMs || 60 * 60 * 1000
+    let previewDay = new Date(day)
+    let hourForPreview = snappedHour
+    let minuteForPreview = snappedMinutes
+    if (axis === 'vertical' && originalStart) {
+      previewDay = new Date(originalStart)
+    } else if (axis === 'horizontal' && originalStart) {
+      hourForPreview = originalStart.getHours()
+      minuteForPreview = originalStart.getMinutes()
+    }
+    const previewStart = new Date(previewDay)
+    previewStart.setHours(hourForPreview, minuteForPreview, 0, 0)
+    const previewEnd = new Date(previewStart.getTime() + durationMs)
+    emitDragPreviewUpdate(previewStart, previewEnd)
+  };
+
+  const clearEventDragPreview = () => emitDragPreviewUpdate(null, null);
+  const resetPreviewIfNoTarget = () => {
+    clearEventDragPreview();
+  };
+
+  const handleHourCellDragOver = (e, day, hour) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    resolveDragAxis(e);
+    updateEventDragPreviewForWeek(e, e.currentTarget, day, hour);
+  };
+
+  const handleAllDayDragOver = (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    clearEventDragPreview();
+  };
+
+  const handleDragLeave = () => {
+    resetPreviewIfNoTarget();
+  };
   
   // Handle creating an all-day event
   const handleAllDayCellClick = (e, day) => {
@@ -895,12 +990,11 @@ const WeeklyView = () => {
       </div>
       
       {/* All-day events section - fixed */}
-      <div className="flex w-full border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 z-20 flex-shrink-0">
-        <div className="w-16 flex-shrink-0 text-center py-2 text-xs text-gray-500 border-r border-gray-200 dark:border-gray-700">
-          All-day
-        </div>
-        <div className="flex flex-1">
-          {days.map((day, dayIndex) => {
+      {(() => {
+        // Calculate the maximum height needed across all days
+        const maxRequiredHeight = Math.max(
+          ALL_DAY_SECTION_HEIGHT,
+          ...days.map(day => {
             const eventsForDay = allDayEvents.filter(event => {
               if (!event.isImported && DAY_OFFSET !== 0) {
                 const adjustedDay = new Date(day);
@@ -909,41 +1003,62 @@ const WeeklyView = () => {
               }
               return isSameDay(event.start, day);
             });
-            const isSelectedDay = isSameDay(day, currentDate);
-            const isCurrentDay = isToday(day);
-            const showSelection = isSelectedDay && !isCurrentDay;
+            return Math.max(1, eventsForDay.length) * (ALL_DAY_EVENT_HEIGHT + ALL_DAY_EVENT_GAP) - ALL_DAY_EVENT_GAP;
+          })
+        );
 
-            const requiredHeight = Math.max(
-              ALL_DAY_SECTION_HEIGHT,
-              Math.max(1, eventsForDay.length) * (ALL_DAY_EVENT_HEIGHT + ALL_DAY_EVENT_GAP) - ALL_DAY_EVENT_GAP
-            );
+        return (
+          <div className="flex w-full border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 z-20 flex-shrink-0" style={{ minHeight: `${maxRequiredHeight}px` }}>
+            <div className="w-16 flex-shrink-0 text-center py-2 text-xs text-gray-500 border-r border-gray-200 dark:border-gray-700" style={{ minHeight: `${maxRequiredHeight}px` }}>
+              All-day
+            </div>
+            <div className="flex flex-1 border-r border-gray-200 dark:border-gray-700" style={{ minHeight: `${maxRequiredHeight}px` }}>
+              {days.map((day, dayIndex) => {
+                const eventsForDay = allDayEvents.filter(event => {
+                  if (!event.isImported && DAY_OFFSET !== 0) {
+                    const adjustedDay = new Date(day);
+                    adjustedDay.setDate(adjustedDay.getDate() - DAY_OFFSET);
+                    return isSameDay(event.start, adjustedDay);
+                  }
+                  return isSameDay(event.start, day);
+                });
+                const isSelectedDay = isSameDay(day, currentDate);
+                const isCurrentDay = isToday(day);
+                const showSelection = isSelectedDay && !isCurrentDay;
 
-            return (
-              <div 
-                key={dayIndex}
-                className={`flex-1 relative border-r border-gray-200 dark:border-gray-700 droppable-cell overflow-hidden ${showSelection ? 'calendar-selected-surface' : ''}`}
-                data-date={format(day, 'yyyy-MM-dd')}
-                data-all-day="true"
-                style={{ 
-                  minHeight: `${requiredHeight}px`,
-                  maxHeight: `${requiredHeight}px`,
-                  padding: '4px'
-                }}
-                onClick={(e) => handleAllDayCellClick(e, day)}
-                onDrop={(e) => handleAllDayEventDrop(e, day)}
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-              >
-                {eventsForDay.map((event, idx) => renderAllDayEvent(event, idx))}
-              </div>
-            );
-          })}
-        </div>
-      </div>
+                const requiredHeight = Math.max(
+                  ALL_DAY_SECTION_HEIGHT,
+                  Math.max(1, eventsForDay.length) * (ALL_DAY_EVENT_HEIGHT + ALL_DAY_EVENT_GAP) - ALL_DAY_EVENT_GAP
+                );
+
+                return (
+                  <div 
+                    key={dayIndex}
+                    className={`flex-1 relative border-r border-gray-200 dark:border-gray-700 droppable-cell overflow-hidden ${showSelection ? 'calendar-selected-surface' : ''}`}
+                    data-date={format(day, 'yyyy-MM-dd')}
+                    data-all-day="true"
+                    style={{ 
+                      minHeight: `${maxRequiredHeight}px`,
+                      height: `${maxRequiredHeight}px`,
+                      padding: '4px'
+                    }}
+                    onClick={(e) => handleAllDayCellClick(e, day)}
+                    onDrop={(e) => handleAllDayEventDrop(e, day)}
+                    onDragOver={handleAllDayDragOver}
+                    onDragLeave={handleDragLeave}
+                  >
+                    {eventsForDay.map((event, idx) => renderAllDayEvent(event, idx))}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
       
       <div className="relative flex flex-1 overflow-y-auto min-h-0">
         {/* Time labels */}
-        <div className="w-16 flex-shrink-0 relative z-10 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700">
+        <div className="w-16 flex-shrink-0 relative z-10 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700" style={{ height: `${(DAY_END_HOUR - DAY_START_HOUR + 1) * HOUR_HEIGHT}px`, minHeight: `${(DAY_END_HOUR - DAY_START_HOUR + 1) * HOUR_HEIGHT}px` }}>
           {hours.map((hour) => (
             <div 
               key={hour} 
@@ -957,7 +1072,7 @@ const WeeklyView = () => {
         </div>
         
         {/* Week grid */}
-        <div className="flex-1 relative">
+        <div className="flex-1 relative" style={{ height: `${(DAY_END_HOUR - DAY_START_HOUR + 1) * HOUR_HEIGHT}px`, minHeight: `${(DAY_END_HOUR - DAY_START_HOUR + 1) * HOUR_HEIGHT}px` }}>
           {/* Horizontal time grid lines */}
           {hours.map((hour) => (
             <div 
@@ -978,7 +1093,7 @@ const WeeklyView = () => {
           {/* Day columns */}
           <div 
             className="grid grid-cols-7" 
-            style={{ height: `${(DAY_END_HOUR - DAY_START_HOUR + 1) * HOUR_HEIGHT}px` }}
+            style={{ height: `${(DAY_END_HOUR - DAY_START_HOUR + 1) * HOUR_HEIGHT}px`, minHeight: `${(DAY_END_HOUR - DAY_START_HOUR + 1) * HOUR_HEIGHT}px` }}
             onMouseUp={handleGridMouseUp}
             onMouseLeave={handleGridMouseUp}
           >
@@ -987,9 +1102,41 @@ const WeeklyView = () => {
               const isCurrentDay = isToday(day);
               const showSelection = isSelectedDay && !isCurrentDay;
               return (
-                <div 
+                <div
                   key={dayIndex}
                   className={`relative border-r border-gray-200 dark:border-gray-700 h-full week-day-column ${showSelection ? 'calendar-selected-column' : ''}`}
+                  onDragOver={(e) => {
+                    e.preventDefault()
+                    e.dataTransfer.dropEffect = 'move'
+
+                    const elements = document.elementsFromPoint(e.clientX, e.clientY)
+                    const hourCell = elements.find(el => el.classList.contains('hour-cell'))
+
+                    if (hourCell) {
+                      const hour = parseInt(hourCell.getAttribute('data-hour'), 10)
+                      if (!isNaN(hour)) {
+                        updateEventDragPreviewForWeek(e, hourCell, day, hour)
+                      }
+                    } else {
+                      clearEventDragPreview()
+                    }
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+
+                    const elements = document.elementsFromPoint(e.clientX, e.clientY)
+                    const hourCell = elements.find(el => el.classList.contains('hour-cell'))
+
+                    if (hourCell) {
+                      const hour = parseInt(hourCell.getAttribute('data-hour'), 10)
+                      if (!isNaN(hour)) {
+                        handleEventDropOnHourCell(e, day, hour)
+                      }
+                    }
+
+                    clearEventDragPreview()
+                  }}
                 >
                 {/* Hour cells for drag-to-create */}
                 {hours.map((hour) => (
@@ -1007,7 +1154,7 @@ const WeeklyView = () => {
                     onMouseMove={(e) => handleCellMouseMove(e, day, hour)}
                     onDoubleClick={(e) => handleCellDoubleClick(e, day, hour)}
                     onDrop={(e) => handleEventDropOnHourCell(e, day, hour)}
-                    onDragOver={handleDragOver}
+                    onDragOver={(e) => handleHourCellDragOver(e, day, hour)}
                     onDragLeave={handleDragLeave}
                   />
                 ))}
@@ -1015,21 +1162,18 @@ const WeeklyView = () => {
                 {/* Drag selection indicator */}
                 {isDragging && dragDay && isSameDay(dragDay, day) && (
                   <div
-                    className="drag-selection"
+                    className="absolute left-0 right-0 bg-blue-200 dark:bg-blue-700 opacity-50 pointer-events-none rounded"
                     style={{
                       top: `${(Math.min(dragStart, dragEnd) - DAY_START_HOUR) * HOUR_HEIGHT}px`,
                       height: `${Math.abs(dragEnd - dragStart) * HOUR_HEIGHT || HOUR_HEIGHT/4}px`,
                       left: '2px',
                       right: '2px',
                       borderRadius: '6px',
-                      backgroundColor: 'rgba(0, 122, 255, 0.3)',
-                      border: '1px solid rgba(0, 122, 255, 0.5)',
-                      pointerEvents: 'none', // Ensure it doesn't interfere with mouse events
                       zIndex: 10
                     }}
                   />
                 )}
-                
+
                 {/* Regular events for this day */}
                 {(() => {
                   const dayEvents = regularEvents

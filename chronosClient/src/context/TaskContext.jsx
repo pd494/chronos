@@ -10,7 +10,7 @@ const ALL_CATEGORY = { id: 'all', name: 'All', icon: '★', order: -1 };
 const TASK_SNAPSHOT_PREFIX = 'chronos:tasks:snapshot:';
 
 const SPECIAL_CATEGORY_COLORS = {
-  Inbox: '#3478F6',
+  Inbox: '#1761C7',
   Today: '#FF9500',
   Completed: '#34C759'
 };
@@ -157,6 +157,7 @@ export const TaskProvider = ({ children }) => {
   const lastBootstrapAtRef = useRef(0);
   const hasStartedLoadingRef = useRef(false);
   const lastMutationTimeRef = useRef(0); // Track when we last created/updated/deleted a todo
+  const categoryOverrideRef = useRef(new Map());
 
   const setTasksEnhanced = useCallback((updater) => {
     setTasks(prev => {
@@ -194,9 +195,17 @@ export const TaskProvider = ({ children }) => {
   const loadCategories = useCallback(async () => {
     try {
       const response = await todosApi.getCategories();
-      const nextCategories = buildCategories(response.data || []);
-      setCategories(nextCategories);
-      return nextCategories;
+      const fetched = buildCategories(response.data || []);
+      const now = Date.now();
+      const merged = fetched.map(cat => {
+        const override = categoryOverrideRef.current.get(cat.id);
+        if (override && now - override.ts < 5000) {
+          return { ...cat, icon: override.color, color: override.color };
+        }
+        return cat;
+      });
+      setCategories(merged);
+      return merged;
     } catch (error) {
       console.error('Failed to fetch categories:', error);
       return null;
@@ -386,6 +395,11 @@ export const TaskProvider = ({ children }) => {
       });
 
       if (response?.data) {
+        categoryOverrideRef.current.set(response.data.id, { color, ts: Date.now() });
+        setCategories(prev => {
+          const next = buildCategories([...(prev || []).filter(c => c.id !== response.data.id), formatCategory(response.data)]);
+          return next;
+        });
         await loadCategories();
         lastMutationTimeRef.current = Date.now();
       }
@@ -396,6 +410,12 @@ export const TaskProvider = ({ children }) => {
 
   const updateCategory = async (id, updatedCategory) => {
     try {
+      if (updatedCategory?.color) {
+        categoryOverrideRef.current.set(id, { color: updatedCategory.color, ts: Date.now() });
+      }
+      setCategories(prev => prev.map(cat => (cat.id === id
+        ? { ...cat, ...updatedCategory, icon: updatedCategory.color || cat.icon, color: updatedCategory.color || cat.color }
+        : cat)));
       await todosApi.updateCategory(id, updatedCategory);
       await loadCategories();
       lastMutationTimeRef.current = Date.now();
@@ -571,7 +591,7 @@ export const TaskProvider = ({ children }) => {
 
     // Find the category color for this task
     const taskCategory = categories.find(cat => cat.name === task.category_name);
-    const categoryColor = taskCategory?.icon || '#3478F6'; // Default to blue if no category found
+    const categoryColor = taskCategory?.icon || '#1761C7'; // Default to blue if no category found
 
     const isoStart = startDate.toISOString();
     const isoEnd = endDate.toISOString();

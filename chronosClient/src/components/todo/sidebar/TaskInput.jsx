@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import ReactDOM from 'react-dom';
 import data from '@emoji-mart/data';
 import Picker from '@emoji-mart/react';
@@ -24,9 +24,16 @@ const TaskInput = ({
   const [categoryNameEdit, setCategoryNameEdit] = useState(activeCategory);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [currentIcon, setCurrentIcon] = useState(categoryIcon);
+  const [showColorPicker, setShowColorPicker] = useState(false);
   const inputRef = useRef(null);
   const categoryInputRef = useRef(null);
   const emojiPickerRef = useRef(null);
+  const colorPickerRef = useRef(null);
+
+  const CATEGORY_COLORS = [
+    '#1761C7', '#FF3B30', '#34C759', '#FF9500',
+    '#AF52DE', '#FFD60A', '#00C7BE', '#FF2D55'
+  ]
 
   useEffect(() => {
     if (autoFocus && inputRef.current) {
@@ -36,8 +43,20 @@ const TaskInput = ({
 
   useEffect(() => {
     setCategoryNameEdit(activeCategory);
-    setCurrentIcon(categoryIcon);
   }, [activeCategory, categoryIcon]);
+
+  const activeCategoryColor = useMemo(() => {
+    const active = categories.find(cat => cat.name === activeCategory);
+    const fromIcon = active?.icon;
+    if (typeof fromIcon === 'string' && fromIcon.startsWith('#')) return fromIcon;
+    if (typeof active?.color === 'string' && active.color.startsWith('#')) return active.color;
+    if (typeof categoryIcon === 'string' && categoryIcon.startsWith('#')) return categoryIcon;
+    return '#1761C7';
+  }, [categories, activeCategory, categoryIcon]);
+
+  useEffect(() => {
+    setCurrentIcon(activeCategoryColor);
+  }, [activeCategoryColor]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -50,6 +69,11 @@ const TaskInput = ({
   const toggleEmojiPicker = (e) => {
     e.stopPropagation();
     setShowEmojiPicker(!showEmojiPicker);
+  };
+
+  const toggleColorPicker = (e) => {
+    e.stopPropagation();
+    setShowColorPicker(!showColorPicker);
   };
 
   const handleEmojiSelect = (emoji) => {
@@ -78,13 +102,17 @@ const TaskInput = ({
     }
 
     const category = categories.find(cat => cat.name === activeCategory);
-    if (category && trimmed !== activeCategory) {
+    if (category) {
       const payload = { name: trimmed };
       if (typeof currentIcon === 'string' && currentIcon.startsWith('#')) {
         payload.color = currentIcon;
       }
-      updateCategory(category.id, payload);
-      onCategoryRenamed(activeCategory, trimmed);
+      if (trimmed !== activeCategory || payload.color) {
+        updateCategory(category.id, payload);
+      }
+      if (trimmed !== activeCategory) {
+        onCategoryRenamed(activeCategory, trimmed);
+      }
     }
     setCategoryNameEdit(trimmed);
     setIsEditingCategory(false);
@@ -94,6 +122,9 @@ const TaskInput = ({
     const handleClickOutside = (event) => {
       if (emojiPickerRef.current && !emojiPickerRef.current.contains(event.target)) {
         setShowEmojiPicker(false);
+      }
+      if (colorPickerRef.current && !colorPickerRef.current.contains(event.target)) {
+        setShowColorPicker(false);
       }
     };
 
@@ -108,30 +139,39 @@ const TaskInput = ({
       {showCategoryHeader && (
         <div className="category-header">
           <div className="category-title-container">
-            {isEditable && isEditingCategory ? (
-              <div className="emoji-picker-wrapper">
-                <button 
+            {isEditable ? (
+              <div className="category-color-wrapper" ref={colorPickerRef}>
+                <button
                   type="button"
-                  className="emoji-button"
-                  onClick={toggleEmojiPicker}
-                >
-                  {currentIcon}
-                </button>
-                {showEmojiPicker && ReactDOM.createPortal(
-                  <>
-                    <div className="emoji-picker-backdrop" onClick={() => setShowEmojiPicker(false)}></div>
-                    <div className="emoji-picker-container" ref={emojiPickerRef}>
-                      <Picker
-                        data={data}
-                        onEmojiSelect={handleEmojiSelect}
-                        theme="light"
-                        previewPosition="none"
-                        skinTonePosition="none"
-                        emojiSize={20}
+                  className="category-color-button"
+                  style={{
+                    backgroundColor:
+                      (typeof currentIcon === 'string' && currentIcon.startsWith('#'))
+                        ? currentIcon
+                        : activeCategoryColor
+                  }}
+                  onClick={toggleColorPicker}
+                />
+                {showColorPicker && (
+                  <div className="category-color-popover compact">
+                    {CATEGORY_COLORS.map(color => (
+                      <button
+                        type="button"
+                        key={color}
+                        className={`color-swatch ${currentIcon === color ? 'active' : ''}`}
+                        style={{ backgroundColor: color }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setCurrentIcon(color);
+                          setShowColorPicker(false);
+                          const category = categories.find(cat => cat.name === activeCategory);
+                          if (category && category.color !== color) {
+                            updateCategory(category.id, { color });
+                          }
+                        }}
                       />
-                    </div>
-                  </>,
-                  document.body
+                    ))}
+                  </div>
                 )}
               </div>
             ) : (

@@ -19,20 +19,21 @@ import { v4 as uuidv4 } from 'uuid'
 import { calendarApi } from '../lib/api'
 import { describeRecurrence, expandRecurrenceInstances } from '../lib/recurrence'
 import { useAuth } from './AuthContext'
-import { monthKey as cacheMonthKey, getMonths as cacheGetMonths, putMonth as cachePutMonth, pruneOlderThan } from '../lib/cache'
+import { monthKey as cacheMonthKey, getMonths as cacheGetMonths, putMonth as cachePutMonth, pruneOlderThan, clearCacheForCalHash } from '../lib/cache'
 
-const CalendarContext = createContext()
+const CalendarContext = createContext(null)
 const EVENT_BOUNCE_EVENT = 'chronos:event-bounce'
+const EVENT_OVERRIDES_STORAGE_KEY = 'chronos:event-overrides'
 
 const dispatchBounceEvent = (eventId) => {
   if (typeof window === 'undefined' || !eventId) return
   window.dispatchEvent(new CustomEvent(EVENT_BOUNCE_EVENT, { detail: { eventId } }))
 }
 
-const INITIAL_PAST_MONTHS = 3
-const INITIAL_FUTURE_MONTHS = 3
-const EXPANSION_MONTHS = 2
-const IDLE_PREFETCH_EXTRA_MONTHS = 2
+const INITIAL_PAST_MONTHS = 0
+const INITIAL_FUTURE_MONTHS = 0
+const EXPANSION_MONTHS = 0
+const IDLE_PREFETCH_EXTRA_MONTHS = 0
 const RECENT_EVENT_SYNC_TTL_MS = 60 * 1000 // allow a short grace period for new events to appear in remote fetches
 
 const parseCalendarBoundary = (boundary) => {
@@ -180,6 +181,7 @@ export const CalendarProvider = ({ children }) => {
   const suppressedEventIdsRef = useRef(new Set())
   const suppressedTodoIdsRef = useRef(new Set())
   const pendingSyncEventIdsRef = useRef(new Map())
+  const eventOverridesRef = useRef(new Map())
   const optimisticRecurrenceMapRef = useRef(new Map())
   const optimisticEventCacheRef = useRef(new Map())
   const idlePrefetchCancelRef = useRef(null)
@@ -190,6 +192,91 @@ export const CalendarProvider = ({ children }) => {
   const snapshotSaveTimerRef = useRef(null)
   const hasBootstrappedRef = useRef(false)
   const prevSelectedCalHashRef = useRef(null)
+  const persistEventOverrides = useCallback(() => {
+    if (typeof window === 'undefined') return
+    try {
+      const serialized = Array.from(eventOverridesRef.current.entries())
+      window.localStorage.setItem(EVENT_OVERRIDES_STORAGE_KEY, JSON.stringify(serialized))
+    } catch (_) {}
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      const raw = JSON.parse(window.localStorage.getItem(EVENT_OVERRIDES_STORAGE_KEY) || '[]')
+      if (Array.isArray(raw)) {
+        eventOverridesRef.current = new Map(raw)
+      }
+    } catch (_) {
+      eventOverridesRef.current = new Map()
+    }
+  }, [])
+
+  const removeEventOverride = useCallback((eventId) => {
+    if (!eventId) return
+    if (eventOverridesRef.current.delete(eventId)) {
+      persistEventOverrides()
+    }
+  }, [persistEventOverrides])
+
+  const recordEventOverride = useCallback((eventId, startDate, endDate) => {
+    if (!eventId || !(startDate instanceof Date) || !(endDate instanceof Date)) return
+    eventOverridesRef.current.set(eventId, {
+      start: startDate.toISOString(),
+      end: endDate.toISOString(),
+      updatedAt: Date.now()
+    })
+    persistEventOverrides()
+  }, [persistEventOverrides])
+
+  const clearOverrideIfSynced = useCallback((eventId, startDate, endDate) => {
+    if (!eventId) return
+    const override = eventOverridesRef.current.get(eventId)
+    if (!override) return
+    const overrideStart = coerceDate(override.start)
+    const overrideEnd = coerceDate(override.end)
+    const resolvedStart = coerceDate(startDate)
+    const resolvedEnd = coerceDate(endDate)
+    if (
+      overrideStart &&
+      overrideEnd &&
+      resolvedStart &&
+      resolvedEnd &&
+      Math.abs(resolvedStart.getTime() - overrideStart.getTime()) < 60 * 1000 &&
+      Math.abs(resolvedEnd.getTime() - overrideEnd.getTime()) < 60 * 1000
+    ) {
+      removeEventOverride(eventId)
+    }
+  }, [removeEventOverride])
+
+  const applyEventTimeOverrides = useCallback((eventObject) => {
+    if (!eventObject || !eventObject.id) return eventObject
+    const override = eventOverridesRef.current.get(eventObject.id)
+    if (!override) return eventObject
+    const overrideStart = coerceDate(override.start)
+    const overrideEnd = coerceDate(override.end)
+    if (!overrideStart || !overrideEnd) {
+      removeEventOverride(eventObject.id)
+      return eventObject
+    }
+    const eventStart = coerceDate(eventObject.start)
+    const eventEnd = coerceDate(eventObject.end)
+    if (
+      eventStart &&
+      eventEnd &&
+      Math.abs(eventStart.getTime() - overrideStart.getTime()) < 60 * 1000 &&
+      Math.abs(eventEnd.getTime() - overrideEnd.getTime()) < 60 * 1000
+    ) {
+      removeEventOverride(eventObject.id)
+      return eventObject
+    }
+    return {
+      ...eventObject,
+      start: overrideStart,
+      end: overrideEnd,
+      hasLocalOverride: true
+    }
+  }, [removeEventOverride])
 
   const setEvents = useCallback((updater, options = {}) => {
     if (options?.skipDayIndexRebuild) {
@@ -330,8 +417,8 @@ export const CalendarProvider = ({ children }) => {
     }
 
     return {
-      start: startOfWeek(startOfMonth(date)),
-      end: endOfWeek(endOfMonth(date))
+      start: startOfMonth(date),
+      end: endOfMonth(date)
     }
   }, [])
   
@@ -400,18 +487,24 @@ export const CalendarProvider = ({ children }) => {
               id: newEvent.id,
               clientKey: newEvent.clientKey || newEvent.id,
               title: newEvent.title,
+              description: newEvent.description || null,
               start: startIso,
               end: endIso,
               color: newEvent.color,
               calendar_id: newEvent.calendar_id,
               location: newEvent.location || '',
               participants: newEvent.participants || [],
+              attendees: newEvent.attendees || [],
               todoId: newEvent.todoId,
               isOptimistic: newEvent.isOptimistic,
               isAllDay: newEvent.isAllDay,
               isPendingSync: Boolean(newEvent.isPendingSync),
               transparency: newEvent.transparency || 'opaque',
-              visibility: newEvent.visibility || 'default'
+              visibility: newEvent.visibility || 'default',
+              organizerEmail: newEvent.organizerEmail || null,
+              viewerIsOrganizer: Boolean(newEvent.viewerIsOrganizer),
+              viewerIsAttendee: Boolean(newEvent.viewerIsAttendee),
+              viewerResponseStatus: newEvent.viewerResponseStatus || null
             })
             window.sessionStorage.setItem(key, JSON.stringify({ events: list }))
           }
@@ -458,6 +551,7 @@ export const CalendarProvider = ({ children }) => {
             id: ev.id,
             clientKey: ev.clientKey || ev.id,
             title: ev.title || 'Untitled',
+            description: ev.description || null,
             start: new Date(ev.start),
             end: new Date(ev.end),
             color: ev.color || 'blue',
@@ -467,10 +561,15 @@ export const CalendarProvider = ({ children }) => {
             calendar_id: ev.calendar_id,
             location: ev.location || '',
             participants: ev.participants || [],
+            attendees: ev.attendees || [],
             todoId: todoId ? String(todoId) : undefined,
             isPendingSync,
             transparency: ev.transparency || 'opaque',
-            visibility: ev.visibility || 'default'
+            visibility: ev.visibility || 'default',
+            organizerEmail: ev.organizerEmail || null,
+            viewerIsOrganizer: Boolean(ev.viewerIsOrganizer),
+            viewerIsAttendee: Boolean(ev.viewerIsAttendee),
+            viewerResponseStatus: ev.viewerResponseStatus || null
           }
           if (todoId) {
             linkTodoEvent(todoId, ev.id)
@@ -557,7 +656,9 @@ export const CalendarProvider = ({ children }) => {
     if (missingMonths.length === 0) {
       return
     }
-    const segments = groupContiguousMonths(missingMonths)
+    let segments = missingMonths.length
+      ? [[missingMonths[0], missingMonths[missingMonths.length - 1]]]
+      : []
     // Mark months as in-flight
     for (const m of missingMonths) inFlightMonthsRef.current.add(m)
 
@@ -592,9 +693,10 @@ export const CalendarProvider = ({ children }) => {
                 // but if it doesn't, try to resolve it from conferenceData if available
                 const resolvedLocation = ev.location || resolveEventMeetingLocation(ev, '')
                 
-                cachedEvents.push({
+                const cachedEvent = {
                   id: ev.id,
                   title: ev.title || ev.summary || 'Untitled',
+                  description: ev.description || null,
                   start: new Date(ev.start),
                   end: new Date(ev.end),
                   color: ev.color || 'blue',
@@ -609,6 +711,7 @@ export const CalendarProvider = ({ children }) => {
                   recurrenceSummary: ev.recurrenceSummary || null,
                   recurrenceMeta: ev.recurrenceMeta || null,
                   recurringEventId: ev.recurringEventId || null,
+                  organizerEmail: ev.organizerEmail || null,
                   viewerResponseStatus: cachedViewerResponse,
                   viewerIsOrganizer: Boolean(ev.viewerIsOrganizer),
                   viewerIsAttendee: Boolean(ev.viewerIsAttendee),
@@ -616,7 +719,8 @@ export const CalendarProvider = ({ children }) => {
                   isInvitePending: cachedViewerResponse === 'needsAction',
                   transparency: ev.transparency === 'transparent' ? 'transparent' : 'opaque',
                   visibility: ev.visibility || 'default'
-                })
+                }
+                cachedEvents.push(applyEventTimeOverrides(cachedEvent))
               }
             }
           })
@@ -747,11 +851,20 @@ export const CalendarProvider = ({ children }) => {
             const isInvitePending = viewerResponseStatus === 'needsAction'
             const transparency = event.transparency === 'transparent' ? 'transparent' : 'opaque'
             const visibility = event.visibility || 'default'
+            const reminders = event.reminders
+              ? {
+                  ...event.reminders,
+                  overrides: Array.isArray(event.reminders.overrides)
+                    ? event.reminders.overrides.map((override) => ({ ...override }))
+                    : undefined
+                }
+              : null
 
-            return {
+            return applyEventTimeOverrides({
               id: event.id,
               clientKey: event.id,
               title: event.summary || 'Untitled',
+              description: event.description || null,
               start,
               end,
               color: categoryColor || 'blue',
@@ -774,8 +887,9 @@ export const CalendarProvider = ({ children }) => {
               inviteCanRespond,
               isInvitePending,
               transparency,
-              visibility
-            }
+              visibility,
+              reminders
+            })
           })
           .filter(ev => {
             if (!ev) return false
@@ -953,7 +1067,7 @@ export const CalendarProvider = ({ children }) => {
       }
 
       // run with small concurrency
-      const concurrency = 2
+      const concurrency = 1
       let index = 0
       const runners = Array.from({ length: Math.min(concurrency, segments.length) }, async () => {
         while (index < segments.length) {
@@ -992,7 +1106,7 @@ export const CalendarProvider = ({ children }) => {
         }
       }
     }
-  }, [user, selectedCalendars, extendLoadedRange, linkTodoEvent])
+  }, [user, selectedCalendars, extendLoadedRange, linkTodoEvent, applyEventTimeOverrides])
 
   const dateKey = useCallback((d) => {
     const y = d.getFullYear()
@@ -1197,19 +1311,8 @@ export const CalendarProvider = ({ children }) => {
     if (!(start instanceof Date) || !(end instanceof Date)) {
       return null
     }
-
-    const bufferedStart = startOfDay(
-      startOfWeek(
-        startOfMonth(subMonths(start, pastMonths))
-      )
-    )
-
-    const bufferedEnd = endOfDay(
-      endOfWeek(
-        endOfMonth(addMonths(end, futureMonths))
-      )
-    )
-
+    const bufferedStart = startOfDay(startOfMonth(subMonths(start, pastMonths)))
+    const bufferedEnd = endOfDay(endOfMonth(addMonths(end, futureMonths)))
     return { start: bufferedStart, end: bufferedEnd }
   }, [])
 
@@ -1455,6 +1558,7 @@ export const CalendarProvider = ({ children }) => {
           list.push({
             id: ev.id,
             title: ev.title,
+            description: ev.description || null,
             start: startIso,
             end: endIso,
             color: ev.color,
@@ -1463,8 +1567,13 @@ export const CalendarProvider = ({ children }) => {
             isAllDay: Boolean(ev.isAllDay),
             location: ev.location || '',
             participants: ev.participants || [],
+            attendees: ev.attendees || [],
             isOptimistic: Boolean(ev.isOptimistic),
-            isPendingSync: Boolean(ev.isPendingSync)
+            isPendingSync: Boolean(ev.isPendingSync),
+            organizerEmail: ev.organizerEmail || null,
+            viewerIsOrganizer: Boolean(ev.viewerIsOrganizer),
+            viewerIsAttendee: Boolean(ev.viewerIsAttendee),
+            viewerResponseStatus: ev.viewerResponseStatus || null
           })
           if (list.length >= max) break
         }
@@ -1773,6 +1882,7 @@ export const CalendarProvider = ({ children }) => {
       start,
       end,
       color: eventData.color || 'blue',
+      reminders: eventData.reminders || null,
       isAllDay,
       transparency: eventData.transparency === 'transparent' ? 'transparent' : 'opaque',
       visibility: eventData.visibility || 'public'
@@ -1845,6 +1955,7 @@ export const CalendarProvider = ({ children }) => {
         id: created?.id || newEvent.id,
         clientKey: newEvent.clientKey || newEvent.id,
         title: created?.summary || created?.title || processedData.title || 'New Event',
+        description: created?.description || processedData.description || null,
         start: createdStart,
         end: createdEnd,
         color: createdColor,
@@ -1854,6 +1965,7 @@ export const CalendarProvider = ({ children }) => {
         location: resolveEventMeetingLocation(created, processedData.location),
         participants: processedData.participants,
         todoId: processedData.todoId || processedData.todo_id || undefined,
+        reminders: created?.reminders || processedData.reminders || null,
         recurrenceRule: Array.isArray(created?.recurrence) && created.recurrence.length
           ? created.recurrence[0]
           : processedData.recurrenceRule || null,
@@ -1929,6 +2041,18 @@ export const CalendarProvider = ({ children }) => {
       removeEventFromAllSnapshots(newEvent.id)
       saveSnapshotsForAllViews(normalizedWithPending)
 
+      const resolvedServerStart =
+        parseCalendarBoundary(serverEvent?.start) ||
+        (serverEvent?.start?.dateTime ? new Date(serverEvent.start.dateTime) : null) ||
+        coerceDate(serverEvent?.start) ||
+        start
+      const resolvedServerEnd =
+        parseCalendarBoundary(serverEvent?.end) ||
+        (serverEvent?.end?.dateTime ? new Date(serverEvent.end.dateTime) : null) ||
+        coerceDate(serverEvent?.end) ||
+        end
+      clearOverrideIfSynced(id, resolvedServerStart, resolvedServerEnd)
+
       if (processedData.recurrence || processedData.recurrenceRule || processedData.recurrenceSummary) {
         try {
           const { start: visibleStart, end: visibleEnd } = getVisibleRange(currentDate, view)
@@ -1968,7 +2092,7 @@ export const CalendarProvider = ({ children }) => {
     clearOptimisticRecurrenceInstances
   ])
 
-  const updateEvent = useCallback(async (id, updatedData) => {
+  const updateEvent = useCallback(async (id, updatedData = {}) => {
     // Check if this is an optimistic event (temp ID)
     const isOptimistic = typeof id === 'string' && id.startsWith('temp-');
     const existingEvent = events.find(e => e.id === id)
@@ -1980,9 +2104,18 @@ export const CalendarProvider = ({ children }) => {
         }
       : null
     
+    const { recurringEditScope, ...incomingData } = updatedData || {}
+
+    const resolveSeriesId = (ev) => {
+      if (!ev) return null
+      return ev.recurringEventId || ev.parentRecurrenceId || ev.id || null
+    }
+    const targetSeriesId = resolveSeriesId(existingEvent)
+    const applySeriesScope = recurringEditScope === 'all' || recurringEditScope === 'future'
+
     // Ensure dates are proper Date objects
-    let start = coerceDate(updatedData.start)
-    let end = coerceDate(updatedData.end)
+    let start = coerceDate(incomingData.start)
+    let end = coerceDate(incomingData.end)
 
     if (!start) {
       start = coerceDate(existingEvent?.start) || new Date()
@@ -1996,9 +2129,11 @@ export const CalendarProvider = ({ children }) => {
         : undefined
 
     const processedData = {
-      ...updatedData,
+      ...incomingData,
       start,
-      end
+      end,
+      color: updatedData.color ?? existingEvent?.color ?? 'blue',
+      reminders: updatedData.reminders ?? existingEvent?.reminders ?? null
     };
     if (typeof isAllDay === 'boolean') {
       processedData.isAllDay = isAllDay
@@ -2037,36 +2172,47 @@ export const CalendarProvider = ({ children }) => {
       addOptimisticRecurrenceInstances(parentSnapshot, recurrenceMeta)
     }
 
+    recordEventOverride(id, start, end)
+
+    const updateForSeries = { ...processedData }
+    delete updateForSeries.start
+    delete updateForSeries.end
+
+    const seriesUpdates = []
     // Optimistically update local state
     setEvents(
       prev => prev.map(event => {
-        if (event.id !== id) return event
-        return {
-          ...event,
-          ...processedData
+        let sameSeries = applySeriesScope && targetSeriesId && resolveSeriesId(event) === targetSeriesId
+        if (sameSeries && recurringEditScope === 'future') {
+          const evStart = coerceDate(event.start)
+          if (!evStart || evStart < start) {
+            sameSeries = false
+          }
         }
+        if (!sameSeries && event.id !== id) return event
+
+        const merged = event.id === id
+          ? { ...event, ...processedData }
+          : { ...event, ...updateForSeries }
+        seriesUpdates.push(merged)
+        return merged
       }),
       { skipDayIndexRebuild: true }
     );
-    // Re-index the updated event
-    const updated = {
-      id,
-      ...processedData
-    }
-    // Remove old entries for this id
+
+    const idsToReindex = new Set(seriesUpdates.map(ev => ev.id))
+    // Remove old entries for affected ids
     for (const [key, arr] of eventsByDayRef.current.entries()) {
-      const next = arr.filter(e => e.id !== id)
+      const next = arr.filter(e => !idsToReindex.has(e.id))
       if (next.length !== arr.length) {
         eventsByDayRef.current.set(key, next)
       }
     }
-    indexEventByDays(updated)
+    // Re-index updated events
+    seriesUpdates.forEach(ev => indexEventByDays(ev))
     
     // Update snapshots for all views
-    const fullEvent = events.find(e => e.id === id)
-    if (fullEvent) {
-      saveSnapshotsForAllViews({ ...fullEvent, ...processedData })
-    }
+    seriesUpdates.forEach(ev => saveSnapshotsForAllViews(ev))
     
     // Don't send optimistic events to backend - wait for them to be resolved first
     if (isOptimistic) {
@@ -2086,15 +2232,44 @@ export const CalendarProvider = ({ children }) => {
         const resolvedLocation = resolveEventMeetingLocation(serverEvent, processedData.location)
         const resolvedTransparency = serverEvent?.transparency || processedData.transparency
         const resolvedVisibility = serverEvent?.visibility || processedData.visibility
+        // Cache description from server response or keep existing
+        const resolvedDescription = serverEvent?.description !== undefined ? serverEvent.description : (processedData.description || null)
+        const resolvedColor =
+          serverEvent?.extendedProperties?.private?.categoryColor
+          || serverEvent?.color
+          || processedData.color
+          || existingEvent?.color
+          || 'blue'
+        const resolvedReminders = serverEvent?.reminders || processedData.reminders || existingEvent?.reminders || null
         setEvents(prev => prev.map(evt => (
           evt.id === id
-            ? { ...evt, location: resolvedLocation, transparency: resolvedTransparency, visibility: resolvedVisibility }
+            ? {
+                ...evt,
+                location: resolvedLocation,
+                transparency: resolvedTransparency,
+                visibility: resolvedVisibility,
+                description: resolvedDescription,
+                color: resolvedColor,
+                reminders: resolvedReminders
+              }
             : evt
         )), { skipDayIndexRebuild: true })
         setSelectedEvent(prev => {
           if (!prev || prev.id !== id) return prev
-          return { ...prev, location: resolvedLocation, transparency: resolvedTransparency, visibility: resolvedVisibility }
+          return {
+            ...prev,
+            location: resolvedLocation,
+            transparency: resolvedTransparency,
+            visibility: resolvedVisibility,
+            description: resolvedDescription,
+            color: resolvedColor,
+            reminders: resolvedReminders
+          }
         })
+      }
+      if ((recurringEditScope === 'future' || recurringEditScope === 'all') && user?.id) {
+        const calHash = calHashRef.current || 'all'
+        clearCacheForCalHash({ user: user.id, calHash }).catch(() => {})
       }
       if (processedData.recurrence || processedData.recurrenceRule || processedData.recurrenceSummary) {
         try {
@@ -2131,7 +2306,10 @@ export const CalendarProvider = ({ children }) => {
     view,
     fetchEventsForRange,
     addOptimisticRecurrenceInstances,
-    clearOptimisticRecurrenceInstances
+    clearOptimisticRecurrenceInstances,
+    recordEventOverride,
+    clearOverrideIfSynced,
+    user?.id
   ])
 
   const respondToInvite = useCallback(async (eventId, responseStatus) => {
@@ -2413,6 +2591,7 @@ export const CalendarProvider = ({ children }) => {
         endDate: exactEndDate,
         title: event.title || 'New Event',
         color: event.color || 'blue',
+        isAllDay: event.isAllDay !== undefined ? event.isAllDay : false, // Preserve isAllDay from event, default to false for timed events
         fromDayClick: true // Flag to indicate this came from day/calendar interaction
       };
     } else if (event) {

@@ -5,8 +5,8 @@ export const EVENT_COLORS = {
   // Light pastel backgrounds with darker text colors
   blue: {
     background: '#C5E0F9',  // Light blue
-    text: '#1967D2',        // Darker blue for text
-    border: '#1967D2'
+    text: '#1761C7',        // 5% darker blue for text
+    border: '#1761C7'
   },
   orange: {
     background: '#FFDAB3',  // Light peach/orange

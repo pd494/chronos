@@ -233,7 +233,7 @@ const MonthlyView = () => {
       end: endDate,
       isAllDay: true,
       title: 'New Event',
-      color: '#3478F6'
+      color: '#1761C7'
     }, true)
   }, [rangeSelection, openEventModal])
 
@@ -970,7 +970,7 @@ const MonthlyView = () => {
                         start: startDate,
                         end: endDate,
                         title: 'New Event',
-                        color: '#3478F6'
+                        color: '#1761C7'
                       }, true);
                     }}
                     style={{

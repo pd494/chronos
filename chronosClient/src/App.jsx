@@ -251,7 +251,18 @@ function AppContent() {
           toggleSidebar={toggleSidebar}
           onCategoryRenamed={handleCategoryRenamed}
         />}
+        overlayHeader={(
+          <CategoryTabs
+            categories={categories}
+            activeCategory={activeCategory}
+            onCategoryChange={handleCategoryChange}
+            isCompact={true}
+            inHeader={true}
+          />
+        )}
         main={renderCalendarView()}
+        isSidebarCollapsed={isSidebarCollapsed}
+        onToggleSidebar={toggleSidebar}
         onSidebarWidthChange={handleSidebarChange}
       />
       {showEventModal && <EventModal />}

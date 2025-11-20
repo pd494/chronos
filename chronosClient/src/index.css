@@ -249,7 +249,7 @@ body {
 .calendar-day.today {
   font-weight: 600;
   color: white;
-  background-color: #3b82f6;
+  background-color: #1761C7;
   border-radius: 9999px;
 }
 
@@ -329,8 +329,8 @@ body {
 }
 
 .todo-checkbox:checked {
-  background-color: #3b82f6;
-  border-color: #3b82f6;
+  background-color: #1761C7;
+  border-color: #1761C7;
 }
 
 .todo-checkbox:checked::after {

@@ -15,7 +15,7 @@ const ALL_DAY_SECTION_HEIGHT = 40 // Height of the all-day events section
 const ALL_DAY_EVENT_HEIGHT = 30
 const ALL_DAY_EVENT_GAP = 4
 const TIMED_EVENT_GAP = 4
-const SNAP_INTERVAL_MINUTES = 30
+const SNAP_INTERVAL_MINUTES = 5
 const MAX_SNAP_MINUTES = (DAY_END_HOUR * 60) + SNAP_INTERVAL_MINUTES
 const clampSnapMinutes = (minutes) => Math.max(0, Math.min(minutes, MAX_SNAP_MINUTES))
 const snapMinutesToLatestHalfHour = (totalMinutes) => {
@@ -33,6 +33,7 @@ const snapHourMinutePair = (hour, minutes = 0) => {
   const snappedMinute = snappedMinutes % 60
   return { hour: snappedHour, minutes: snappedMinute }
 }
+const DRAG_DISTANCE_THRESHOLD = 0.08 // ~5 minutes to start the preview
 
 const DailyView = () => {
   const {
@@ -59,6 +60,7 @@ const DailyView = () => {
   const [dragEnd, setDragEnd] = useState(null)
   const hasDraggedRef = useRef(false)
   const dragTimeoutRef = useRef(null)
+  const dragInitialHourRef = useRef(null)
   
   useEffect(() => {
     // Scroll to current time on initial load
@@ -183,17 +185,61 @@ const DailyView = () => {
       console.error('Error dropping event onto day hour cell:', error);
     }
 
-    e.currentTarget.classList.remove('event-dragover');
+    clearEventDragPreview();
   };
 
-  const handleDragOver = (e) => {
+  const emitDragPreviewUpdate = (startDate, endDate) => {
+    if (typeof window === 'undefined') return
+    const dragMeta = window.__chronosDraggedEventMeta || null
+    if (!dragMeta?.id) return
+    window.dispatchEvent(new CustomEvent('chronos-drag-preview', {
+      detail: {
+        id: dragMeta.id,
+        start: startDate ? startDate.toISOString() : null,
+        end: endDate ? endDate.toISOString() : null
+      }
+    }))
+  }
+  const updateEventDragPreview = (e, hourCell, hour) => {
+    if (!hourCell) {
+      clearEventDragPreview()
+      return
+    }
+    const rect = hourCell.getBoundingClientRect()
+    const relativeY = Math.min(rect.height, Math.max(0, e.clientY - rect.top))
+    const minutePercentage = rect.height ? relativeY / rect.height : 0
+    const minutes = Math.floor(minutePercentage * 60)
+    const { hour: snappedHour, minutes: snappedMinutes } = snapHourMinutePair(hour, minutes)
+    const dragMeta = typeof window !== 'undefined' ? window.__chronosDraggedEventMeta : null
+    if (!dragMeta) {
+      emitDragPreviewUpdate(null, null)
+      return
+    }
+    const durationMs = dragMeta.durationMs || 60 * 60 * 1000
+    const newStart = new Date(currentDate)
+    newStart.setHours(snappedHour, snappedMinutes, 0, 0)
+    const newEnd = new Date(newStart.getTime() + durationMs)
+    emitDragPreviewUpdate(newStart, newEnd)
+  };
+
+  const clearEventDragPreview = () => emitDragPreviewUpdate(null, null);
+  const resetPreviewIfNoTarget = () => {
+    clearEventDragPreview();
+  };
+
+  const handleHourCellDragOver = (e, hour) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
-    e.currentTarget.classList.add('event-dragover');
+    updateEventDragPreview(e, e.currentTarget, hour);
+  };
+  const handleAllDayDragOver = (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    clearEventDragPreview();
   };
 
-  const handleDragLeave = (e) => {
-    e.currentTarget.classList.remove('event-dragover');
+  const handleDragLeave = () => {
+    resetPreviewIfNoTarget();
   };
 
   const handleAllDayEventDrop = (e) => {
@@ -231,7 +277,7 @@ const DailyView = () => {
       console.error('Error dropping all-day event in daily view:', error);
     }
 
-    e.currentTarget.classList.remove('event-dragover');
+    clearEventDragPreview();
   };
 
   const handleCellMouseDown = (e, hour) => {
@@ -248,6 +294,7 @@ const DailyView = () => {
     setDragStart(snappedHour)
     setDragEnd(snappedHour)
     hasDraggedRef.current = false
+    dragInitialHourRef.current = preciseHour
     
     // Delay showing drag preview by 500ms
     dragTimeoutRef.current = setTimeout(() => {
@@ -256,14 +303,30 @@ const DailyView = () => {
   }
 
   const handleCellMouseMove = (e, hour) => {
-    if (!isDragging) return
-    hasDraggedRef.current = true
-
+    if (dragStart === null) return
     const rect = e.currentTarget.getBoundingClientRect()
     const relativeY = e.clientY - rect.top
     const minutePercentage = (relativeY % HOUR_HEIGHT) / HOUR_HEIGHT
     const minutes = Math.floor(minutePercentage * 60)
-    setDragEnd(snapHourValue(hour + (minutes / 60)))
+    const preciseHour = hour + (minutes / 60)
+    const snappedHour = snapHourValue(preciseHour)
+
+    const startRaw = dragInitialHourRef.current ?? dragStart ?? preciseHour
+    const distanceMoved = Math.abs(preciseHour - startRaw)
+    const shouldActivateDrag = isDragging || distanceMoved >= DRAG_DISTANCE_THRESHOLD
+
+    if (!isDragging && shouldActivateDrag) {
+      if (dragTimeoutRef.current) {
+        clearTimeout(dragTimeoutRef.current)
+        dragTimeoutRef.current = null
+      }
+      setIsDragging(true)
+    }
+
+    if (shouldActivateDrag) {
+      hasDraggedRef.current = true
+      setDragEnd(snappedHour)
+    }
   }
 
   const handleGridMouseUp = () => {
@@ -283,6 +346,7 @@ const DailyView = () => {
     setDragStart(null);
     setDragEnd(null);
     hasDraggedRef.current = false;
+    dragInitialHourRef.current = null;
     
     if (wasDragging && savedDragStart !== null && savedDragEnd !== null) {
       const startHour = Math.min(savedDragStart, savedDragEnd);
@@ -577,30 +641,39 @@ const DailyView = () => {
       onTouchEnd={handleTouchEnd}
     >
       {/* All-day events section - fixed at top, no scrolling */}
-      <div className="flex w-full border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 z-20 flex-shrink-0">
-        <div className="w-16 flex-shrink-0 text-center py-2 text-xs text-gray-500 border-r border-gray-200 dark:border-gray-700">
-          All-day
-        </div>
-        <div
-          className="flex-1 p-2 day-all-day-section overflow-hidden"
-          style={{ 
-            minHeight: `${Math.max(ALL_DAY_SECTION_HEIGHT, Math.max(1, allDayEvents.length) * (ALL_DAY_EVENT_HEIGHT + ALL_DAY_EVENT_GAP) - ALL_DAY_EVENT_GAP)}px`,
-            maxHeight: `${Math.max(ALL_DAY_SECTION_HEIGHT, Math.max(1, allDayEvents.length) * (ALL_DAY_EVENT_HEIGHT + ALL_DAY_EVENT_GAP) - ALL_DAY_EVENT_GAP)}px`
-          }}
-          onDrop={handleAllDayEventDrop}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-        >
-          {allDayEvents.map(event => renderAllDayEvent(event))}
-          {allDayEvents.length === 0 && (
-            <div className="text-xs text-gray-400 italic">Drop tasks here for all-day events</div>
-          )}
-        </div>
-      </div>
+      {(() => {
+        const requiredHeight = Math.max(
+          ALL_DAY_SECTION_HEIGHT,
+          Math.max(1, allDayEvents.length) * (ALL_DAY_EVENT_HEIGHT + ALL_DAY_EVENT_GAP) - ALL_DAY_EVENT_GAP
+        );
+
+        return (
+          <div className="flex w-full border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 z-20 flex-shrink-0" style={{ minHeight: `${requiredHeight}px` }}>
+            <div className="w-16 flex-shrink-0 text-center py-2 text-xs text-gray-500 border-r border-gray-200 dark:border-gray-700" style={{ minHeight: `${requiredHeight}px` }}>
+              All-day
+            </div>
+            <div
+              className="flex-1 p-2 day-all-day-section overflow-hidden border-r border-gray-200 dark:border-gray-700"
+              style={{ 
+                minHeight: `${requiredHeight}px`,
+                height: `${requiredHeight}px`
+              }}
+              onDrop={handleAllDayEventDrop}
+              onDragOver={handleAllDayDragOver}
+              onDragLeave={handleDragLeave}
+            >
+              {allDayEvents.map(event => renderAllDayEvent(event))}
+              {allDayEvents.length === 0 && (
+                <div className="text-xs text-gray-400 italic">Drop tasks here for all-day events</div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
       
       <div className="relative flex flex-1 overflow-y-auto min-h-0">
         {/* Time labels */}
-        <div className="w-16 flex-shrink-0 relative z-10 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700">
+        <div className="w-16 flex-shrink-0 relative z-10 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700" style={{ height: `${(DAY_END_HOUR - DAY_START_HOUR + 1) * HOUR_HEIGHT}px`, minHeight: `${(DAY_END_HOUR - DAY_START_HOUR + 1) * HOUR_HEIGHT}px` }}>
           {hours.map((hour) => (
             <div 
               key={hour} 
@@ -614,7 +687,7 @@ const DailyView = () => {
         </div>
         
         {/* Day grid */}
-        <div className="flex-1 relative">
+        <div className="flex-1 relative" style={{ height: `${(DAY_END_HOUR - DAY_START_HOUR + 1) * HOUR_HEIGHT}px`, minHeight: `${(DAY_END_HOUR - DAY_START_HOUR + 1) * HOUR_HEIGHT}px` }}>
           {/* Horizontal time grid lines */}
           {hours.map((hour) => (
             <div 
@@ -636,8 +709,38 @@ const DailyView = () => {
           
           {/* Day column */}
           <div 
-            className="relative min-h-full w-full"
-            style={{ height: `${(DAY_END_HOUR - DAY_START_HOUR + 1) * HOUR_HEIGHT}px` }}
+            className="relative w-full"
+            style={{ height: `${(DAY_END_HOUR - DAY_START_HOUR + 1) * HOUR_HEIGHT}px`, minHeight: `${(DAY_END_HOUR - DAY_START_HOUR + 1) * HOUR_HEIGHT}px` }}
+            onDragOver={(e) => {
+              e.preventDefault()
+              e.dataTransfer.dropEffect = 'move'
+              
+              const elements = document.elementsFromPoint(e.clientX, e.clientY)
+              const hourCell = elements.find(el => el.classList.contains('day-hour-cell'))
+              
+              if (hourCell) {
+                const hour = parseInt(hourCell.getAttribute('data-hour'), 10)
+                if (!isNaN(hour)) {
+                  updateEventDragPreview(e, hourCell, hour)
+                }
+              }
+            }}
+            onDrop={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              
+              const elements = document.elementsFromPoint(e.clientX, e.clientY)
+              const hourCell = elements.find(el => el.classList.contains('day-hour-cell'))
+              
+              if (hourCell) {
+                const hour = parseInt(hourCell.getAttribute('data-hour'), 10)
+                if (!isNaN(hour)) {
+                  handleEventDrop(e, hour)
+                }
+              }
+              
+              clearEventDragPreview()
+            }}
           >
             {/* Hour cells for drag-to-drop and drag-to-create */}
             {hours.map((hour) => (
@@ -653,7 +756,7 @@ const DailyView = () => {
                 onMouseMove={(e) => handleCellMouseMove(e, hour)}
                 onDoubleClick={(e) => handleCellDoubleClick(e, hour)}
                 onDrop={(e) => handleEventDrop(e, hour)}
-                onDragOver={handleDragOver}
+                onDragOver={(e) => handleHourCellDragOver(e, hour)}
                 onDragLeave={handleDragLeave}
               />
             ))}
@@ -670,7 +773,7 @@ const DailyView = () => {
                 }}
               />
             )}
-            
+
             {/* Events for this day (only regular events, not all-day) */}
             {calculateTimeGridLayout(regularEvents).map(({ event, column, columns }) => (
               <DayEvent 

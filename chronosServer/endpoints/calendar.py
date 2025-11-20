@@ -169,12 +169,13 @@ async def update_event(
     event_data = body.get("event_data")
     event_data = _normalize_event_location(event_data)
     send_notifications = body.get("send_notifications", False)
+    recurring_edit_scope = event_data.pop("recurringEditScope", None) if event_data else None
     
     if not event_data:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing event_data")
     
     service = GoogleCalendarService(str(user.id), supabase)
-    updated_event = service.update_event(event_id, calendar_id, event_data, send_notifications)
+    updated_event = service.update_event(event_id, calendar_id, event_data, send_notifications, recurring_edit_scope)
     
     return {"event": updated_event}
 

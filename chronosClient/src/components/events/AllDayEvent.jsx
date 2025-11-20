@@ -1,8 +1,20 @@
 import { useState } from 'react'
 import { format, differenceInCalendarDays, startOfDay } from 'date-fns'
 import { getEventColors } from '../../lib/eventColors'
+import { useAuth } from '../../context/AuthContext'
+import { FiRepeat } from 'react-icons/fi'
+
+const isRecurringCalendarEvent = (event) => {
+  if (!event) return false
+  if (event.recurringEventId || event.parentRecurrenceId) return true
+  if (Array.isArray(event.recurrence) && event.recurrence.length) return true
+  if (event.recurrenceMeta?.enabled) return true
+  if (typeof event.recurrenceRule === 'string' && event.recurrenceRule.trim().length > 0) return true
+  return false
+}
 
 const AllDayEvent = ({ event, onOpen, className = '', style = {} }) => {
+  const { user } = useAuth()
   const colors = getEventColors(event.color || 'blue')
   const [isDragging, setIsDragging] = useState(false)
 
@@ -61,6 +73,10 @@ const AllDayEvent = ({ event, onOpen, className = '', style = {} }) => {
   const isPendingInvite = responseStatus === 'needsaction'
   const isTentative = responseStatus === 'tentative'
   const isDeclined = responseStatus === 'declined'
+  
+  // Don't show pending invite styling if current user is the organizer
+  const isCurrentUserOrganizer = event.organizerEmail === user?.email
+  const showPendingStyling = (isPendingInvite || isTentative) && !isCurrentUserOrganizer
 
   const titleColor = isDeclined ? 'rgba(71, 85, 105, 0.6)' : colors.text
 
@@ -93,6 +109,8 @@ const AllDayEvent = ({ event, onOpen, className = '', style = {} }) => {
     ? format(new Date(event.start), 'h:mma').toLowerCase()
     : null
 
+  const showRecurringIcon = isRecurringCalendarEvent(event)
+
   const indicatorColor = isDeclined
     ? 'rgba(148, 163, 184, 0.8)'
     : (colors.border || colors.text)
@@ -103,27 +121,34 @@ const AllDayEvent = ({ event, onOpen, className = '', style = {} }) => {
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
       onClick={handleClick}
-      className={`truncate rounded px-2 cursor-pointer text-xs relative flex items-center gap-2 event-draggable calendar-event-hover ${(isPendingInvite || isTentative) ? 'pending-invite-block' : ''} ${isDeclined ? 'declined-event-block' : ''} ${className}`.trim()}
+      className={`rounded-md px-2 py-1 cursor-pointer text-xs relative flex items-center gap-2 event-draggable calendar-event-hover ${showPendingStyling ? 'pending-invite-block' : ''} ${isDeclined ? 'declined-event-block' : ''} ${className}`.trim()}
       style={{
         backgroundColor,
         color: titleColor,
-        opacity: isDragging ? 0.5 : ((isPendingInvite || isTentative) ? 0.9 : 1),
-        border: (isPendingInvite || isTentative) ? '1px dashed rgba(148, 163, 184, 0.9)' : undefined,
-        filter: (isPendingInvite || isTentative) ? 'saturate(0.9)' : undefined,
+        opacity: isDragging ? 0.5 : (showPendingStyling ? 0.9 : 1),
+        border: showPendingStyling ? '1px dashed rgba(148, 163, 184, 0.9)' : undefined,
+        filter: showPendingStyling ? 'saturate(0.9)' : undefined,
         ...style
       }}
       data-event-id={event.id}
     >
-      <div
-        className="flex-shrink-0 w-1 h-4 rounded"
-        style={{ backgroundColor: indicatorColor }}
+      {/* Vertical line indicator */}
+      <div 
+        className="absolute left-1 top-1 bottom-1 w-1 rounded-full" 
+        style={{ 
+          backgroundColor: indicatorColor
+        }}
       ></div>
-      <span className="font-medium truncate flex items-center gap-1" style={{ color: titleColor }}>
-        <span className="truncate">{event.title}</span>
+      
+      <span className="font-medium flex items-center gap-1.5 flex-1 min-w-0 ml-2" style={{ color: titleColor }}>
+        <span className="truncate flex-1 min-w-0">{event.title}</span>
         {formattedStartTime && (
-          <span className="text-[11px] font-semibold text-slate-600 whitespace-nowrap">
+          <span className="text-[11px] font-semibold text-slate-600 whitespace-nowrap flex-shrink-0">
             {formattedStartTime}
           </span>
+        )}
+        {showRecurringIcon && (
+          <FiRepeat className="flex-shrink-0" size={14} />
         )}
       </span>
     </div>
