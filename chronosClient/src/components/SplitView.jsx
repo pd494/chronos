@@ -67,7 +67,8 @@ const SplitView = ({ sidebar, main, onSidebarWidthChange, isSidebarCollapsed = f
   const collapsedRailButton = (
     <button
       onClick={handleExpand}
-      className="absolute left-2 top-3 z-30 bg-white dark:bg-gray-800 shadow-md p-1.5 rounded-full border border-gray-200 dark:border-gray-700 hover:shadow-lg transition"
+      className="absolute bg-white dark:bg-gray-800 shadow-md p-1.5 rounded-full border border-gray-200 dark:border-gray-700 hover:shadow-lg transition"
+      style={{ left: 4, top: 6, zIndex: 90 }}
       aria-label="Show tasks"
     >
       <FiChevronsRight />
@@ -95,14 +96,22 @@ const SplitView = ({ sidebar, main, onSidebarWidthChange, isSidebarCollapsed = f
       {isSidebarCollapsed && (
         <>
           <div
-            className="absolute left-0 top-0 bottom-0 w-4 z-10 cursor-pointer bg-transparent"
-            onMouseEnter={openPeek}
+            className="absolute left-0 top-0 bottom-0 w-8 z-50 cursor-pointer bg-transparent"
+            onMouseEnter={(e) => {
+              const railWidth = e.currentTarget.clientWidth || 8
+              const immuneZone = Math.max(railWidth * 0.25, 8)
+              const offset = e.clientX - e.currentTarget.getBoundingClientRect().left
+              // Avoid triggering when right over the chevron area; otherwise open peek
+              if (offset > immuneZone) {
+                openPeek()
+              }
+            }}
             onClick={() => !peekOpen && setPeekOpen(true)}
           />
           {collapsedRailButton}
           <div
             ref={sidebarRef}
-            className="absolute left-0 top-0 bottom-0 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 shadow-2xl flex flex-col z-30"
+            className="absolute left-0 top-0 bottom-0 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 shadow-2xl flex flex-col z-50"
             style={{
               width: `${overlayWidth}px`,
               opacity: peekOpen ? 1 : 0,
