@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { format, differenceInCalendarDays, startOfDay } from 'date-fns'
 import { getEventColors } from '../../lib/eventColors'
 import { useAuth } from '../../context/AuthContext'
+import { useCalendar } from '../../context/CalendarContext'
 import { FiRepeat } from 'react-icons/fi'
 
 const isRecurringCalendarEvent = (event) => {
@@ -13,8 +14,43 @@ const isRecurringCalendarEvent = (event) => {
   return false
 }
 
+const lightenHexColor = (hex, percent = 40) => {
+  if (typeof hex !== 'string' || !hex.startsWith('#')) return hex
+  const normalized = hex.replace('#', '')
+  const parse = (substr) => parseInt(substr, 16)
+  const toHex = (value) => value.toString(16).padStart(2, '0')
+  const adjust = (value) => Math.min(255, Math.floor(value + (255 - value) * (percent / 100)))
+
+  if (normalized.length === 3) {
+    const r = parse(normalized[0] + normalized[0])
+    const g = parse(normalized[1] + normalized[1])
+    const b = parse(normalized[2] + normalized[2])
+    return `#${toHex(adjust(r))}${toHex(adjust(g))}${toHex(adjust(b))}`
+  }
+  const r = parse(normalized.substring(0, 2))
+  const g = parse(normalized.substring(2, 4))
+  const b = parse(normalized.substring(4, 6))
+  return `#${toHex(adjust(r))}${toHex(adjust(g))}${toHex(adjust(b))}`
+}
+
+const hexToRgba = (hex, alpha) => {
+  if (typeof hex !== 'string' || !hex.startsWith('#')) return hex
+  const normalized = hex.replace('#', '')
+  if (normalized.length === 3) {
+    const r = parseInt(normalized[0] + normalized[0], 16)
+    const g = parseInt(normalized[1] + normalized[1], 16)
+    const b = parseInt(normalized[2] + normalized[2], 16)
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`
+  }
+  const r = parseInt(normalized.substring(0, 2), 16)
+  const g = parseInt(normalized.substring(2, 4), 16)
+  const b = parseInt(normalized.substring(4, 6), 16)
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
+
 const AllDayEvent = ({ event, onOpen, className = '', style = {} }) => {
   const { user } = useAuth()
+  const { isEventChecked } = useCalendar()
   const colors = getEventColors(event.color || 'blue')
   const [isDragging, setIsDragging] = useState(false)
 
@@ -73,25 +109,27 @@ const AllDayEvent = ({ event, onOpen, className = '', style = {} }) => {
   const isPendingInvite = responseStatus === 'needsaction'
   const isTentative = responseStatus === 'tentative'
   const isDeclined = responseStatus === 'declined'
+  const isCheckedOff = isEventChecked(event.id)
+  const visuallyChecked = isCheckedOff && !isDeclined
   
   // Don't show pending invite styling if current user is the organizer
   const isCurrentUserOrganizer = event.organizerEmail === user?.email
   const showPendingStyling = (isPendingInvite || isTentative) && !isCurrentUserOrganizer
 
-  const titleColor = isDeclined ? 'rgba(71, 85, 105, 0.6)' : colors.text
-
-  const hexToRgba = (hex, alpha) => {
-    if (typeof hex !== 'string' || !hex.startsWith('#')) return hex
-    const normalized = hex.replace('#', '')
-    const r = parseInt(normalized.substring(0, 2), 16)
-    const g = parseInt(normalized.substring(2, 4), 16)
-    const b = parseInt(normalized.substring(4, 6), 16)
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`
+  const titleColor = isDeclined
+    ? 'rgba(71, 85, 105, 0.6)'
+    : visuallyChecked
+      ? hexToRgba(colors.text, 0.65)
+      : colors.text
+  const titleStyle = {
+    color: titleColor,
+    textDecoration: (isDeclined || visuallyChecked) ? 'line-through' : undefined
   }
-
   const backgroundColor = isDeclined
     ? hexToRgba(colors.background, 0.45)
-    : colors.background
+    : visuallyChecked
+      ? lightenHexColor(colors.background, 25)
+      : colors.background
 
   const spansMultipleDays = (() => {
     if (!event?.start || !event?.end) return false
@@ -111,7 +149,7 @@ const AllDayEvent = ({ event, onOpen, className = '', style = {} }) => {
 
   const showRecurringIcon = isRecurringCalendarEvent(event)
 
-  const indicatorColor = isDeclined
+  const indicatorColor = (isDeclined || visuallyChecked)
     ? 'rgba(148, 163, 184, 0.8)'
     : (colors.border || colors.text)
 
@@ -121,7 +159,8 @@ const AllDayEvent = ({ event, onOpen, className = '', style = {} }) => {
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
       onClick={handleClick}
-      className={`rounded-md px-2 py-1 cursor-pointer text-xs relative flex items-center gap-2 event-draggable calendar-event-hover ${showPendingStyling ? 'pending-invite-block' : ''} ${isDeclined ? 'declined-event-block' : ''} ${className}`.trim()}
+      className={`rounded-md px-2 py-1 cursor-pointer text-xs relative flex items-center gap-2 event-draggable calendar-event-hover ${showPendingStyling ? 'pending-invite-block' : ''} ${(isDeclined || visuallyChecked) ? 'declined-event-block' : ''} ${className}`.trim()}
+      data-event-view="week"
       style={{
         backgroundColor,
         color: titleColor,
@@ -140,7 +179,7 @@ const AllDayEvent = ({ event, onOpen, className = '', style = {} }) => {
         }}
       ></div>
       
-      <span className="font-medium flex items-center gap-1.5 flex-1 min-w-0 ml-2" style={{ color: titleColor }}>
+      <span className="font-medium flex items-center gap-1.5 flex-1 min-w-0 ml-2" style={titleStyle}>
         <span className="truncate flex-1 min-w-0">{event.title}</span>
         {formattedStartTime && (
           <span className="text-[11px] font-semibold text-slate-600 whitespace-nowrap flex-shrink-0">

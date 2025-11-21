@@ -591,7 +591,8 @@ export const TaskProvider = ({ children }) => {
 
     // Find the category color for this task
     const taskCategory = categories.find(cat => cat.name === task.category_name);
-    const categoryColor = taskCategory?.icon || '#1761C7'; // Default to blue if no category found
+    const rawCategoryColor = taskCategory?.icon || '#1761C7'; // Default to blue if no category found
+    const uiCategoryColor = rawCategoryColor === '#1761C7' ? 'blue' : rawCategoryColor; // Normalize to palette blue
 
     const isoStart = startDate.toISOString();
     const isoEnd = endDate.toISOString();
@@ -618,9 +619,25 @@ export const TaskProvider = ({ children }) => {
         : { dateTime: isoEnd },
       calendar_id: 'primary',
       isAllDay,
-      color: categoryColor
+      color: uiCategoryColor
       // Don't include todoId - each event is independent
     };
+
+    // Optimistically mark the task as scheduled so badges show immediately
+    const scheduledDateValue = isAllDay ? startDateOnly : isoStart;
+    const previousTasksSnapshot = tasks;
+    setTasksEnhanced(prev =>
+      prev.map(t =>
+        t.id === todoId
+          ? {
+              ...t,
+              scheduled_date: scheduledDateValue,
+              scheduled_at: scheduledDateValue,
+              scheduled_is_all_day: isAllDay
+            }
+          : t
+      )
+    );
 
     // Dispatch immediately for instant UI update
     window.dispatchEvent(new CustomEvent('todoConvertedToEvent', {
@@ -637,16 +654,30 @@ export const TaskProvider = ({ children }) => {
         start_date: payloadStart,
         end_date: payloadEnd,
         is_all_day: isAllDay,
-        category_color: categoryColor
+        category_color: rawCategoryColor
       });
 
       const resolvedEvent = {
         ...response.data,
         title: response.data?.summary || task.content,
         isAllDay,
-        color: categoryColor
+        color: uiCategoryColor
         // Don't include todoId - each event is independent
       };
+
+      // Ensure task schedule stays in sync with server response
+      setTasksEnhanced(prev =>
+        prev.map(t =>
+          t.id === todoId
+            ? {
+                ...t,
+                scheduled_date: scheduledDateValue,
+                scheduled_at: scheduledDateValue,
+                scheduled_is_all_day: isAllDay
+              }
+            : t
+        )
+      );
 
       // Update with real event data
       window.dispatchEvent(new CustomEvent('todoConvertedToEvent', {
@@ -668,6 +699,15 @@ export const TaskProvider = ({ children }) => {
       window.dispatchEvent(new CustomEvent('todoConversionFailed', {
         detail: { eventId: optimisticEventId }
       }));
+
+      // Revert optimistic task scheduling state
+      setTasksEnhanced(prev =>
+        prev.map(t => {
+          if (t.id !== todoId) return t
+          const original = previousTasksSnapshot.find(p => p.id === todoId)
+          return original || t
+        })
+      );
 
       throw error;
     }

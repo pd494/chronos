@@ -304,52 +304,21 @@ const getModalPosition = (view, dimensions = DEFAULT_MODAL_DIMENSIONS) => {
     return fallbackCentered()
   }
 
-  const availableRight = Math.max(0, viewportWidth - anchorRect.right - VIEWPORT_MARGIN - MODAL_SIDE_OFFSET)
-  const availableLeft = Math.max(0, anchorRect.left - VIEWPORT_MARGIN - MODAL_SIDE_OFFSET)
+  // Prefer rendering above the anchor, centered horizontally
+  const centerLeft = anchorRect.left + (anchorRect.width / 2) - (modalWidth / 2)
+  let left = clamp(centerLeft, VIEWPORT_MARGIN, viewportWidth - modalWidth - VIEWPORT_MARGIN)
 
-  const pickSide = () => {
-    const fitsRight = availableRight >= modalWidth
-    const fitsLeft = availableLeft >= modalWidth
-    if (fitsRight && !fitsLeft) return 'left'
-    if (!fitsRight && fitsLeft) return 'right'
-    if (availableRight <= 0 && availableLeft <= 0) return null
-    return availableRight >= availableLeft ? 'left' : 'right'
-  }
-
-  let pointerSide = pickSide()
-  let availableSpace = pointerSide === 'left' ? availableRight : availableLeft
-
-  if ((!availableSpace || availableSpace <= 0) && pointerSide === 'left' && availableLeft > 0) {
-    pointerSide = 'right'
-    availableSpace = availableLeft
-  } else if ((!availableSpace || availableSpace <= 0) && pointerSide === 'right' && availableRight > 0) {
-    pointerSide = 'left'
-    availableSpace = availableRight
-  }
-
-  if (!pointerSide || !availableSpace || availableSpace <= 0) {
-    return fallbackCentered()
-  }
-
-  const maxWidthForSide = Math.max(0, availableSpace)
-  const minWidthForSide = Math.min(MIN_MODAL_WIDTH, maxWidthForSide || MIN_MODAL_WIDTH)
-  modalWidth = Math.max(Math.min(modalWidth, maxWidthForSide), minWidthForSide || modalWidth)
-
-  let left = pointerSide === 'left'
-    ? anchorRect.right + MODAL_SIDE_OFFSET
-    : anchorRect.left - modalWidth - MODAL_SIDE_OFFSET
-  left = clamp(left, VIEWPORT_MARGIN, viewportWidth - modalWidth - VIEWPORT_MARGIN)
-
-  let top = anchorRect.top + anchorRect.height / 2 - modalHeight / 2
+  const preferredTop = anchorRect.top - MODAL_SIDE_OFFSET - modalHeight
+  let top = preferredTop >= VIEWPORT_MARGIN
+    ? preferredTop
+    : anchorRect.bottom + MODAL_SIDE_OFFSET
   top = clamp(top, VIEWPORT_MARGIN, viewportHeight - modalHeight - VIEWPORT_MARGIN)
-
-  const pointerOffset = clamp(anchorRect.top + anchorRect.height / 2 - top - 8, 16, modalHeight - 40)
 
   return {
     top,
     left,
-    pointerSide,
-    pointerOffset,
+    pointerSide: null,
+    pointerOffset: modalHeight / 2,
     width: modalWidth,
     maxHeight: modalHeight
   }
@@ -366,7 +335,9 @@ const EventModal = () => {
     view,
     currentDate,
     fetchEventsForRange,
-    refreshEvents
+    refreshEvents,
+    toggleEventChecked,
+    isEventChecked
   } = useCalendar()
   const { user } = useAuth()
   
@@ -386,6 +357,11 @@ const EventModal = () => {
     tempEventIdRef.current = tempEventId
   }, [tempEventId])
   const [isGeneratingMeeting, setIsGeneratingMeeting] = useState(false)
+  const eventIsChecked = useMemo(() => {
+    if (!selectedEvent?.id || typeof isEventChecked !== 'function') return false
+    return isEventChecked(selectedEvent.id)
+  }, [selectedEvent?.id, isEventChecked])
+
   const cleanupTemporaryEvent = useCallback(async (eventId = tempEventIdRef.current) => {
     if (!eventId) return
     try {
@@ -983,10 +959,17 @@ const EventModal = () => {
       // Stop propagation for all keyboard events when modal is visible
       // This prevents global shortcuts from firing
       e.stopPropagation();
-      
+
+      const targetTag = e.target?.tagName?.toLowerCase()
+      const isTypingTarget = targetTag === 'input' || targetTag === 'textarea' || e.target?.isContentEditable
+
       // These shortcuts should only apply if there's a selected event
       // for delete operations
       if (selectedEvent) {
+        if (!isTypingTarget && e.key.toLowerCase() === 'd') {
+          toggleEventChecked(selectedEvent.id)
+          return
+        }
         // Delete on Backspace or Delete
         if ((e.key === 'Backspace' || e.key === 'Delete') && (e.ctrlKey || e.metaKey)) {
           handleDelete(); // handleDelete itself will call closeAndAnimateOut
@@ -998,7 +981,7 @@ const EventModal = () => {
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [selectedEvent, closeAndAnimateOut, deleteEvent, internalVisible]);
+  }, [selectedEvent, closeAndAnimateOut, deleteEvent, internalVisible, toggleEventChecked]);
   
   useEffect(() => {
     let initialEventName = 'New Event';
@@ -1966,7 +1949,9 @@ const EventModal = () => {
             borderRadius: '22px',
             display: 'flex',
             flexDirection: 'column',
-            overflow: 'hidden'
+            maxHeight: 'calc(100vh - 24px)',
+            overflowX: 'visible',
+            overflowY: 'auto'
           }}
       >
         {/* Pointer arrow - left side */}
@@ -2055,45 +2040,60 @@ const EventModal = () => {
             </button>
 
             {/* Event Name - Large with subtitle */}
-            <div className="px-4 pt-[14px] pb-2">
-              <input
-                type="text"
-                value={eventName}
-                onChange={(e) => setEventName(e.target.value)}
-                placeholder="Add title"
-                className="w-full px-0 py-1 text-xl font-semibold text-gray-900 border-none focus:outline-none focus:ring-0"
-                style={{ letterSpacing: '0.01em' }}
-              />
-              <div className={`border-b border-transparent ${eventSubtitle.trim() ? 'pb-2' : 'pb-0'}`}>
-                <textarea
-                  ref={descriptionInputRef}
-                  value={eventSubtitle}
-                  onChange={(e) => setEventSubtitle(e.target.value)}
-                  placeholder="Add description"
-                  className="w-full px-0 py-1 text-sm text-gray-500 border-none focus:outline-none focus:ring-0 resize-none"
-                  rows={1}
-                  style={{
-                    minHeight: eventSubtitle.trim() ? '32px' : '24px',
-                    lineHeight: `${DESCRIPTION_LINE_HEIGHT}px`,
-                    whiteSpace: 'pre-wrap',
-                    wordBreak: 'break-word',
-                    paddingBottom: (!isDescriptionExpanded && descriptionOverflowing) ? '0px' : (eventSubtitle.trim() ? '6px' : '0px'),
-                    overflow: 'hidden',
-                    pointerEvents: (!isDescriptionExpanded && descriptionOverflowing) ? 'none' : 'auto'
-                  }}
-                />
-              </div>
-              {descriptionOverflowing && (
-                <div className="pb-2 pt-0" style={{ marginTop: '-15px' }}>
+            <div className={`px-4 pt-[14px] ${descriptionOverflowing ? 'pb-2' : 'pb-0'}`}>
+              <div className="flex items-start gap-3">
+                {selectedEvent?.id && (
                   <button
                     type="button"
-                    onClick={() => setIsDescriptionExpanded((prev) => !prev)}
-                    className="text-xs font-medium text-blue-600 hover:text-blue-700"
+                    onClick={() => toggleEventChecked && toggleEventChecked(selectedEvent.id)}
+                    className={`w-[20px] h-[20px] flex items-center justify-center border-2 rounded-[6px] transition-colors duration-150 mt-[8px] ${eventIsChecked ? 'bg-green-500 border-green-500 text-white' : 'border-gray-300 text-transparent'}`}
+                    aria-pressed={eventIsChecked}
+                    aria-label={eventIsChecked ? 'Mark event as not completed' : 'Mark event as completed'}
                   >
-                    {isDescriptionExpanded ? 'See less' : 'See more'}
+                    <FiCheck size={14} />
                   </button>
+                )}
+                <div className="flex-1">
+                  <input
+                    type="text"
+                    value={eventName}
+                    onChange={(e) => setEventName(e.target.value)}
+                    placeholder="Add title"
+                    className="w-full px-0 py-1 text-xl font-semibold text-gray-900 border-none focus:outline-none focus:ring-0"
+                    style={{ letterSpacing: '0.01em' }}
+                  />
+                  <div className="border-b border-transparent">
+                    <textarea
+                      ref={descriptionInputRef}
+                      value={eventSubtitle}
+                      onChange={(e) => setEventSubtitle(e.target.value)}
+                      placeholder="Add description"
+                      className="w-full px-0 text-sm text-gray-500 border-none focus:outline-none focus:ring-0 resize-none"
+                      rows={1}
+                      style={{
+                        minHeight: descriptionOverflowing ? '32px' : '0px',
+                        lineHeight: `${DESCRIPTION_LINE_HEIGHT}px`,
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word',
+                        paddingTop: descriptionOverflowing ? '4px' : '0px',
+                        paddingBottom: descriptionOverflowing ? '6px' : '0px',
+                        overflow: 'hidden',
+                        pointerEvents: (!isDescriptionExpanded && descriptionOverflowing) ? 'none' : 'auto'
+                      }}
+                    />
+                  </div>
+                  {descriptionOverflowing && (
+                    <div className="pb-2 pt-0" style={{ marginTop: '-15px' }}>
+                      <button
+                        type="button"
+                        onClick={() => setIsDescriptionExpanded((prev) => !prev)}
+                        className="text-xs font-medium text-blue-600 hover:text-blue-700"
+                      >
+                        {isDescriptionExpanded ? 'See less' : 'See more'}
+                      </button>
+                    </div>
+                  )}
                 </div>
-              )}
               </div>
             </div>
             {/* Grey line after description */}
@@ -3036,7 +3036,9 @@ const EventModal = () => {
               </div>
             )}
           </div>
-        </form>
+        </div>
+      </form>
+      </div>
 
         {showColorPicker && typeof document !== 'undefined' && createPortal(
           <div
@@ -3281,8 +3283,7 @@ const EventModal = () => {
             </div>
           </div>,
           document.body
-        )}
-      </div>
+          )}
     </>,
     document.body
   )

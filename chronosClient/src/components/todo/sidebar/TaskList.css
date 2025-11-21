@@ -137,13 +137,32 @@
 
 .task-content {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
   flex: 1;
   padding: 0 12px;
   overflow: hidden;
 }
 
+.task-text {
+  flex: 1;
+  padding: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
+.task-scheduled-tag {
+  background: #e5e7eb;
+  color: #4b5563;
+  border-radius: 12px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  flex-shrink: 0;
+}
 
 /* Styles for the new editable task item */
 .new-task-item {

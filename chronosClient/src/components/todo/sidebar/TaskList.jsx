@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import Sortable from 'sortablejs';
 import { useTaskContext } from '../../../context/TaskContext';
 import './TaskList.css';
+import TaskScheduledBadge from './TaskScheduledBadge';
 
 const DRAG_CLICK_SUPPRESSION_MS = 1200;
 
@@ -45,6 +46,7 @@ const TaskItem = ({ task, onToggleComplete }) => {
       </div>
       <div className="task-content">
         <div className="task-text">{task.content}</div>
+        <TaskScheduledBadge task={task} />
       </div>
       <div className="task-drag-handle">
         <span>⋮⋮</span>

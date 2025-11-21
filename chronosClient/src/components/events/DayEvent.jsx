@@ -14,8 +14,42 @@ const isRecurringCalendarEvent = (event) => {
   return false
 }
 
+const hexToRgba = (hex, alpha) => {
+  if (typeof hex !== 'string' || !hex.startsWith('#')) return hex
+  const normalized = hex.replace('#', '')
+  if (normalized.length === 3) {
+    const r = parseInt(normalized[0] + normalized[0], 16)
+    const g = parseInt(normalized[1] + normalized[1], 16)
+    const b = parseInt(normalized[2] + normalized[2], 16)
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`
+  }
+  const r = parseInt(normalized.substring(0, 2), 16)
+  const g = parseInt(normalized.substring(2, 4), 16)
+  const b = parseInt(normalized.substring(4, 6), 16)
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
+
+const lightenHexColor = (hex, percent = 40) => {
+  if (typeof hex !== 'string' || !hex.startsWith('#')) return hex
+  const normalized = hex.replace('#', '')
+  const parse = (substr) => parseInt(substr, 16)
+  const toHex = (value) => value.toString(16).padStart(2, '0')
+  const adjust = (value) => Math.min(255, Math.floor(value + (255 - value) * (percent / 100)))
+
+  if (normalized.length === 3) {
+    const r = parse(normalized[0] + normalized[0])
+    const g = parse(normalized[1] + normalized[1])
+    const b = parse(normalized[2] + normalized[2])
+    return `#${toHex(adjust(r))}${toHex(adjust(g))}${toHex(adjust(b))}`
+  }
+  const r = parse(normalized.substring(0, 2))
+  const g = parse(normalized.substring(2, 4))
+  const b = parse(normalized.substring(4, 6))
+  return `#${toHex(adjust(r))}${toHex(adjust(g))}${toHex(adjust(b))}`
+}
+
 const DayEvent = ({ event, hourHeight, dayStartHour, position }) => {
-  const { openEventModal, selectedEvent, updateEvent } = useCalendar()
+  const { openEventModal, selectedEvent, updateEvent, isEventChecked } = useCalendar()
   const { user } = useAuth()
   const [isDragging, setIsDragging] = useState(false)
   const [previewTimes, setPreviewTimes] = useState(null)
@@ -167,32 +201,30 @@ const DayEvent = ({ event, hourHeight, dayStartHour, position }) => {
   const isPendingInvite = responseStatus === 'needsaction'
   const isTentative = responseStatus === 'tentative'
   const isDeclined = responseStatus === 'declined'
+  const isCheckedOff = isEventChecked(event.id)
+  const visuallyChecked = isCheckedOff && !isDeclined
   
   // Don't show pending invite styling if current user is the organizer
   const isCurrentUserOrganizer = event.organizerEmail === user?.email
   const showPendingStyling = (isPendingInvite || isTentative) && !isCurrentUserOrganizer
   const stripedClass = showPendingStyling ? 'pending-invite-block' : ''
   const declinedClass = isDeclined ? 'declined-event-block' : ''
-  const titleColor = isDeclined ? 'rgba(71, 85, 105, 0.6)' : colors.text
-  const timeColor = isDeclined ? 'rgba(71, 85, 105, 0.6)' : colors.text
-  const hexToRgba = (hex, alpha) => {
-    if (typeof hex !== 'string' || !hex.startsWith('#')) return hex
-    const normalized = hex.replace('#', '')
-    if (normalized.length === 3) {
-      const r = parseInt(normalized[0] + normalized[0], 16)
-      const g = parseInt(normalized[1] + normalized[1], 16)
-      const b = parseInt(normalized[2] + normalized[2], 16)
-      return `rgba(${r}, ${g}, ${b}, ${alpha})`
-    }
-    const r = parseInt(normalized.substring(0, 2), 16)
-    const g = parseInt(normalized.substring(2, 4), 16)
-    const b = parseInt(normalized.substring(4, 6), 16)
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`
+  const titleColor = isDeclined
+    ? 'rgba(71, 85, 105, 0.6)'
+    : visuallyChecked
+      ? hexToRgba(colors.text, 0.6)
+      : hexToRgba(colors.text, 0.9)
+  const timeColor = 'rgba(55, 65, 81, 0.7)'
+  const titleStyle = {
+    color: titleColor,
+    textDecoration: (isDeclined || visuallyChecked) ? 'line-through' : undefined
   }
 
-  const backgroundColor = isDeclined 
-    ? 'rgba(148, 163, 184, 0.225)' 
-    : (colors.background.startsWith('#') ? hexToRgba(colors.background, 0.7) : colors.background)
+  const backgroundColor = isDeclined
+    ? 'rgba(148, 163, 184, 0.225)'
+    : visuallyChecked
+      ? (colors.background.startsWith('#') ? hexToRgba(colors.background, 0.35) : colors.background)
+      : (colors.background.startsWith('#') ? hexToRgba(colors.background, 0.7) : colors.background)
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -222,6 +254,7 @@ const DayEvent = ({ event, hourHeight, dayStartHour, position }) => {
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
       className={`absolute rounded-lg p-2 overflow-visible text-sm z-10 group event-draggable calendar-event-hover ${stripedClass} ${declinedClass}`}
+      data-event-view="day"
       style={{
         cursor: isDragging ? 'grabbing' : 'pointer',
         top: `${top}px`,
@@ -254,7 +287,12 @@ const DayEvent = ({ event, hourHeight, dayStartHour, position }) => {
             color: titleColor
           }}
         >
-          <span className="break-words whitespace-normal flex-1 min-w-0">{event.title}</span>
+          <span 
+            className="break-words whitespace-normal flex-1 min-w-0" 
+            style={titleStyle}
+          >
+            {event.title}
+          </span>
           {showRecurringIcon && (
             <FiRepeat className="flex-shrink-0 mt-0.5" size={14} />
           )}

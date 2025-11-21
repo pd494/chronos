@@ -79,7 +79,7 @@ const SignedOutState = ({ onLogin, loading }) => (
 )
 
 function AppContent() {
-  const { view, showEventModal, changeView, initialLoading } = useCalendar()
+  const { view, showEventModal, changeView, initialLoading, selectedEvent, toggleEventChecked } = useCalendar()
   const { categories } = useTaskContext()
   const { loading: authLoading, user, login } = useAuth()
   const [toastMessage, setToastMessage] = useState('')
@@ -143,7 +143,18 @@ function AppContent() {
         return;
       }
 
-      // If the event modal is open, let its internal shortcuts handle the key press.
+      // Toggle check-off on selected event
+      if (selectedEvent && e.key.toLowerCase() === 'd') {
+        e.preventDefault()
+        e.stopPropagation()
+        if (typeof e.stopImmediatePropagation === 'function') {
+          e.stopImmediatePropagation()
+        }
+        toggleEventChecked(selectedEvent.id)
+        return
+      }
+
+      // If the event modal is open, let its internal shortcuts handle other key presses.
       if (showEventModal) {
         return;
       }

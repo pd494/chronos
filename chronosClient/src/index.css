@@ -598,6 +598,10 @@ html.dragging .sortable-drag {
   transform: translateY(-50%);
 }
 
+.declined-event-block:not([data-event-view="month"])::after {
+  display: none;
+}
+
 .declined-event-block > * {
   position: relative;
   z-index: 1;

@@ -160,11 +160,22 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, isCollapse
       return;
     }
     const rect = e.currentTarget.getBoundingClientRect();
+    const scrollX = window.pageXOffset || document.documentElement.scrollLeft;
+    const scrollY = window.pageYOffset || document.documentElement.scrollTop;
     setContextMenu({
       category,
-      x: rect.left,
-      y: rect.bottom + 4
+      x: rect.left + scrollX,
+      y: rect.bottom + scrollY + 4
     });
+  };
+
+  const handleDeleteCategory = async (category) => {
+    if (!category?.id) return;
+    await deleteCategory(category.id);
+    if (activeCategory === category.name && category.name !== 'All') {
+      onCategoryChange('All');
+    }
+    setContextMenu(null);
   };
 
   return (
@@ -285,16 +296,12 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, isCollapse
       
       {contextMenu && ReactDOM.createPortal(
         <div 
-          className="context-menu"
+          className="category-context-menu"
           style={{ top: `${contextMenu.y}px`, left: `${contextMenu.x}px` }}
           ref={contextMenuRef}
         >
-          <button onClick={() => {
-            const categoryId = contextMenu.category.id;
-            deleteCategory(categoryId);
-            setContextMenu(null);
-          }}>
-            Delete
+          <button onClick={() => handleDeleteCategory(contextMenu.category)}>
+            <span>Delete "{contextMenu.category.name}"</span>
           </button>
         </div>,
         document.body

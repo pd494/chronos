@@ -717,6 +717,7 @@
 
 /* Category context menu - matching header dropdown style */
 .category-context-menu {
+  position: absolute;
   z-index: 9999;
   background-color: white;
   border-radius: 8px;

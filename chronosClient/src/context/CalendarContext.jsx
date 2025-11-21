@@ -24,6 +24,7 @@ import { monthKey as cacheMonthKey, getMonths as cacheGetMonths, putMonth as cac
 const CalendarContext = createContext(null)
 const EVENT_BOUNCE_EVENT = 'chronos:event-bounce'
 const EVENT_OVERRIDES_STORAGE_KEY = 'chronos:event-overrides'
+const CHECKED_EVENTS_STORAGE_KEY = 'chronos:checked-events'
 
 const dispatchBounceEvent = (eventId) => {
   if (typeof window === 'undefined' || !eventId) return
@@ -182,6 +183,17 @@ export const CalendarProvider = ({ children }) => {
   const suppressedTodoIdsRef = useRef(new Set())
   const pendingSyncEventIdsRef = useRef(new Map())
   const eventOverridesRef = useRef(new Map())
+  const [checkedOffEventIds, setCheckedOffEventIds] = useState(() => {
+    if (typeof window === 'undefined') return new Set()
+    try {
+      const raw = window.localStorage.getItem(CHECKED_EVENTS_STORAGE_KEY)
+      const parsed = JSON.parse(raw || '[]')
+      if (Array.isArray(parsed)) {
+        return new Set(parsed.filter(id => typeof id === 'string' || typeof id === 'number'))
+      }
+    } catch (_) {}
+    return new Set()
+  })
   const optimisticRecurrenceMapRef = useRef(new Map())
   const optimisticEventCacheRef = useRef(new Map())
   const idlePrefetchCancelRef = useRef(null)
@@ -210,6 +222,31 @@ export const CalendarProvider = ({ children }) => {
     } catch (_) {
       eventOverridesRef.current = new Map()
     }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      window.localStorage.setItem(CHECKED_EVENTS_STORAGE_KEY, JSON.stringify(Array.from(checkedOffEventIds)))
+    } catch (_) {}
+  }, [checkedOffEventIds])
+
+  const isEventChecked = useCallback((eventId) => {
+    if (eventId === null || eventId === undefined) return false
+    return checkedOffEventIds.has(eventId)
+  }, [checkedOffEventIds])
+
+  const toggleEventChecked = useCallback((eventId) => {
+    if (!eventId) return
+    setCheckedOffEventIds(prev => {
+      const next = new Set(prev)
+      if (next.has(eventId)) {
+        next.delete(eventId)
+      } else {
+        next.add(eventId)
+      }
+      return next
+    })
   }, [])
 
   const removeEventOverride = useCallback((eventId) => {
@@ -2674,7 +2711,9 @@ export const CalendarProvider = ({ children }) => {
     setHeaderDisplayDate,
     refreshEvents,
     setSelectedCalendars,
-    fetchEventsForRange
+    fetchEventsForRange,
+    isEventChecked,
+    toggleEventChecked
   }
 
   return (

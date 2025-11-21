@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { useCalendar } from '../../context/CalendarContext'
 
 const EventIndicator = ({ event, isMonthView }) => {
-  const { openEventModal, selectedEvent, updateEvent } = useCalendar()
+  const { openEventModal, selectedEvent, updateEvent, isEventChecked } = useCalendar()
   const isSelected = selectedEvent?.id === event.id
   const [isDragging, setIsDragging] = useState(false)
   const spansMultipleDays = (() => {
@@ -96,6 +96,7 @@ const EventIndicator = ({ event, isMonthView }) => {
   const isPendingInvite = responseStatus === 'needsaction'
   const isTentative = responseStatus === 'tentative'
   const isDeclined = responseStatus === 'declined'
+  const isCheckedOff = isEventChecked(event.id)
   
   const eventColor = event.color || 'blue';
   const isHexColor = eventColor.startsWith('#');
@@ -165,8 +166,10 @@ const EventIndicator = ({ event, isMonthView }) => {
   } : {};
 
   const baseTitleStyle = isHexColor ? { ...textStyle } : { color: 'rgb(55, 65, 81)' }
+  const visuallyDeclined = isDeclined || isCheckedOff
+
   const titleStyle = (() => {
-    if (isDeclined) {
+    if (visuallyDeclined) {
       return { ...baseTitleStyle, color: 'rgba(71, 85, 105, 0.6)' }
     }
     if (isPendingInvite || isTentative) {
@@ -175,11 +178,11 @@ const EventIndicator = ({ event, isMonthView }) => {
     return baseTitleStyle
   })()
 
-  const timeStyle = (isPendingInvite || isTentative || isDeclined)
+  const timeStyle = (isPendingInvite || isTentative || visuallyDeclined)
     ? { color: 'rgba(71, 85, 105, 0.55)' }
     : {}
   const baseOpacity = (() => {
-    if (isDeclined) {
+    if (visuallyDeclined) {
       return treatAsAllDay ? 0.6 : 0.55
     }
     if ((isPendingInvite || isTentative) && isMonthView) return 0.9
@@ -193,7 +196,7 @@ const EventIndicator = ({ event, isMonthView }) => {
       onDragEnd={handleDragEnd}
       className={`text-xs mb-1 flex items-center gap-1 px-1 py-0.5 transition-opacity calendar-event calendar-event-hover ${isMonthView ? (isHexColor ? (treatAsAllDay ? 'rounded-md' : '') : `${treatAsAllDay ? getBgColorClass(eventColor) + ' bg-opacity-70' : ''} ${treatAsAllDay ? 'rounded-md' : ''}`) : ''} ${
         (isPendingInvite || isTentative) && isMonthView ? 'pending-month-invite' : ''
-      } ${isDeclined && isMonthView ? 'declined-month-event' : ''}`}
+      } ${visuallyDeclined && isMonthView ? 'declined-month-event' : ''}`}
       onClick={handleClick}
       data-event-id={event.id}
       data-active={isSelected ? 'true' : 'false'}
