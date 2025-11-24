@@ -52,13 +52,29 @@ export const EVENT_COLORS = {
 
 // Get colors for an event based on its color property
 export const getEventColors = (colorName) => {
-  // If it's a hex color, return it as-is for background
-  if (colorName && colorName.startsWith('#')) {
-    return {
-      background: colorName,
-      text: darkenHexColor(colorName, 40),
-      border: darkenHexColor(colorName, 40)
-    };
+  // Normalize common Google/hex blues to our palette blue to keep a single look
+  if (colorName && typeof colorName === 'string') {
+    const lower = colorName.toLowerCase()
+    const blueHexes = new Set([
+      '#1761c7',
+      '#4285f4',
+      '#1a73e8',
+      '#3b82f6',
+      '#4d90fe',
+      '#3973e7'
+    ])
+    if (blueHexes.has(lower) || lower === 'primary') {
+      return EVENT_COLORS.blue
+    }
+
+    // Any other hex: derive consistent text/border from the hex itself
+    if (lower.startsWith('#')) {
+      return {
+        background: lower,
+        text: darkenHexColor(lower, 40),
+        border: darkenHexColor(lower, 40)
+      };
+    }
   }
   
   // Default to blue if color not found

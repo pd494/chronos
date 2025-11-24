@@ -25,6 +25,7 @@ const CalendarContext = createContext(null)
 const EVENT_BOUNCE_EVENT = 'chronos:event-bounce'
 const EVENT_OVERRIDES_STORAGE_KEY = 'chronos:event-overrides'
 const CHECKED_EVENTS_STORAGE_KEY = 'chronos:checked-events'
+const EVENT_TODO_LINKS_STORAGE_KEY = 'chronos:event-todo-links'
 
 const dispatchBounceEvent = (eventId) => {
   if (typeof window === 'undefined' || !eventId) return
@@ -159,7 +160,12 @@ const normalizeResponseStatus = (value) => {
 export const CalendarProvider = ({ children }) => {
   const { user, loading: authLoading } = useAuth()
   const [currentDate, setCurrentDate] = useState(new Date())
-  const [view, setView] = useState('month')
+  const VIEW_STORAGE_KEY = 'chronos:last-view'
+  const [view, setView] = useState(() => {
+    if (typeof window === 'undefined') return 'month'
+    const stored = window.localStorage.getItem(VIEW_STORAGE_KEY)
+    return stored === 'day' || stored === 'week' || stored === 'month' ? stored : 'month'
+  })
   const [headerDisplayDate, setHeaderDisplayDate] = useState(currentDate)
   const [events, setEventsState] = useState([])
   const eventsRefValue = useRef(events)
@@ -211,6 +217,13 @@ export const CalendarProvider = ({ children }) => {
       window.localStorage.setItem(EVENT_OVERRIDES_STORAGE_KEY, JSON.stringify(serialized))
     } catch (_) {}
   }, [])
+  const persistEventTodoLinks = useCallback(() => {
+    if (typeof window === 'undefined') return
+    try {
+      const serialized = Array.from(eventToTodoRef.current.entries())
+      window.localStorage.setItem(EVENT_TODO_LINKS_STORAGE_KEY, JSON.stringify(serialized))
+    } catch (_) {}
+  }, [])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -227,14 +240,81 @@ export const CalendarProvider = ({ children }) => {
   useEffect(() => {
     if (typeof window === 'undefined') return
     try {
-      window.localStorage.setItem(CHECKED_EVENTS_STORAGE_KEY, JSON.stringify(Array.from(checkedOffEventIds)))
-    } catch (_) {}
-  }, [checkedOffEventIds])
+      const raw = JSON.parse(window.localStorage.getItem(EVENT_TODO_LINKS_STORAGE_KEY) || '[]')
+      if (Array.isArray(raw)) {
+        const map = new Map()
+        const reverse = new Map()
+        raw.forEach(([eventId, todoId]) => {
+          if (!eventId || !todoId) return
+          const eventKey = String(eventId)
+          const todoKey = String(todoId)
+          map.set(eventKey, todoKey)
+          reverse.set(todoKey, eventKey)
+        })
+        eventToTodoRef.current = map
+        todoToEventRef.current = reverse
+      }
+    } catch (_) {
+      eventToTodoRef.current = new Map()
+    }
+  }, [])
 
   const isEventChecked = useCallback((eventId) => {
     if (eventId === null || eventId === undefined) return false
     return checkedOffEventIds.has(eventId)
   }, [checkedOffEventIds])
+
+  const setEventCheckedState = useCallback((eventId, checked) => {
+    if (!eventId) return
+    setCheckedOffEventIds(prev => {
+      const next = new Set(prev)
+      if (checked) {
+        next.add(eventId)
+      } else {
+        next.delete(eventId)
+      }
+      return next
+    })
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      window.localStorage.setItem(CHECKED_EVENTS_STORAGE_KEY, JSON.stringify(Array.from(checkedOffEventIds)))
+    } catch (_) {}
+  }, [checkedOffEventIds])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const handleTodoDeleted = (e) => {
+      const todoId = e.detail?.todoId
+      if (!todoId) return
+      suppressedTodoIdsRef.current.add(String(todoId))
+      removeTodoFromAllSnapshots(todoId)
+      unlinkTodo(todoId)
+      // Remove any linked events immediately
+      setEvents(prev => prev.filter(ev => String(ev.todoId) !== String(todoId)), { skipDayIndexRebuild: true })
+      for (const [key, arr] of eventsByDayRef.current.entries()) {
+        const next = arr.filter(ev => String(ev.todoId) !== String(todoId))
+        eventsByDayRef.current.set(key, next)
+      }
+    }
+    const handler = (e) => {
+      const detail = e.detail || {}
+      const todoId = detail.todoId
+      if (!todoId) return
+      const linkedEventId = todoToEventRef.current.get(String(todoId))
+      if (!linkedEventId) return
+      const completed = Boolean(detail.completed)
+      setEventCheckedState(linkedEventId, completed)
+    }
+    window.addEventListener('todoCompletionChanged', handler)
+    window.addEventListener('todoDeleted', handleTodoDeleted)
+    return () => {
+      window.removeEventListener('todoCompletionChanged', handler)
+      window.removeEventListener('todoDeleted', handleTodoDeleted)
+    }
+  }, [setEventCheckedState])
 
   const toggleEventChecked = useCallback((eventId) => {
     if (!eventId) return
@@ -332,7 +412,8 @@ export const CalendarProvider = ({ children }) => {
     const eventKey = String(eventId)
     todoToEventRef.current.set(todoKey, eventKey)
     eventToTodoRef.current.set(eventKey, todoKey)
-  }, [])
+    persistEventTodoLinks()
+  }, [persistEventTodoLinks])
 
   const unlinkEvent = useCallback((eventId) => {
     if (!eventId) return
@@ -341,8 +422,21 @@ export const CalendarProvider = ({ children }) => {
     if (todoKey) {
       eventToTodoRef.current.delete(eventKey)
       todoToEventRef.current.delete(todoKey)
+      persistEventTodoLinks()
     }
-  }, [])
+  }, [persistEventTodoLinks])
+
+  const unlinkTodo = useCallback((todoId) => {
+    if (!todoId) return
+    const todoKey = String(todoId)
+    const eventKey = todoToEventRef.current.get(todoKey)
+    if (eventKey) {
+      todoToEventRef.current.delete(todoKey)
+      eventToTodoRef.current.delete(eventKey)
+      persistEventTodoLinks()
+    }
+    suppressedTodoIdsRef.current.add(todoKey)
+  }, [persistEventTodoLinks])
 
   const snapshotKey = useCallback((start, end, viewType = view) => {
     const u = user?.id || 'anon'
@@ -483,6 +577,25 @@ export const CalendarProvider = ({ children }) => {
     } catch (e) {
       // Ignore storage errors
     }
+  }, [])
+
+  const removeTodoFromAllSnapshots = useCallback((todoId) => {
+    if (typeof window === 'undefined' || !todoId) return
+    try {
+      const keys = Object.keys(window.sessionStorage)
+      keys.forEach(key => {
+        if (!key.startsWith('chronos:snap:')) return
+        const raw = window.sessionStorage.getItem(key)
+        if (!raw) return
+        const parsed = JSON.parse(raw)
+        if (parsed?.events) {
+          const filtered = parsed.events.filter(ev => String(ev.todoId || ev.todo_id) !== String(todoId))
+          if (filtered.length !== parsed.events.length) {
+            window.sessionStorage.setItem(key, JSON.stringify({ events: filtered }))
+          }
+        }
+      })
+    } catch (_) {}
   }, [])
   
   const saveSnapshotsForAllViews = useCallback((newEvent) => {
@@ -655,7 +768,8 @@ export const CalendarProvider = ({ children }) => {
     hasLoadedInitialRef.current = false
     setInitialLoading(true)
     optimisticEventCacheRef.current = new Map()
-  }, [authLoading, user])
+    persistEventTodoLinks()
+  }, [authLoading, user, persistEventTodoLinks])
 
   const fetchEventsForRange = useCallback(async (startDate, endDate, background = false, forceReload = false) => {
     if (!user) {
@@ -1507,6 +1621,7 @@ export const CalendarProvider = ({ children }) => {
       pendingSyncEventIdsRef.current = new Map()
       todoToEventRef.current = new Map()
       eventToTodoRef.current = new Map()
+      persistEventTodoLinks()
       activeForegroundRequestsRef.current = 0
       activeBackgroundRequestsRef.current = 0
       hasLoadedInitialRef.current = false
@@ -1514,7 +1629,12 @@ export const CalendarProvider = ({ children }) => {
       setLoading(false)
       setIsRevalidating(false)
       setEvents(prev => prev.filter(event => !event.isGoogleEvent))
-      hydrateFromSnapshot({ skipLoadedFlag: true })
+      try {
+        const resetKey = snapshotKey(start, end)
+        if (resetKey) {
+          window.sessionStorage.removeItem(resetKey)
+        }
+      } catch (_) {}
     }
 
     const shouldStageVisibleRange = reset || !hasLoadedInitialRef.current
@@ -1547,7 +1667,8 @@ export const CalendarProvider = ({ children }) => {
     getVisibleRange,
     ensureRangeLoaded,
     fetchEventsForRange,
-    hydrateFromSnapshot
+    hydrateFromSnapshot,
+    persistEventTodoLinks
   ])
 
   const fetchGoogleEventsRef = useRef(fetchGoogleEvents)
@@ -1713,6 +1834,23 @@ export const CalendarProvider = ({ children }) => {
           // Don't store todoId - each event is independent
         }
 
+        // If the optimistic event was already moved locally, carry that timing forward
+        if (replaceId) {
+          const existingEvent = eventsRefValue.current.find(ev => String(ev.id) === String(replaceId))
+          const override = eventOverridesRef.current.get(String(replaceId))
+          const existingStart = coerceDate(existingEvent?.start)
+          const existingEnd = coerceDate(existingEvent?.end)
+          if (existingStart && existingEnd) {
+            newEvent.start = existingStart
+            newEvent.end = existingEnd
+          }
+          if (override && newEvent.id) {
+            eventOverridesRef.current.set(String(newEvent.id), { ...override })
+            eventOverridesRef.current.delete(String(replaceId))
+            persistEventOverrides()
+          }
+        }
+
         if (todoId && isOptimistic) {
           suppressedTodoIdsRef.current.delete(String(todoId))
         }
@@ -1742,7 +1880,12 @@ export const CalendarProvider = ({ children }) => {
             if (!eventIdsRef.current.has(newEvent.id)) {
               eventIdsRef.current.delete(replaceId)
               eventIdsRef.current.add(newEvent.id)
-              unlinkEvent(replaceId)
+              if (todoId) {
+                unlinkEvent(replaceId)
+                linkTodoEvent(todoId, newEvent.id)
+              } else {
+                unlinkEvent(replaceId)
+              }
               
               // Remove old event from day index
               for (const [key, arr] of eventsByDayRef.current.entries()) {
@@ -1780,6 +1923,9 @@ export const CalendarProvider = ({ children }) => {
           if (!eventIdsRef.current.has(newEvent.id)) {
             setEvents(prev => [...prev, newEvent], { skipDayIndexRebuild: true })
             eventIdsRef.current.add(newEvent.id)
+            if (todoId) {
+              linkTodoEvent(todoId, newEvent.id)
+            }
             indexEventByDays(newEvent)
             suppressedEventIdsRef.current.delete(newEvent.id)
           }
@@ -1813,7 +1959,7 @@ export const CalendarProvider = ({ children }) => {
       window.removeEventListener('todoConvertedToEvent', handleTodoConverted)
       window.removeEventListener('todoConversionFailed', handleTodoConversionFailed)
     }
-  }, [linkTodoEvent, unlinkEvent])
+  }, [linkTodoEvent, unlinkEvent, persistEventOverrides])
 
   // Disabled automatic idle prefetching - only fetch on user scroll/action
   // useEffect(() => {
@@ -1849,14 +1995,26 @@ export const CalendarProvider = ({ children }) => {
     })
   }, [view])
 
+  const persistView = (next) => {
+    if (typeof window !== 'undefined') {
+      try { window.localStorage.setItem(VIEW_STORAGE_KEY, next) } catch (_) {}
+    }
+  }
+
   const changeView = useCallback((newView) => {
-    setView(newView)
+    const next = (newView === 'day' || newView === 'week' || newView === 'month') ? newView : 'month'
+    setView(next)
+    persistView(next)
   }, [])
 
   const selectDate = useCallback((date) => {
     setCurrentDate(date)
-    setView('day')
+    changeView('day')
   }, [])
+
+  useEffect(() => {
+    persistView(view)
+  }, [view])
 
   const getEventsForDate = useCallback((date) => {
     const key = dateKey(startOfDay(date))
@@ -2142,6 +2300,7 @@ export const CalendarProvider = ({ children }) => {
       : null
     
     const { recurringEditScope, ...incomingData } = updatedData || {}
+    const linkedTodoId = eventToTodoRef.current.get(String(id)) || null
 
     const resolveSeriesId = (ev) => {
       if (!ev) return null
@@ -2211,6 +2370,18 @@ export const CalendarProvider = ({ children }) => {
 
     recordEventOverride(id, start, end)
 
+    const emitTodoScheduleUpdate = (todoId, newStart, newEnd, allDayFlag) => {
+      if (!todoId || !(newStart instanceof Date) || !(newEnd instanceof Date)) return
+      window.dispatchEvent(new CustomEvent('todoScheduleUpdated', {
+        detail: {
+          todoId,
+          start: newStart.toISOString(),
+          end: newEnd.toISOString(),
+          isAllDay: Boolean(allDayFlag)
+        }
+      }))
+    }
+
     const updateForSeries = { ...processedData }
     delete updateForSeries.start
     delete updateForSeries.end
@@ -2226,9 +2397,10 @@ export const CalendarProvider = ({ children }) => {
             sameSeries = false
           }
         }
-        if (!sameSeries && event.id !== id) return event
+        const isTarget = String(event.id) === String(id)
+        if (!sameSeries && !isTarget) return event
 
-        const merged = event.id === id
+        const merged = isTarget
           ? { ...event, ...processedData }
           : { ...event, ...updateForSeries }
         seriesUpdates.push(merged)
@@ -2236,6 +2408,13 @@ export const CalendarProvider = ({ children }) => {
       }),
       { skipDayIndexRebuild: true }
     );
+    setSelectedEvent(prev => {
+      if (!prev || prev.id !== id) return prev
+      return { ...prev, ...processedData, start, end }
+    })
+    if (linkedTodoId) {
+      emitTodoScheduleUpdate(linkedTodoId, start, end, processedData.isAllDay ?? existingEvent?.isAllDay)
+    }
 
     const idsToReindex = new Set(seriesUpdates.map(ev => ev.id))
     // Remove old entries for affected ids
@@ -2319,6 +2498,9 @@ export const CalendarProvider = ({ children }) => {
         } catch (_) {}
       } else {
         clearOptimisticRecurrenceInstances(id)
+      }
+      if (linkedTodoId) {
+        emitTodoScheduleUpdate(linkedTodoId, start, end, processedData.isAllDay ?? existingEvent?.isAllDay)
       }
     } catch (error) {
       console.error('Failed to update event:', error);
@@ -2424,7 +2606,28 @@ export const CalendarProvider = ({ children }) => {
     const calendarId = eventObject.calendar_id || eventObject.calendarId || 'primary'
     const deleteSeries = eventObject.deleteScope === 'series' || Boolean(eventObject.deleteSeries)
     const isOptimistic = Boolean(eventObject.isOptimistic) || (typeof rawId === 'string' && rawId.startsWith('temp-'))
+    const linkedTodoId = eventToTodoRef.current.get(String(rawId)) || null
+    const linkedEventIdForTodo = linkedTodoId ? todoToEventRef.current.get(String(linkedTodoId)) : null
+    // Clear any cached snapshot for the visible range so deleted events don't reappear on refresh
+    try {
+      const { start, end } = getVisibleRange(currentDate, view)
+      const snapKey = snapshotKey(start, end)
+      if (snapKey) {
+        window.sessionStorage.removeItem(snapKey)
+      }
+    } catch (_) {}
 
+    const emitTodoScheduleUpdate = (todoId, start, end, isAllDay) => {
+      if (!todoId) return
+      window.dispatchEvent(new CustomEvent('todoScheduleUpdated', {
+        detail: {
+          todoId,
+          start: start ? safeToISOString(start) : null,
+          end: end ? safeToISOString(end) : null,
+          isAllDay: Boolean(isAllDay)
+        }
+      }))
+    }
     const idsToRemove = new Set()
     let snapshotsToRestore = []
 
@@ -2482,6 +2685,18 @@ export const CalendarProvider = ({ children }) => {
         }
 
         removalIds.forEach(id => suppressedEventIdsRef.current.add(id))
+        if (linkedTodoId) {
+          removalIds.forEach(id => eventToTodoRef.current.delete(String(id)))
+          todoToEventRef.current.delete(String(linkedTodoId))
+          window.dispatchEvent(new CustomEvent('todoScheduleUpdated', {
+            detail: {
+              todoId: linkedTodoId,
+              start: null,
+              end: null,
+              isAllDay: false
+            }
+          }))
+        }
 
         return prev.filter(ev => !removalIds.has(ev.id))
       }, { skipDayIndexRebuild: true })
@@ -2549,7 +2764,10 @@ export const CalendarProvider = ({ children }) => {
 
       snapshotsToRestore = [snapshot]
       idsToRemove.add(rawId)
-      setEvents(prev => prev.filter(e => e.id !== rawId), { skipDayIndexRebuild: true })
+      if (linkedEventIdForTodo && linkedEventIdForTodo !== String(rawId)) {
+        idsToRemove.add(linkedEventIdForTodo)
+      }
+      setEvents(prev => prev.filter(e => !idsToRemove.has(e.id) && !(linkedTodoId && String(e.todoId) === String(linkedTodoId))), { skipDayIndexRebuild: true })
     }
 
     idsToRemove.forEach(id => {
@@ -2558,9 +2776,16 @@ export const CalendarProvider = ({ children }) => {
       unlinkEvent(id)
       removeEventFromAllSnapshots(id)
     })
+    if (linkedTodoId) {
+      idsToRemove.forEach(id => eventToTodoRef.current.delete(String(id)))
+      todoToEventRef.current.delete(String(linkedTodoId))
+      emitTodoScheduleUpdate(linkedTodoId, null, null, false)
+      suppressedTodoIdsRef.current.add(String(linkedTodoId))
+      removeTodoFromAllSnapshots(linkedTodoId)
+    }
 
     for (const [key, arr] of eventsByDayRef.current.entries()) {
-      const next = arr.filter(e => !idsToRemove.has(e.id))
+      const next = arr.filter(e => !idsToRemove.has(e.id) && !(linkedTodoId && String(e.todoId) === String(linkedTodoId)))
       if (next.length !== arr.length) {
         eventsByDayRef.current.set(key, next)
       }
@@ -2590,6 +2815,15 @@ export const CalendarProvider = ({ children }) => {
         saveSnapshotsForAllViews(snapshot)
         suppressedEventIdsRef.current.delete(snapshot.id)
       })
+      if (linkedTodoId && snapshotsToRestore.length) {
+        const rollback = snapshotsToRestore[0]
+        emitTodoScheduleUpdate(
+          linkedTodoId,
+          rollback.start ? new Date(rollback.start) : null,
+          rollback.end ? new Date(rollback.end) : null,
+          rollback.isAllDay || false
+        )
+      }
     }
   }, [
     unlinkEvent,

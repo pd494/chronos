@@ -169,6 +169,11 @@ const WeeklyView = () => {
   const handleCellMouseDown = (e, day, hour) => {
     if (e.button !== 0) return
 
+    // Don't start drag-to-create if an event is being resized
+    if (typeof window !== 'undefined' && window.__chronosEventResizing) {
+      return
+    }
+
     dragColumnRef.current = e.currentTarget.closest('.week-day-column');
     dragStartCellRef.current = e.currentTarget;
     window.lastClickedCalendarDay = e.currentTarget;
@@ -197,6 +202,11 @@ const WeeklyView = () => {
 
   const handleCellMouseMove = (e, day, hour) => {
     if (!dragDay || dragStart === null) return
+
+    // Don't continue drag-to-create if an event is being resized
+    if (typeof window !== 'undefined' && window.__chronosEventResizing) {
+      return
+    }
 
     const rect = e.currentTarget.getBoundingClientRect()
     const relativeY = e.clientY - rect.top
@@ -467,17 +477,10 @@ const WeeklyView = () => {
       const { hour: snappedHour, minutes: snappedMinutes } = snapHourMinutePair(targetHour, minutes);
 
       const axis = resolveDragAxis(e);
-      const dragMeta = typeof window !== 'undefined' ? window.__chronosDraggedEventMeta : null;
-      const originalStart = dragMeta?.start ? new Date(dragMeta.start) : null;
       let dropDay = new Date(targetDay);
       let hourForDrop = snappedHour;
       let minuteForDrop = snappedMinutes;
-      if (axis === 'vertical' && originalStart) {
-        dropDay = new Date(originalStart);
-      } else if (axis === 'horizontal' && originalStart) {
-        hourForDrop = originalStart.getHours();
-        minuteForDrop = originalStart.getMinutes();
-      }
+      // Always respect the drop target day/time for better accuracy across days
       const newStart = new Date(dropDay);
       newStart.setHours(hourForDrop, minuteForDrop, 0, 0);
       const newEnd = new Date(newStart.getTime() + durationMs);
@@ -980,7 +983,7 @@ const WeeklyView = () => {
           return (
             <div 
               key={index}
-              className={`flex-1 p-2 text-center cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 ${isCurrentDay ? 'font-semibold' : ''} ${showSelection ? 'calendar-selected-surface' : ''}`}
+              className={`flex-1 p-2 text-center cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700 ${isCurrentDay ? 'font-semibold' : ''}`}
               onClick={() => selectDate(day)}
             >
               <div className="text-sm">{dayName} {dayNumber}</div>
@@ -1034,7 +1037,7 @@ const WeeklyView = () => {
                 return (
                   <div 
                     key={dayIndex}
-                    className={`flex-1 relative border-r border-gray-200 dark:border-gray-700 droppable-cell overflow-hidden ${showSelection ? 'calendar-selected-surface' : ''}`}
+                    className="flex-1 relative border-r border-gray-200 dark:border-gray-700 droppable-cell overflow-hidden"
                     data-date={format(day, 'yyyy-MM-dd')}
                     data-all-day="true"
                     style={{ 
@@ -1101,10 +1104,11 @@ const WeeklyView = () => {
               const isSelectedDay = isSameDay(day, currentDate);
               const isCurrentDay = isToday(day);
               const showSelection = isSelectedDay && !isCurrentDay;
-              return (
-                <div
-                  key={dayIndex}
-                  className={`relative border-r border-gray-200 dark:border-gray-700 h-full week-day-column ${showSelection ? 'calendar-selected-column' : ''}`}
+                return (
+                  <div
+                    key={dayIndex}
+                    className={`relative border-r border-gray-200 dark:border-gray-700 h-full week-day-column ${showSelection ? 'calendar-selected-column' : ''}`}
+                    data-week-column="true"
                   onDragOver={(e) => {
                     e.preventDefault()
                     e.dataTransfer.dropEffect = 'move'
@@ -1200,6 +1204,7 @@ const WeeklyView = () => {
                       }}
                       hourHeight={HOUR_HEIGHT}
                       dayStartHour={DAY_START_HOUR}
+                      dayEndHour={DAY_END_HOUR}
                       position={{ column, columns, gap: TIMED_EVENT_GAP }}
                     />
                   ));

@@ -1,5 +1,38 @@
 /* DailyView.css */
 
+.time-grid-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background-color: #e5e5ea;
+  border-top: 1px solid #e5e5ea;
+  z-index: 0;
+  pointer-events: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.current-time-indicator {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background-color: #ff3b30;
+  z-index: 10;
+}
+
+.current-time-indicator::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: -4px;
+  width: 10px;
+  height: 10px;
+  background-color: #ff3b30;
+  border-radius: 50%;
+}
+
 /* Event drag hover styles for daily view */
 .day-hour-cell.event-dragover {
   background-color: transparent !important;

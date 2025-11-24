@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from 'react'
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { format, getHours, getMinutes, addDays } from 'date-fns'
 import { useCalendar } from '../../context/CalendarContext'
 import { useTaskContext } from '../../context/TaskContext'
@@ -61,6 +61,9 @@ const DailyView = () => {
   const hasDraggedRef = useRef(false)
   const dragTimeoutRef = useRef(null)
   const dragInitialHourRef = useRef(null)
+  const activeDropCellRef = useRef(null)
+  const [isEventResizing, setIsEventResizing] = useState(false)
+  const isEventResizeActiveRef = useRef(false)
   
   useEffect(() => {
     // Scroll to current time on initial load
@@ -188,6 +191,24 @@ const DailyView = () => {
     clearEventDragPreview();
   };
 
+  const setDropTarget = (cell) => {
+    if (activeDropCellRef.current === cell) return;
+    if (activeDropCellRef.current) {
+      activeDropCellRef.current.classList.remove('event-dragover');
+    }
+    if (cell) {
+      cell.classList.add('event-dragover');
+    }
+    activeDropCellRef.current = cell || null;
+  };
+
+  const clearDropTarget = () => {
+    if (activeDropCellRef.current) {
+      activeDropCellRef.current.classList.remove('event-dragover');
+      activeDropCellRef.current = null;
+    }
+  };
+
   const emitDragPreviewUpdate = (startDate, endDate) => {
     if (typeof window === 'undefined') return
     const dragMeta = window.__chronosDraggedEventMeta || null
@@ -205,6 +226,7 @@ const DailyView = () => {
       clearEventDragPreview()
       return
     }
+    setDropTarget(hourCell);
     const rect = hourCell.getBoundingClientRect()
     const relativeY = Math.min(rect.height, Math.max(0, e.clientY - rect.top))
     const minutePercentage = rect.height ? relativeY / rect.height : 0
@@ -212,7 +234,7 @@ const DailyView = () => {
     const { hour: snappedHour, minutes: snappedMinutes } = snapHourMinutePair(hour, minutes)
     const dragMeta = typeof window !== 'undefined' ? window.__chronosDraggedEventMeta : null
     if (!dragMeta) {
-      emitDragPreviewUpdate(null, null)
+      clearEventDragPreview();
       return
     }
     const durationMs = dragMeta.durationMs || 60 * 60 * 1000
@@ -222,10 +244,44 @@ const DailyView = () => {
     emitDragPreviewUpdate(newStart, newEnd)
   };
 
-  const clearEventDragPreview = () => emitDragPreviewUpdate(null, null);
+  const clearEventDragPreview = () => {
+    clearDropTarget();
+    emitDragPreviewUpdate(null, null);
+  };
   const resetPreviewIfNoTarget = () => {
     clearEventDragPreview();
   };
+
+  const cancelDragCreatePreview = useCallback(() => {
+    setIsDragging(false);
+    setDragStart(null);
+    setDragEnd(null);
+    hasDraggedRef.current = false;
+    dragInitialHourRef.current = null;
+    if (dragTimeoutRef.current) {
+      clearTimeout(dragTimeoutRef.current);
+      dragTimeoutRef.current = null;
+    }
+    clearEventDragPreview();
+  }, [clearEventDragPreview]);
+
+  useEffect(() => {
+    const handleResizeStart = () => {
+      isEventResizeActiveRef.current = true;
+      setIsEventResizing(true);
+      cancelDragCreatePreview();
+    };
+    const handleResizeEnd = () => {
+      isEventResizeActiveRef.current = false;
+      setIsEventResizing(false);
+    };
+    window.addEventListener('chronos-event-resize-start', handleResizeStart);
+    window.addEventListener('chronos-event-resize-end', handleResizeEnd);
+    return () => {
+      window.removeEventListener('chronos-event-resize-start', handleResizeStart);
+      window.removeEventListener('chronos-event-resize-end', handleResizeEnd);
+    };
+  }, [cancelDragCreatePreview]);
 
   const handleHourCellDragOver = (e, hour) => {
     e.preventDefault();
@@ -235,6 +291,7 @@ const DailyView = () => {
   const handleAllDayDragOver = (e) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
+    clearDropTarget();
     clearEventDragPreview();
   };
 
@@ -283,6 +340,11 @@ const DailyView = () => {
   const handleCellMouseDown = (e, hour) => {
     if (e.button !== 0) return
     
+    // Don't start drag-to-create if an event is being resized
+    if (isEventResizeActiveRef.current || (typeof window !== 'undefined' && window.__chronosEventResizing)) {
+      return
+    }
+    
     const rect = e.currentTarget.getBoundingClientRect()
     const relativeY = e.clientY - rect.top
     const minutePercentage = (relativeY % HOUR_HEIGHT) / HOUR_HEIGHT
@@ -304,6 +366,12 @@ const DailyView = () => {
 
   const handleCellMouseMove = (e, hour) => {
     if (dragStart === null) return
+    
+    // Don't continue drag-to-create if an event is being resized
+    if (isEventResizeActiveRef.current || (typeof window !== 'undefined' && window.__chronosEventResizing)) {
+      return
+    }
+    
     const rect = e.currentTarget.getBoundingClientRect()
     const relativeY = e.clientY - rect.top
     const minutePercentage = (relativeY % HOUR_HEIGHT) / HOUR_HEIGHT
@@ -335,6 +403,8 @@ const DailyView = () => {
       clearTimeout(dragTimeoutRef.current)
       dragTimeoutRef.current = null
     }
+    
+    if (isEventResizeActiveRef.current || isEventResizing) return;
     
     if (!isDragging && dragStart === null) return;
     
@@ -710,6 +780,7 @@ const DailyView = () => {
           {/* Day column */}
           <div 
             className="relative w-full"
+            data-day-column="true"
             style={{ height: `${(DAY_END_HOUR - DAY_START_HOUR + 1) * HOUR_HEIGHT}px`, minHeight: `${(DAY_END_HOUR - DAY_START_HOUR + 1) * HOUR_HEIGHT}px` }}
             onDragOver={(e) => {
               e.preventDefault()
@@ -762,7 +833,7 @@ const DailyView = () => {
             ))}
             
             {/* Drag preview */}
-            {isDragging && dragStart !== null && dragEnd !== null && (
+            {isDragging && !isEventResizing && dragStart !== null && dragEnd !== null && (
               <div
                 className="absolute left-0 right-0 bg-blue-200 dark:bg-blue-700 opacity-50 pointer-events-none rounded"
                 style={{
@@ -781,6 +852,7 @@ const DailyView = () => {
                 event={event} 
                 hourHeight={HOUR_HEIGHT} 
                 dayStartHour={DAY_START_HOUR}
+                dayEndHour={DAY_END_HOUR}
                 position={{ column, columns, gap: TIMED_EVENT_GAP }}
               />
             ))}

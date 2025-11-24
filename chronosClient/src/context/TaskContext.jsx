@@ -174,6 +174,16 @@ export const TaskProvider = ({ children }) => {
     setCategories([ALL_CATEGORY]);
   }, []);
 
+  const clearTaskSnapshots = useCallback(() => {
+    if (!snapshotKey || typeof window === 'undefined') return;
+    try {
+      window.sessionStorage.removeItem(snapshotKey);
+    } catch (_) {}
+    try {
+      window.localStorage.removeItem(snapshotKey);
+    } catch (_) {}
+  }, [snapshotKey]);
+
   const hydrateFromSnapshot = useCallback(() => {
     if (!user) return false;
     try {
@@ -323,6 +333,46 @@ export const TaskProvider = ({ children }) => {
     }
   }, [snapshotKey, tasks, categories, user]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const handleScheduleUpdate = (e) => {
+      const detail = e.detail || {}
+      const todoId = detail.todoId
+      if (!todoId) return
+      const startIso = detail.start
+      const endIso = detail.end
+      const isAllDay = Boolean(detail.isAllDay)
+      const startDateObj = new Date(startIso)
+      const scheduleValue = isAllDay ? toLocalDateOnlyString(startDateObj) : startIso
+      const endValue = endIso || startIso
+      setTasksEnhanced(prev =>
+        prev.map(t => {
+          const same = String(t.id) === String(todoId)
+          if (!same) return t
+          return {
+            ...t,
+            scheduled_date: scheduleValue,
+            scheduled_at: scheduleValue,
+            scheduled_end: endValue,
+            scheduled_is_all_day: isAllDay
+          }
+        })
+      )
+      // Persist schedule clears to backend so refreshes stay in sync
+      if (!startIso) {
+        todosApi.updateTodo(todoId, {
+          scheduled_date: null,
+          scheduled_at: null,
+          scheduled_end: null,
+          scheduled_is_all_day: false
+        }).catch(() => {})
+      }
+      clearTaskSnapshots();
+    }
+    window.addEventListener('todoScheduleUpdated', handleScheduleUpdate)
+    return () => window.removeEventListener('todoScheduleUpdated', handleScheduleUpdate)
+  }, [setTasksEnhanced])
+
   // Disabled automatic refresh on focus/visibility/online - only refresh on CRUD operations
   // useEffect(() => {
   //   ... automatic refresh logic disabled ...
@@ -454,6 +504,13 @@ export const TaskProvider = ({ children }) => {
     const task = tasks.find(t => t.id === id);
     if (!task) return;
 
+    const emitCompletionChange = (completed) => {
+      if (typeof window === 'undefined') return
+      window.dispatchEvent(new CustomEvent('todoCompletionChanged', {
+        detail: { todoId: id, completed: Boolean(completed) }
+      }))
+    }
+
     if (task.completed && task.category_name === 'Completed') {
       setTasksEnhanced(prev => prev.filter(t => t.id !== id));
       
@@ -463,6 +520,7 @@ export const TaskProvider = ({ children }) => {
       } catch (error) {
         console.error('Failed to delete todo:', error);
         setTasksEnhanced(prev => [...prev, task]);
+        emitCompletionChange(task.completed)
       }
       return;
     }
@@ -482,6 +540,7 @@ export const TaskProvider = ({ children }) => {
             t.id === id ? updatedTask : t
           )
         );
+        emitCompletionChange(true)
         
         try {
           await todosApi.updateTodo(id, {
@@ -497,6 +556,7 @@ export const TaskProvider = ({ children }) => {
               t.id === id ? task : t
             )
           );
+          emitCompletionChange(task.completed)
         }
       }
     } else {
@@ -510,6 +570,7 @@ export const TaskProvider = ({ children }) => {
           t.id === id ? updatedTask : t
         )
       );
+      emitCompletionChange(false)
       
       try {
         await todosApi.updateTodo(id, { completed: false });
@@ -521,19 +582,46 @@ export const TaskProvider = ({ children }) => {
             t.id === id ? task : t
           )
         );
+        emitCompletionChange(task.completed)
       }
     }
   };
 
   const deleteTask = async (id) => {
+    const prevTasks = tasks;
+    // Optimistically remove immediately so a single delete action feels responsive
+    setTasksEnhanced(prev => prev.filter(task => task.id !== id));
+    clearTaskSnapshots();
     try {
       await todosApi.deleteTodo(id);
-      setTasksEnhanced(prev => prev.filter(task => task.id !== id));
       lastMutationTimeRef.current = Date.now();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('todoDeleted', { detail: { todoId: id } }))
+      }
     } catch (error) {
       console.error('Failed to delete todo:', error);
+      // Roll back if the API call fails
+      setTasksEnhanced(prevTasks);
+      clearTaskSnapshots();
     }
   };
+
+  const clearTaskSchedule = useCallback((todoId) => {
+    if (!todoId) return
+    setTasksEnhanced(prev =>
+      prev.map(t =>
+        t.id === todoId
+          ? {
+              ...t,
+              scheduled_date: null,
+              scheduled_at: null,
+              scheduled_end: null,
+              scheduled_is_all_day: false
+            }
+          : t
+      )
+    )
+  }, [setTasksEnhanced])
 
   const updateTask = async (id, updatedTask) => {
     try {
@@ -587,6 +675,9 @@ export const TaskProvider = ({ children }) => {
     const task = tasks.find(t => t.id === todoId);
     if (!task) {
       throw new Error('Task not found');
+    }
+    if (task.scheduled_date || task.scheduled_at) {
+      return;
     }
 
     // Find the category color for this task

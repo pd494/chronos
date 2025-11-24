@@ -56,7 +56,7 @@
 
 .category-tabs-container.in-header .category-tab-horizontal {
   padding: 0 8px;
-  height: 28px;
+  height: 30px;
   border-radius: 4px;
   font-size: 13px;
   font-weight: 400;
@@ -134,7 +134,7 @@
   scroll-behavior: smooth;
   /* Less than fade width (32px) so last tab sits under the gradient even before full overflow */
   padding-right: 8px;
-  padding-bottom: 1px;
+  padding-bottom: -3px; /* Extra breathing room so text doesn’t clip when scrolling */
 }
 
 .category-tabs-scroll::-webkit-scrollbar {
@@ -162,14 +162,15 @@
   right: 0;
   top: 0;
   bottom: 0;
-  width: 32px;
-  background: linear-gradient(to right, rgba(245, 245, 247, 0), rgba(245, 245, 247, 0.9), rgba(245, 245, 247, 1));
+  width: 0; /* Disable fade to prevent text clipping */
+  background: transparent;
   pointer-events: none;
   z-index: 5;
 }
 
 .category-tabs-container.in-header .category-tabs-scroll::after {
-  background: linear-gradient(to right, rgba(255, 255, 255, 0), rgba(255, 255, 255, 1));
+  width: 0;
+  background: transparent;
 }
 
 .category-tab-horizontal {

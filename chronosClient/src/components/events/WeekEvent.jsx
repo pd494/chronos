@@ -1,5 +1,5 @@
 import { format, differenceInMinutes, isSameDay } from 'date-fns'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useCalendar } from '../../context/CalendarContext'
 import { useAuth } from '../../context/AuthContext'
 import { getEventColors } from '../../lib/eventColors'
@@ -48,17 +48,22 @@ const isRecurringCalendarEvent = (event) => {
   return false
 }
 
-const WeekEvent = ({ event, hourHeight, dayStartHour, position }) => {
+const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) => {
   const { openEventModal, selectedEvent, updateEvent, isEventChecked } = useCalendar()
   const { user } = useAuth()
   const [isDragging, setIsDragging] = useState(false)
   const [previewTimes, setPreviewTimes] = useState(null)
+  const [resizePreview, setResizePreview] = useState(null)
+  const [isResizing, setIsResizing] = useState(false)
+  const [dragEnabled, setDragEnabled] = useState(true)
+  const resizingDataRef = useRef(null)
+  const resizingPreviewRef = useRef(null)
   
   // Ensure we're working with proper Date objects
   const startDate = event.start instanceof Date ? event.start : new Date(event.start)
   const endDate = event.end instanceof Date ? event.end : new Date(event.end)
   const displayStart = previewTimes?.start ?? startDate
-  const displayEnd = previewTimes?.end ?? endDate
+  const displayEnd = resizePreview?.end ?? previewTimes?.end ?? endDate
   
   const startHour = startDate.getHours()
   const startMinute = startDate.getMinutes()
@@ -66,8 +71,8 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, position }) => {
   const endMinute = endDate.getMinutes()
   
   // Calculate position and height
-  const top = (startHour - dayStartHour) * hourHeight + (startMinute / 60) * hourHeight
-  const duration = differenceInMinutes(endDate, startDate)
+  const top = (displayStart.getHours() - dayStartHour) * hourHeight + (displayStart.getMinutes() / 60) * hourHeight
+  const duration = Math.max(5, differenceInMinutes(displayEnd, displayStart))
   const height = (duration / 60) * hourHeight
   const isSelected = selectedEvent?.id === event.id
   const responseStatus = typeof event.viewerResponseStatus === 'string'
@@ -108,6 +113,10 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, position }) => {
   }
 
   const handleDragStart = (e) => {
+    if (!dragEnabled || isResizing) {
+      e.preventDefault()
+      return
+    }
     e.stopPropagation()
     setIsDragging(true)
     e.dataTransfer.effectAllowed = 'move'
@@ -116,6 +125,7 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, position }) => {
     // Some browsers require a plain text payload to initiate drag
     try { e.dataTransfer.setData('text/plain', ' '); } catch (_) {}
     
+    const rect = e.currentTarget.getBoundingClientRect()
     const rawDurationMs = Math.max(5 * 60 * 1000, endDate.getTime() - startDate.getTime())
     const ONE_HOUR = 60 * 60 * 1000
     const durationMs = (event.isAllDay || rawDurationMs >= 23 * ONE_HOUR)
@@ -139,7 +149,6 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, position }) => {
     e.currentTarget.setAttribute('data-dragging', 'true')
     
     // Create custom drag preview that keeps calendar dimensions
-    const rect = e.currentTarget.getBoundingClientRect()
     const dragPreview = e.currentTarget.cloneNode(true)
     dragPreview.style.opacity = '0.85'
     dragPreview.style.position = 'absolute'
@@ -267,9 +276,60 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, position }) => {
   const dayChanged = previewTimes ? !isSameDay(displayStart, startDate) : false
   const showRecurringIcon = isRecurringCalendarEvent(event)
 
+  const handleResizeMouseMove = useCallback((moveEvent) => {
+    const data = resizingDataRef.current
+    if (!data) return
+    const { columnRect, startAbsoluteMinutes } = data
+    const clampedY = Math.min(columnRect.height, Math.max(0, moveEvent.clientY - columnRect.top))
+    const rawMinutes = dayStartHour * 60 + (clampedY / hourHeight) * 60
+    const minMinutes = Math.max(startAbsoluteMinutes + 5, dayStartHour * 60)
+    const maxMinutes = (dayEndHour + 1) * 60
+    const clampedMinutes = Math.min(Math.max(minMinutes, rawMinutes), maxMinutes)
+    const durationMinutes = clampedMinutes - startAbsoluteMinutes
+    const newEnd = new Date(startDate.getTime() + Math.max(5, durationMinutes) * 60000)
+    setResizePreview({
+      start: startDate,
+      end: newEnd
+    })
+    resizingPreviewRef.current = newEnd
+  }, [dayEndHour, dayStartHour, hourHeight, startDate])
+
+  const handleResizeMouseUp = useCallback(() => {
+    window.removeEventListener('mousemove', handleResizeMouseMove)
+    window.removeEventListener('mouseup', handleResizeMouseUp)
+    setIsResizing(false)
+    setDragEnabled(true)
+    if (typeof window !== 'undefined') {
+      window.__chronosEventResizing = false
+      window.__chronosResizingEventId = null
+      window.dispatchEvent(new CustomEvent('chronos-event-resize-end', { detail: { id: event.id } }))
+    }
+    const finalEnd = resizingPreviewRef.current
+    resizingPreviewRef.current = null
+    resizingDataRef.current = null
+    setResizePreview(null)
+    if (finalEnd && finalEnd.getTime() !== endDate.getTime()) {
+      updateEvent(event.id, {
+        end: finalEnd
+      })
+    }
+  }, [endDate, event.id, handleResizeMouseMove, updateEvent])
+
+  useEffect(() => {
+    return () => {
+      window.removeEventListener('mousemove', handleResizeMouseMove)
+      window.removeEventListener('mouseup', handleResizeMouseUp)
+      if (typeof window !== 'undefined' && window.__chronosEventResizing && window.__chronosResizingEventId === event.id) {
+        window.__chronosEventResizing = false
+        window.__chronosResizingEventId = null
+        window.dispatchEvent(new CustomEvent('chronos-event-resize-end', { detail: { id: event.id } }))
+      }
+    }
+  }, [event.id, handleResizeMouseMove, handleResizeMouseUp])
+
   return (
     <div
-      draggable="true"
+      draggable={!isResizing && dragEnabled}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
       className={`absolute rounded-lg p-1 overflow-visible text-sm z-10 group event-draggable calendar-event-hover ${showPendingStyling ? 'pending-invite-block' : ''} ${isDeclined ? 'declined-event-block' : ''}`}
@@ -293,9 +353,10 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, position }) => {
     >
       {/* Vertical line - rounded and floating */}
       <div 
-        className="absolute left-1 top-1 bottom-1 w-1 rounded-full" 
+        className="absolute left-1 top-0 bottom-0 w-1 rounded-full pointer-events-none" 
         style={{ 
-          backgroundColor: colors.border
+          backgroundColor: colors.border,
+          zIndex: 3
         }}
       ></div>
       
@@ -409,6 +470,43 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, position }) => {
           
           return null;
         })()}
+      </div>
+      <div
+        className="absolute left-0 right-0 bottom-0 h-3 cursor-ns-resize"
+        onDragStart={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+        }}
+        onMouseDown={(e) => {
+          e.stopPropagation()
+          e.preventDefault()
+          const columnEl = e.currentTarget.closest('[data-week-column="true"]')
+          if (!columnEl) return
+          const columnRect = columnEl.getBoundingClientRect()
+          const startAbsoluteMinutes = startHour * 60 + startMinute
+          resizingDataRef.current = {
+            columnRect,
+            startAbsoluteMinutes
+          }
+          setResizePreview({
+            start: startDate,
+            end: endDate
+          })
+          setIsResizing(true)
+          setDragEnabled(false)
+          if (typeof window !== 'undefined') {
+            window.__chronosEventResizing = true
+            window.__chronosResizingEventId = event.id
+            window.dispatchEvent(new CustomEvent('chronos-event-resize-start', { detail: { id: event.id } }))
+          }
+          window.addEventListener('mousemove', handleResizeMouseMove)
+          window.addEventListener('mouseup', handleResizeMouseUp)
+        }}
+      >
+        <div
+          className="mx-auto h-[2px] rounded-full w-8 bg-white/70 pointer-events-none"
+          style={{ opacity: isResizing ? 1 : 0.35 }}
+        />
       </div>
     </div>
   )

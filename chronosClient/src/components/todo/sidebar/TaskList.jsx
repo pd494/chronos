@@ -12,6 +12,7 @@ const globalDragState = { dragging: false, lastEnd: 0 };
 const TaskItem = ({ task, onToggleComplete }) => {
   const checkboxRef = useRef(null);
   const [isChecking, setIsChecking] = useState(false);
+  const isScheduled = Boolean(task.scheduled_date || task.scheduled_at);
   
   const handleCheckboxClick = (id) => {
     if (!task.completed) {
@@ -34,8 +35,9 @@ const TaskItem = ({ task, onToggleComplete }) => {
   
   return (
     <div 
-      className={`task-item ${task.completed ? 'completed' : ''}`}
+      className={`task-item ${task.completed ? 'completed' : ''} ${isScheduled ? 'scheduled' : ''}`}
       data-id={task.id}
+      data-scheduled={isScheduled ? 'true' : 'false'}
     >
       <div 
         ref={checkboxRef}
@@ -100,6 +102,9 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
       ghostClass: 'task-ghost',
       chosenClass: 'task-chosen',
       dragClass: 'task-drag',
+      onMove: (evt) => {
+        return evt.dragged?.dataset?.scheduled !== 'true';
+      },
       onStart(evt) {
         globalDragState.dragging = true;
         document.body.classList.add('task-dragging');
@@ -307,6 +312,9 @@ const TaskList = ({ tasks, onToggleComplete, activeCategory, categories }) => {
         ghostClass: 'task-ghost',
         chosenClass: 'task-chosen',
         dragClass: 'task-drag',
+        onMove: function(evt) {
+          return evt.dragged?.dataset?.scheduled !== 'true';
+        },
         onStart: function(evt) {
           globalDragState.dragging = true;
           document.body.classList.add('task-dragging');
