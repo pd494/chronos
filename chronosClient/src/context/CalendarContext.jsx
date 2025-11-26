@@ -16,7 +16,7 @@ import {
   differenceInCalendarDays
 } from 'date-fns'
 import { v4 as uuidv4 } from 'uuid'
-import { calendarApi } from '../lib/api'
+import { calendarApi, todosApi } from '../lib/api'
 import { describeRecurrence, expandRecurrenceInstances, parseRecurrenceRule } from '../lib/recurrence'
 import { useAuth } from './AuthContext'
 
@@ -504,20 +504,28 @@ export const CalendarProvider = ({ children }) => {
       const response = await calendarApi.getTodoEventLinks()
       const links = response.links || []
       
-      const map = new Map()
-      const reverse = new Map()
+      const eventToTodo = new Map()
+      const todoToEvent = new Map()
       
       links.forEach(link => {
-        if (link.event_id) {
-          map.set(link.todo_id, link.event_id)
+        if (!link) return
+        const todoKey = link.todo_id ? String(link.todo_id) : null
+        const eventId = link.event_id ? String(link.event_id) : null
+        const googleEventId = link.google_event_id ? String(link.google_event_id) : null
+        const primaryEventId = eventId || googleEventId
+        if (todoKey && primaryEventId) {
+          todoToEvent.set(todoKey, primaryEventId)
         }
-        if (link.google_event_id) {
-          reverse.set(link.todo_id, link.google_event_id)
+        if (eventId) {
+          eventToTodo.set(eventId, todoKey)
+        }
+        if (googleEventId) {
+          eventToTodo.set(googleEventId, todoKey)
         }
       })
       
-      eventToTodoRef.current = map
-      todoToEventRef.current = reverse
+      eventToTodoRef.current = eventToTodo
+      todoToEventRef.current = todoToEvent
     } catch (error) {
       console.error('Failed to load todo event links:', error)
     }
@@ -582,22 +590,35 @@ export const CalendarProvider = ({ children }) => {
       
       // Get the linked event ID before unlinking
       const linkedEventId = todoToEventRef.current.get(todoKey)
-      const linkedEvent = linkedEventId ? events.find(ev => ev.id === linkedEventId) : null
+      const activeEvents = eventsRefValue.current || events
+      let linkedEvent = linkedEventId
+        ? activeEvents.find(ev => String(ev.id) === String(linkedEventId))
+        : null
+      if (!linkedEvent) {
+        linkedEvent = activeEvents.find(ev => String(ev.todoId) === todoKey)
+      }
+      const resolvedEventId = linkedEvent?.id || (linkedEventId ? String(linkedEventId) : null)
+      if (resolvedEventId) {
+        suppressedEventIdsRef.current.add(resolvedEventId)
+      }
       
       unlinkTodo(todoId)
       
       // Remove any linked events immediately from local state
-      setEvents(prev => prev.filter(ev => String(ev.todoId) !== todoKey), { skipDayIndexRebuild: true })
+      setEvents(prev => prev.filter(ev => String(ev.todoId) !== todoKey && String(ev.id) !== resolvedEventId), { skipDayIndexRebuild: true })
       for (const [key, arr] of eventsByDayRef.current.entries()) {
-        const next = arr.filter(ev => String(ev.todoId) !== todoKey)
+        const next = arr.filter(ev => String(ev.todoId) !== todoKey && String(ev.id) !== resolvedEventId)
         eventsByDayRef.current.set(key, next)
+      }
+      if (resolvedEventId) {
+        removeEventFromCache(resolvedEventId).catch(() => {})
       }
       
       // Also delete the linked Google Calendar event from the backend
-      if (linkedEventId && linkedEvent) {
+      if (resolvedEventId) {
         try {
-          const calendarId = linkedEvent.calendar_id || 'primary'
-          await calendarApi.deleteEvent(linkedEventId, calendarId)
+          const calendarId = linkedEvent?.calendar_id || 'primary'
+          await calendarApi.deleteEvent(resolvedEventId, calendarId)
         } catch (error) {
           console.error('Failed to delete linked calendar event:', error)
         }
@@ -822,13 +843,9 @@ export const CalendarProvider = ({ children }) => {
     return parts
   }
 
-  // compute calendar-set hash
   useEffect(() => {
     if (selectedCalendars && Array.isArray(selectedCalendars) && selectedCalendars.length) {
       const norm = [...selectedCalendars].sort().join(',')
-      // No longer using cache, but keep this for API consistency
-    } else {
-      // No longer using cache, but keep this for API consistency
     }
   }, [selectedCalendars])
 
@@ -1825,8 +1842,6 @@ export const CalendarProvider = ({ children }) => {
       }
     }
 
-    // Disabled automatic prefetching - only fetch on user scroll/action
-    // prefetchAdjacentRanges(targetRange)
   }, [buildBufferedRange, fetchEventsForRange, prefetchAdjacentRanges])
 
   const lastFetchGoogleEventsRef = useRef({ start: null, end: null, time: 0 })
@@ -2121,6 +2136,16 @@ export const CalendarProvider = ({ children }) => {
       const replaceId = e.detail?.replaceId
       const todoId = e.detail?.todoId || eventData?.todoId
      
+      // If this todo was explicitly suppressed (deleted), ignore any incoming optimistic/real events
+      if (todoId && suppressedTodoIdsRef.current.has(String(todoId))) {
+        if (!isOptimistic && eventData?.id) {
+          // Best-effort cleanup on backend if a real event sneaks in after suppression
+          const calendarIdCleanup = eventData.calendar_id || 'primary'
+          calendarApi.deleteEvent(eventData.id, calendarIdCleanup).catch(() => {})
+        }
+        return
+      }
+
       if (eventData) {
         // Create the event in the same format as Google Calendar events
         const isAllDay = resolveIsAllDay(eventData.start, eventData)
@@ -2140,9 +2165,11 @@ export const CalendarProvider = ({ children }) => {
           calendar_id: eventData.calendar_id || 'primary',
           isOptimistic: isOptimistic || false,
           isAllDay,
+          // Keep a direct link back to the originating todo so deletes and schedule updates are reliable
+          todoId: todoId ? String(todoId) : undefined,
+          todo_id: todoId ? String(todoId) : undefined,
           transparency: eventData.transparency === 'transparent' ? 'transparent' : 'opaque',
           visibility: eventData.visibility || 'public'
-          // Don't store todoId - each event is independent
         }
 
         // If the optimistic event was already moved locally, carry that timing forward
@@ -2160,10 +2187,6 @@ export const CalendarProvider = ({ children }) => {
             eventOverridesRef.current.delete(String(replaceId))
             queuePersistEventOverrides()
           }
-        }
-
-        if (todoId && isOptimistic) {
-          suppressedTodoIdsRef.current.delete(String(todoId))
         }
 
         if (replaceId) {
@@ -2271,11 +2294,6 @@ export const CalendarProvider = ({ children }) => {
       window.removeEventListener('todoConversionFailed', handleTodoConversionFailed)
     }
   }, [linkTodoEvent, unlinkEvent])
-
-  // Disabled automatic idle prefetching - only fetch on user scroll/action
-  // useEffect(() => {
-  //   ... idle prefetch logic disabled ...
-  // }, [])
 
   // Fallback: do not block the entire app on network; show the shell quickly
   useEffect(() => {
@@ -2827,7 +2845,6 @@ export const CalendarProvider = ({ children }) => {
         })
       }
       if ((recurringEditScope === 'future' || recurringEditScope === 'all') && user?.id) {
-        // No longer using cache, no need to clear
       }
       if (processedData.recurrence || processedData.recurrenceRule || processedData.recurrenceSummary) {
         try {
@@ -2968,6 +2985,19 @@ export const CalendarProvider = ({ children }) => {
       }))
     }
     const idsToRemove = new Set()
+    if (rawId) idsToRemove.add(String(rawId))
+    if (linkedEventIdForTodo) idsToRemove.add(String(linkedEventIdForTodo))
+    const todoKey = linkedTodoId ? String(linkedTodoId) : (directTodoId ? String(directTodoId) : null)
+    if (todoKey) {
+      // Remove any lingering events that reference this todo to avoid needing a second delete
+      const activeEvents = eventsRefValue.current || events
+      activeEvents.forEach((ev) => {
+        const evTodoKey = ev?.todoId || ev?.todo_id || ev?.extendedProperties?.private?.todoId
+        if (todoKey && String(evTodoKey) === todoKey) {
+          idsToRemove.add(String(ev.id))
+        }
+      })
+    }
     let snapshotsToRestore = []
 
     if (deleteSeries && rawId) {
@@ -3024,13 +3054,13 @@ export const CalendarProvider = ({ children }) => {
         }
 
         removalIds.forEach(id => suppressedEventIdsRef.current.add(id))
-        if (linkedTodoId) {
+        if (todoKey) {
           removalIds.forEach(id => eventToTodoRef.current.delete(String(id)))
-          todoToEventRef.current.delete(String(linkedTodoId))
-          calendarApi.deleteTodoEventLink(String(linkedTodoId)).catch(() => {})
+          todoToEventRef.current.delete(todoKey)
+          calendarApi.deleteTodoEventLink(todoKey).catch(() => {})
           window.dispatchEvent(new CustomEvent('todoScheduleUpdated', {
             detail: {
-              todoId: linkedTodoId,
+              todoId: todoKey,
               start: null,
               end: null,
               isAllDay: false
@@ -3107,7 +3137,7 @@ export const CalendarProvider = ({ children }) => {
       if (linkedEventIdForTodo && linkedEventIdForTodo !== String(rawId)) {
         idsToRemove.add(linkedEventIdForTodo)
       }
-      setEvents(prev => prev.filter(e => !idsToRemove.has(e.id) && !(linkedTodoId && String(e.todoId) === String(linkedTodoId))), { skipDayIndexRebuild: true })
+      setEvents(prev => prev.filter(e => !idsToRemove.has(String(e.id)) && !(todoKey && String(e.todoId) === String(todoKey))), { skipDayIndexRebuild: true })
     }
 
     idsToRemove.forEach(id => {
@@ -3117,17 +3147,29 @@ export const CalendarProvider = ({ children }) => {
       removeEventFromAllSnapshots(id)
       removeEventFromCache(id).catch(() => {})
     })
-    if (linkedTodoId) {
+    if (todoKey) {
       idsToRemove.forEach(id => eventToTodoRef.current.delete(String(id)))
-      todoToEventRef.current.delete(String(linkedTodoId))
-      calendarApi.deleteTodoEventLink(String(linkedTodoId)).catch(() => {})
-      emitTodoScheduleUpdate(linkedTodoId, null, null, false)
-      suppressedTodoIdsRef.current.add(String(linkedTodoId))
-      removeTodoFromAllSnapshots(linkedTodoId)
+      todoToEventRef.current.delete(todoKey)
+      calendarApi.deleteTodoEventLink(todoKey).catch(() => {})
+      emitTodoScheduleUpdate(todoKey, null, null, false)
+      suppressedTodoIdsRef.current.add(todoKey)
+      removeTodoFromAllSnapshots(todoKey)
+      // Also clear schedule on the todo in the database so it stays gone after refresh
+      const isTempId = typeof todoKey === 'string' && todoKey.startsWith('temp-')
+      if (!isTempId) {
+        todosApi.updateTodo(todoKey, {
+          scheduled_date: null,
+          scheduled_at: null,
+          scheduled_end: null,
+          scheduled_is_all_day: false,
+          google_event_id: null,
+          date: null
+        }).catch(() => {})
+      }
     }
 
     for (const [key, arr] of eventsByDayRef.current.entries()) {
-      const next = arr.filter(e => !idsToRemove.has(e.id) && !(linkedTodoId && String(e.todoId) === String(linkedTodoId)))
+      const next = arr.filter(e => !idsToRemove.has(String(e.id)) && !(todoKey && String(e.todoId) === String(todoKey)))
       if (next.length !== arr.length) {
         eventsByDayRef.current.set(key, next)
       }

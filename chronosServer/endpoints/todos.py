@@ -576,12 +576,28 @@ async def convert_todo_to_event(
         
         # Create todo-event link in the database
         try:
-            supabase.table("todo_event_links").upsert({
+            created_event_id = created_event.get("id")
+
+            def _is_uuid(value) -> bool:
+                try:
+                    UUID(str(value))
+                    return True
+                except Exception:
+                    return False
+
+            link_payload = {
                 "user_id": str(user.id),
                 "todo_id": str(todo_id),
-                "event_id": created_event.get("id"),
-                "google_event_id": created_event.get("id")
-            }, on_conflict="user_id,todo_id").execute()
+                "google_event_id": created_event_id
+            }
+
+            if created_event_id and _is_uuid(created_event_id):
+                link_payload["event_id"] = str(created_event_id)
+
+            supabase.table("todo_event_links").upsert(
+                link_payload,
+                on_conflict="user_id,todo_id"
+            ).execute()
         except Exception as link_error:
             import logging
             logging.getLogger(__name__).warning(

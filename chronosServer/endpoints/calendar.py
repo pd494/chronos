@@ -12,6 +12,7 @@ import time
 from postgrest.exceptions import APIError
 from fastapi.responses import JSONResponse
 from datetime import datetime, timezone, timedelta
+from uuid import UUID
 from starlette.requests import ClientDisconnect
 
 logger = logging.getLogger(__name__)
@@ -520,12 +521,14 @@ async def delete_event(
         if linked_todo_ids:
             todo_ids_list = list(linked_todo_ids)
             supabase.table("todo_event_links").delete().eq("user_id", str(user.id)).in_("todo_id", todo_ids_list).execute()
+            # Clear all scheduling metadata, including legacy date, so deleted events never reappear as grey chips
             supabase.table("todos").update({
                 "scheduled_date": None,
                 "scheduled_at": None,
                 "scheduled_end": None,
                 "scheduled_is_all_day": False,
-                "google_event_id": None
+                "google_event_id": None,
+                "date": None
             }).eq("user_id", str(user.id)).in_("id", todo_ids_list).execute()
     except Exception as cleanup_error:
         logger.warning(f"Failed to clean todo links for event {event_id}: {cleanup_error}")
@@ -930,6 +933,25 @@ async def delete_todo_event_link(
     user: User = Depends(get_current_user),
     supabase: Client = Depends(get_supabase_client)
 ):
-    supabase.table("todo_event_links").delete().eq("user_id", str(user.id)).eq("todo_id", todo_id).execute()
+    # Ignore non-UUID todo IDs (e.g. optimistic temp- ids) to avoid DB cast errors
+    def _is_uuid(value: str) -> bool:
+        try:
+            UUID(str(value))
+            return True
+        except Exception:
+            return False
+
+    if not _is_uuid(todo_id):
+        logger.warning(f"Skipping delete todo-event link for non-UUID todo_id: {todo_id}")
+        return {"message": "Link deleted successfully", "skipped": True, "reason": "non-uuid todo_id"}
+
+    try:
+        supabase.table("todo_event_links").delete().eq("user_id", str(user.id)).eq("todo_id", todo_id).execute()
+    except Exception as e:
+        error_msg = str(e)
+        if "invalid input syntax for type uuid" in error_msg:
+            logger.warning(f"Failed to delete todo-event link for non-UUID todo_id {todo_id}: {e}")
+            return {"message": "Link deleted successfully", "skipped": True, "reason": "invalid-uuid todo_id"}
+        raise
     return {"message": "Link deleted successfully"}
         

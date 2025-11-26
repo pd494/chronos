@@ -286,6 +286,37 @@ export const TaskProvider = ({ children }) => {
       const startIso = detail.start
       const endIso = detail.end
       const isAllDay = Boolean(detail.isAllDay)
+      const isTempId = typeof todoId === 'string' && todoId.startsWith('temp-')
+
+      if (!startIso) {
+        // Clear scheduling locally and remotely, including legacy date field,
+        // so the grey chip cannot come back after refresh.
+        setTasksEnhanced(prev =>
+          prev.map(t => {
+            if (String(t.id) !== String(todoId)) return t
+            return {
+              ...t,
+              scheduled_date: null,
+              scheduled_at: null,
+              scheduled_end: null,
+              scheduled_is_all_day: false,
+              date: null
+            }
+          })
+        )
+        if (!isTempId) {
+          todosApi.updateTodo(todoId, {
+            scheduled_date: null,
+            scheduled_at: null,
+            scheduled_end: null,
+            scheduled_is_all_day: false,
+            date: null
+          }).catch(() => {})
+        }
+        clearTaskSnapshots();
+        return
+      }
+
       const startDateObj = new Date(startIso)
       const scheduleValue = isAllDay ? toLocalDateOnlyString(startDateObj) : startIso
       const endValue = endIso || startIso
@@ -302,15 +333,6 @@ export const TaskProvider = ({ children }) => {
           }
         })
       )
-      // Persist schedule clears to backend so refreshes stay in sync
-      if (!startIso) {
-        todosApi.updateTodo(todoId, {
-          scheduled_date: null,
-          scheduled_at: null,
-          scheduled_end: null,
-          scheduled_is_all_day: false
-        }).catch(() => {})
-      }
       clearTaskSnapshots();
     }
     window.addEventListener('todoScheduleUpdated', handleScheduleUpdate)
