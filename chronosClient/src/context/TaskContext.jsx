@@ -97,43 +97,8 @@ const buildCategories = (rawCategories = []) => {
   return [ALL_CATEGORY, ...formatted];
 };
 
-const readTasksSnapshotForUser = (user) => {
-  if (typeof window === 'undefined' || !user) return null;
-  const keys = [];
-  const emailId = user?.email;
-  const rawId = user?.id;
-  if (emailId) {
-    keys.push(`${TASK_SNAPSHOT_PREFIX}${emailId}`);
-  }
-  if (rawId) {
-    keys.push(`${TASK_SNAPSHOT_PREFIX}${rawId}`);
-  }
-  if (!keys.length) return null;
-
-  const readForKey = (key) => {
-    if (!key) return null;
-    const fromSession = window.sessionStorage.getItem(key);
-    if (fromSession) return fromSession;
-    try {
-      return window.localStorage.getItem(key);
-    } catch (_) {
-      return fromSession;
-    }
-  };
-
-  for (const key of keys) {
-    const raw = readForKey(key);
-    if (!raw) continue;
-    try {
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== 'object') continue;
-      return parsed;
-    } catch (_) {
-      continue;
-    }
-  }
-  return null;
-};
+// Disable local/session storage snapshots for tasks
+const readTasksSnapshotForUser = () => null;
 
 export const TaskProvider = ({ children }) => {
   const { user } = useAuth();
@@ -146,12 +111,7 @@ export const TaskProvider = ({ children }) => {
       ? initialSnapshot.categories
       : [ALL_CATEGORY]
   );
-  const snapshotKey = useMemo(() => {
-    if (!user) return null;
-    const stableId = user.email || user.id;
-    if (!stableId) return null;
-    return `${TASK_SNAPSHOT_PREFIX}${stableId}`;
-  }, [user]);
+  const snapshotKey = useMemo(() => null, []);
   const hasHydratedSnapshotRef = useRef(false);
   const bootstrapPromiseRef = useRef(null);
   const lastBootstrapAtRef = useRef(0);
@@ -184,23 +144,7 @@ export const TaskProvider = ({ children }) => {
     } catch (_) {}
   }, [snapshotKey]);
 
-  const hydrateFromSnapshot = useCallback(() => {
-    if (!user) return false;
-    try {
-      const parsed = readTasksSnapshotForUser(user);
-      if (!parsed) return false;
-      if (Array.isArray(parsed.tasks)) {
-        setTasksEnhanced(parsed.tasks);
-      }
-      if (Array.isArray(parsed.categories) && parsed.categories.length) {
-        setCategories(parsed.categories);
-      }
-      return true;
-    } catch (error) {
-      console.warn('Failed to hydrate tasks snapshot:', error);
-      return false;
-    }
-  }, [user, setTasksEnhanced, setCategories]);
+  const hydrateFromSnapshot = useCallback(() => false, []);
 
   const loadCategories = useCallback(async () => {
     try {
@@ -225,7 +169,7 @@ export const TaskProvider = ({ children }) => {
   const loadBootstrap = useCallback(async () => {
     if (!user) return null;
     try {
-      const response = await todosApi.getBootstrap();
+      const response = await todosApi.getBootstrap(); // aliases to GET /todos/
       const fetchedTodos = Array.isArray(response?.todos)
         ? response.todos
         : Array.isArray(response?.data?.todos)
@@ -589,20 +533,25 @@ export const TaskProvider = ({ children }) => {
 
   const deleteTask = async (id) => {
     const prevTasks = tasks;
+    // Set mutation time BEFORE the API call to prevent refreshes from overwriting
+    lastMutationTimeRef.current = Date.now();
     // Optimistically remove immediately so a single delete action feels responsive
     setTasksEnhanced(prev => prev.filter(task => task.id !== id));
     clearTaskSnapshots();
+    // Dispatch event immediately for calendar to react
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('todoDeleted', { detail: { todoId: id } }))
+    }
     try {
       await todosApi.deleteTodo(id);
       lastMutationTimeRef.current = Date.now();
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('todoDeleted', { detail: { todoId: id } }))
-      }
     } catch (error) {
       console.error('Failed to delete todo:', error);
-      // Roll back if the API call fails
-      setTasksEnhanced(prevTasks);
-      clearTaskSnapshots();
+      // Only roll back if it's NOT a 404 (already deleted)
+      if (error?.status !== 404) {
+        setTasksEnhanced(prevTasks);
+        clearTaskSnapshots();
+      }
     }
   };
 
@@ -710,8 +659,9 @@ export const TaskProvider = ({ children }) => {
         : { dateTime: isoEnd },
       calendar_id: 'primary',
       isAllDay,
-      color: uiCategoryColor
-      // Don't include todoId - each event is independent
+      color: uiCategoryColor,
+      todoId,
+      todo_id: todoId
     };
 
     // Optimistically mark the task as scheduled so badges show immediately
@@ -752,8 +702,9 @@ export const TaskProvider = ({ children }) => {
         ...response.data,
         title: response.data?.summary || task.content,
         isAllDay,
-        color: uiCategoryColor
-        // Don't include todoId - each event is independent
+        color: uiCategoryColor,
+        todoId,
+        todo_id: todoId
       };
 
       // Ensure task schedule stays in sync with server response

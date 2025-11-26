@@ -222,15 +222,20 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
             ▼
           </span>
         </div>
-        {category.name !== 'Completed' && (
+        {category.name !== 'Completed' ? (
           <button 
             className="add-task-to-category-button"
             onClick={(e) => {
               e.stopPropagation();
+              setIsCollapsed(false);
+              setNewTaskText('');
               setIsEditingNewTask(true);
             }}
-          >+
+          >
+            +
           </button>
+        ) : (
+          <span className="add-task-placeholder" aria-hidden="true" />
         )}
       </div>
       
@@ -280,10 +285,28 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
 };
 
 const TaskList = ({ tasks, onToggleComplete, activeCategory, categories }) => {
-  const { addTask } = useTaskContext();
+  const { addTask, reorderCategories } = useTaskContext();
   const [renderKey, setRenderKey] = useState(0);
   const regularTasksContainerRef = useRef(null);
   const regularSortableRef = useRef(null);
+  const categoryContainerRef = useRef(null);
+  const categorySortableRef = useRef(null);
+
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (event.key.toLowerCase() !== 'n') return;
+      const target = event.target;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
+      const mainInput = document.querySelector('.task-input-field');
+      if (!mainInput) return;
+      event.preventDefault();
+      mainInput.focus();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
   
   const handleAddTaskToCategory = (text, categoryName) => {
     addTask({ content: text, categoryName });
@@ -379,16 +402,75 @@ const TaskList = ({ tasks, onToggleComplete, activeCategory, categories }) => {
     }
   }, [activeCategory, renderKey]);
   
+  // Set up category reordering when viewing All
+  useEffect(() => {
+    if (activeCategory !== 'All' || !categoryContainerRef.current) {
+      if (categorySortableRef.current) {
+        categorySortableRef.current.destroy();
+        categorySortableRef.current = null;
+      }
+      return;
+    }
+
+    if (categorySortableRef.current) {
+      return;
+    }
+
+    const sortable = Sortable.create(categoryContainerRef.current, {
+      animation: 150,
+      handle: '.category-header',
+      ghostClass: 'category-ghost',
+      chosenClass: 'category-chosen',
+      dragClass: 'category-drag',
+      onStart() {
+        globalDragState.dragging = true;
+        document.body.classList.add('category-dragging');
+      },
+      onEnd(evt) {
+        document.body.classList.remove('category-dragging');
+        globalDragState.lastEnd = Date.now();
+        
+        setTimeout(() => {
+          globalDragState.dragging = false;
+        }, 100);
+
+        // Get new order from DOM
+        const container = categoryContainerRef.current;
+        if (!container) return;
+        
+        const orderedIds = Array.from(container.children)
+          .map(el => el.getAttribute('data-category-id'))
+          .filter(Boolean);
+        
+        if (orderedIds.length > 0 && reorderCategories) {
+          reorderCategories(orderedIds);
+        }
+      }
+    });
+
+    categorySortableRef.current = sortable;
+
+    return () => {
+      if (categorySortableRef.current) {
+        categorySortableRef.current.destroy();
+        categorySortableRef.current = null;
+      }
+    };
+  }, [activeCategory, reorderCategories, categories]);
+  
   if (activeCategory === 'All') {
     const tasksByCategory = {};
     
     categories.forEach(cat => {
       if (cat.id !== 'all' && cat.id !== 'add-category') {
         const orderValue = typeof cat.order === 'number' ? cat.order : categories.findIndex(c => c.id === cat.id);
+        // Ensure special categories have their proper colors
+        const icon = cat.name === 'Completed' ? '#34C759' : cat.name === 'Today' ? '#FF9500' : cat.name === 'Inbox' ? '#1761C7' : cat.icon;
         tasksByCategory[cat.name] = {
           tasks: [],
-          icon: cat.icon,
-          order: orderValue
+          icon,
+          order: orderValue,
+          id: cat.id
         };
       }
     });
@@ -398,10 +480,14 @@ const TaskList = ({ tasks, onToggleComplete, activeCategory, categories }) => {
       if (!category || category === 'Uncategorized') return;
       
       if (!tasksByCategory[category]) {
+        const cat = categories.find(c => c.name === category);
+        // Ensure special categories have consistent IDs and colors
+        const specialId = category === 'Completed' ? 'completed' : category === 'Today' ? 'today' : category === 'Inbox' ? 'inbox' : null;
         tasksByCategory[category] = {
           tasks: [],
-          icon: '⬤',
-          order: category === 'Completed' ? Number.MAX_SAFE_INTEGER : Object.keys(tasksByCategory).length
+          icon: cat?.icon || (category === 'Completed' ? '#34C759' : category === 'Today' ? '#FF9500' : category === 'Inbox' ? '#1761C7' : '⬤'),
+          order: cat?.order !== undefined ? cat.order : (category === 'Completed' ? Number.MAX_SAFE_INTEGER : Object.keys(tasksByCategory).length),
+          id: cat?.id || specialId || category
         };
       }
       tasksByCategory[category].tasks.push(task);
@@ -410,10 +496,13 @@ const TaskList = ({ tasks, onToggleComplete, activeCategory, categories }) => {
     categories.forEach(cat => {
       if (cat.id !== 'all' && cat.id !== 'add-category' && !tasksByCategory[cat.name]) {
         const orderValue = typeof cat.order === 'number' ? cat.order : categories.findIndex(c => c.id === cat.id);
+        // Ensure special categories have their proper colors
+        const icon = cat.name === 'Completed' ? '#34C759' : cat.name === 'Today' ? '#FF9500' : cat.name === 'Inbox' ? '#1761C7' : cat.icon;
         tasksByCategory[cat.name] = {
           tasks: [],
-          icon: cat.icon,
-          order: orderValue
+          icon,
+          order: orderValue,
+          id: cat.id
         };
       }
     });
@@ -422,11 +511,15 @@ const TaskList = ({ tasks, onToggleComplete, activeCategory, categories }) => {
       .sort(([, a], [, b]) => a.order - b.order);
     
     return (
-      <div className="task-list" data-view="all">
-        {sortedCategories.map(([categoryName, { tasks, icon }], index) => (
-          <div key={categoryName} className={`category-group-wrapper ${index > 0 ? 'with-spacing' : ''}`}>
+      <div className="task-list" data-view="all" ref={categoryContainerRef}>
+        {sortedCategories.map(([categoryName, { tasks, icon, id }], index) => (
+          <div 
+            key={categoryName} 
+            className={`category-group-wrapper ${index > 0 ? 'with-spacing' : ''}`}
+            data-category-id={id}
+          >
             <CategoryGroup
-              category={{ name: categoryName, icon }}
+              category={{ name: categoryName, icon, id }}
               tasks={tasks}
               onToggleComplete={onToggleComplete}
               onAddTaskToCategory={handleAddTaskToCategory}

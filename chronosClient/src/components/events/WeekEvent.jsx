@@ -249,10 +249,10 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
     textDecoration: (isDeclined || visuallyChecked) ? 'line-through' : undefined
   }
   const backgroundColor = isDeclined
-    ? 'rgba(148, 163, 184, 0.225)'
+    ? (colors.background.startsWith('#') ? hexToRgba(colors.background, 0.45) : colors.background)
     : visuallyChecked
-      ? (colors.background.startsWith('#') ? hexToRgba(colors.background, 0.35) : colors.background)
-      : (colors.background.startsWith('#') ? hexToRgba(colors.background, 0.7) : colors.background)
+      ? lightenHexColor(colors.background, 25)
+      : colors.background
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -353,7 +353,7 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
     >
       {/* Vertical line - rounded and floating */}
       <div 
-        className="absolute left-1 top-0 bottom-0 w-1 rounded-full pointer-events-none" 
+        className="absolute left-0.5 top-0.5 bottom-0.5 w-1 rounded-full pointer-events-none" 
         style={{ 
           backgroundColor: colors.border,
           zIndex: 3

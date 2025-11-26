@@ -58,16 +58,16 @@ const COLOR_OPTIONS = [
   { id: 'yellow', name: 'Yellow', value: 'yellow' }
 ];
 
-// Category color options (same as category picker)
+// Category color options - use palette NAMES so they go through eventColors.js
 const CATEGORY_COLORS = [
-  '#1761C7',  // Blue - matches EVENT_COLORS.blue.text (5% darker)
-  '#FF3B30',
-  '#34C759',
-  '#FF9500',
-  '#AF52DE',
-  '#FFD60A',
-  '#00C7BE',
-  '#FF2D55'
+  { name: 'blue', hex: '#C5E0F9' },
+  { name: 'violet', hex: '#D3D3FF' },
+  { name: 'red', hex: '#f67f9cff' },
+  { name: 'yellow', hex: '#FFFFC5' },
+  { name: 'green', hex: '#D4F4DD' },
+  { name: 'teal', hex: '#B8E6E6' },
+  { name: 'orange', hex: '#FFDAB3' },
+  { name: 'brown', hex: '#E8D6C0' }
 ];
 
 const ORDINAL_DISPLAY = {
@@ -104,20 +104,17 @@ const RSVP_OPTIONS = [
 const DEFAULT_TIMED_START = '10:30'
 const DEFAULT_TIMED_END = '11:45'
 
-// Helper to get initials from email
 const getInitials = (email) => {
   const name = email.split('@')[0];
   return name.charAt(0).toUpperCase();
 };
 
-// Helper to get display name like @Name from email
 const getHandle = (email) => {
   const local = (email || '').split('@')[0] || ''
   if (!local) return ''
   return `@${local.charAt(0).toUpperCase()}${local.slice(1)}`
 }
 
-// Helper to get color for participant avatar - using our color palette
 const getParticipantColor = (email) => {
   const colors = [
     '#1761C7',  // blue - standardized
@@ -841,19 +838,23 @@ const EventModal = () => {
   useEffect(() => {
     if (!showNotificationPicker) return
     updateNotificationDropdownPosition()
-    const handleClick = (event) => {
-      if (notificationTriggerRef.current && notificationTriggerRef.current.contains(event.target)) return
-      if (notificationPickerRef.current && notificationPickerRef.current.contains(event.target)) return
-      setShowNotificationPicker(false)
+    const handleClickOutside = (event) => {
+      // Use a small delay to allow button clicks inside the picker to process first
+      requestAnimationFrame(() => {
+        if (notificationTriggerRef.current && notificationTriggerRef.current.contains(event.target)) return
+        if (notificationPickerRef.current && notificationPickerRef.current.contains(event.target)) return
+        setShowNotificationPicker(false)
+      })
     }
     const handleResize = () => updateNotificationDropdownPosition()
     window.addEventListener('resize', handleResize)
     window.addEventListener('scroll', handleResize, true)
-    document.addEventListener('mousedown', handleClick)
+    // Use click instead of mousedown to allow button clicks to process first
+    document.addEventListener('click', handleClickOutside, true)
     return () => {
       window.removeEventListener('resize', handleResize)
       window.removeEventListener('scroll', handleResize, true)
-      document.removeEventListener('mousedown', handleClick)
+      document.removeEventListener('click', handleClickOutside, true)
     }
   }, [showNotificationPicker, updateNotificationDropdownPosition])
 
@@ -1032,7 +1033,7 @@ const EventModal = () => {
       const startDateObj = dragStartDate instanceof Date ? dragStartDate : new Date(dragStartDate);
       const endDateObj = dragEndDate instanceof Date ? dragEndDate : new Date(dragEndDate);
       
-      initialEventName = dragTitle || 'New Event';
+      initialEventName = dragTitle || '';
       initialEventDate = format(startDateObj, 'yyyy-MM-dd');
       initialColor = dragColor || 'blue';
       const derivedAllDay = typeof dragIsAllDay === 'boolean' ? dragIsAllDay : true;
@@ -1739,6 +1740,9 @@ const EventModal = () => {
     if (selectedEvent.recurrenceMeta?.enabled) {
       return true
     }
+    if (Array.isArray(selectedEvent.recurrence) && selectedEvent.recurrence.length > 0) {
+      return true
+    }
     // Check if it has a recurrence rule
     if (selectedEvent.recurrenceRule && typeof selectedEvent.recurrenceRule === 'string' && selectedEvent.recurrenceRule.trim().length > 0) {
       return true
@@ -2045,7 +2049,13 @@ const EventModal = () => {
                 {selectedEvent?.id && (
                   <button
                     type="button"
-                    onClick={() => toggleEventChecked && toggleEventChecked(selectedEvent.id)}
+                    onClick={(e) => {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      if (toggleEventChecked) {
+                        toggleEventChecked(selectedEvent.id)
+                      }
+                    }}
                     className={`w-[20px] h-[20px] flex items-center justify-center border-2 rounded-[6px] transition-colors duration-150 mt-[8px] ${eventIsChecked ? 'bg-green-500 border-green-500 text-white' : 'border-gray-300 text-transparent'}`}
                     aria-pressed={eventIsChecked}
                     aria-label={eventIsChecked ? 'Mark event as not completed' : 'Mark event as completed'}
@@ -3052,20 +3062,18 @@ const EventModal = () => {
             }}
           >
             <div className="grid grid-cols-4 gap-2">
-              {CATEGORY_COLORS.map((colorHex) => (
+              {CATEGORY_COLORS.map((colorOption) => (
                 <button
-                  key={colorHex}
+                  key={colorOption.name}
                   type="button"
                   onClick={() => {
-                    // Map blue hex back to named color for consistency
-                    const selectedColor = colorHex === '#1761C7' ? 'blue' : colorHex
-                    setColor(selectedColor)
+                    setColor(colorOption.name)
                     setShowColorPicker(false)
                   }}
                   className={`w-8 h-8 rounded-full transition-transform hover:scale-110 ${
-                    getColorHex(color) === colorHex ? 'ring-2 ring-gray-400 ring-offset-2 ring-offset-white' : ''
+                    color === colorOption.name ? 'ring-2 ring-gray-400 ring-offset-2 ring-offset-white' : ''
                   }`}
-                  style={{ backgroundColor: colorHex }}
+                  style={{ backgroundColor: colorOption.hex }}
                 />
               ))}
             </div>

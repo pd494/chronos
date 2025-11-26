@@ -17,26 +17,173 @@ import {
 } from 'date-fns'
 import { v4 as uuidv4 } from 'uuid'
 import { calendarApi } from '../lib/api'
-import { describeRecurrence, expandRecurrenceInstances } from '../lib/recurrence'
+import { describeRecurrence, expandRecurrenceInstances, parseRecurrenceRule } from '../lib/recurrence'
 import { useAuth } from './AuthContext'
-import { monthKey as cacheMonthKey, getMonths as cacheGetMonths, putMonth as cachePutMonth, pruneOlderThan, clearCacheForCalHash } from '../lib/cache'
 
 const CalendarContext = createContext(null)
 const EVENT_BOUNCE_EVENT = 'chronos:event-bounce'
 const EVENT_OVERRIDES_STORAGE_KEY = 'chronos:event-overrides'
 const CHECKED_EVENTS_STORAGE_KEY = 'chronos:checked-events'
 const EVENT_TODO_LINKS_STORAGE_KEY = 'chronos:event-todo-links'
+const SNAPSHOT_VERSION = 3
+const IDB_NAME = 'chronos-db'
+const IDB_VERSION = 1
+const IDB_STORE = 'events-cache'
+
+// Open IndexedDB connection
+const openDB = () => {
+  return new Promise((resolve, reject) => {
+    if (typeof window === 'undefined' || !('indexedDB' in window)) {
+      reject(new Error('IndexedDB not available'))
+      return
+    }
+    const request = indexedDB.open(IDB_NAME, IDB_VERSION)
+    request.onerror = () => reject(request.error)
+    request.onsuccess = () => resolve(request.result)
+    request.onupgradeneeded = (e) => {
+      const db = e.target.result
+      if (!db.objectStoreNames.contains(IDB_STORE)) {
+        db.createObjectStore(IDB_STORE, { keyPath: 'id' })
+      }
+    }
+  })
+}
+
+// Save events to IndexedDB
+const saveEventsToCache = async (userId, events) => {
+  if (!userId) return
+  try {
+    const db = await openDB()
+    const tx = db.transaction(IDB_STORE, 'readwrite')
+    const store = tx.objectStore(IDB_STORE)
+    const cacheData = {
+      id: 'events',
+      userId,
+      events: events.filter(e => e.isGoogleEvent).map(e => ({
+        ...e,
+        start: e.start instanceof Date ? e.start.toISOString() : e.start,
+        end: e.end instanceof Date ? e.end.toISOString() : e.end
+      })),
+      cachedAt: Date.now()
+    }
+    store.put(cacheData)
+    await new Promise((resolve, reject) => {
+      tx.oncomplete = resolve
+      tx.onerror = () => reject(tx.error)
+    })
+    db.close()
+  } catch (e) {
+    // IndexedDB unavailable
+  }
+}
+
+// Load events from IndexedDB
+const loadEventsFromCache = async (userId) => {
+  if (!userId) return null
+  try {
+    const db = await openDB()
+    const tx = db.transaction(IDB_STORE, 'readonly')
+    const store = tx.objectStore(IDB_STORE)
+    const request = store.get('events')
+    const cacheData = await new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    db.close()
+    if (!cacheData) return null
+    // Only use cache if it's for the same user and less than 24 hours old
+    if (cacheData.userId !== userId) return null
+    if (Date.now() - cacheData.cachedAt > 24 * 60 * 60 * 1000) return null
+    return cacheData.events.map(e => ({
+      ...e,
+      start: new Date(e.start),
+      end: new Date(e.end)
+    }))
+  } catch (e) {
+    return null
+  }
+}
+
+// Add single event to IndexedDB cache
+const addEventToCache = async (userId, newEvent) => {
+  if (!userId || !newEvent) return
+  try {
+    const db = await openDB()
+    const tx = db.transaction(IDB_STORE, 'readwrite')
+    const store = tx.objectStore(IDB_STORE)
+    const request = store.get('events')
+    const cacheData = await new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    const events = cacheData?.events || []
+    const eventToAdd = {
+      ...newEvent,
+      start: newEvent.start instanceof Date ? newEvent.start.toISOString() : newEvent.start,
+      end: newEvent.end instanceof Date ? newEvent.end.toISOString() : newEvent.end
+    }
+    const existingIdx = events.findIndex(e => e.id === newEvent.id)
+    if (existingIdx >= 0) {
+      events[existingIdx] = eventToAdd
+    } else {
+      events.push(eventToAdd)
+    }
+    store.put({ id: 'events', userId, events, cachedAt: Date.now() })
+    await new Promise((resolve, reject) => {
+      tx.oncomplete = resolve
+      tx.onerror = () => reject(tx.error)
+    })
+    db.close()
+  } catch (e) {}
+}
+
+// Remove event from IndexedDB cache
+const removeEventFromCache = async (eventId) => {
+  if (!eventId) return
+  try {
+    const db = await openDB()
+    const tx = db.transaction(IDB_STORE, 'readwrite')
+    const store = tx.objectStore(IDB_STORE)
+    const request = store.get('events')
+    const cacheData = await new Promise((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    if (!cacheData?.events) { db.close(); return }
+    const events = cacheData.events.filter(e => e.id !== eventId)
+    store.put({ ...cacheData, events, cachedAt: Date.now() })
+    await new Promise((resolve, reject) => {
+      tx.oncomplete = resolve
+      tx.onerror = () => reject(tx.error)
+    })
+    db.close()
+  } catch (e) {}
+}
+
+// Clear IndexedDB cache
+const clearEventsCache = async () => {
+  try {
+    const db = await openDB()
+    const tx = db.transaction(IDB_STORE, 'readwrite')
+    const store = tx.objectStore(IDB_STORE)
+    store.delete('events')
+    await new Promise((resolve, reject) => {
+      tx.oncomplete = resolve
+      tx.onerror = () => reject(tx.error)
+    })
+    db.close()
+  } catch (e) {}
+}
 
 const dispatchBounceEvent = (eventId) => {
   if (typeof window === 'undefined' || !eventId) return
   window.dispatchEvent(new CustomEvent(EVENT_BOUNCE_EVENT, { detail: { eventId } }))
 }
 
-const INITIAL_PAST_MONTHS = 0
-const INITIAL_FUTURE_MONTHS = 0
-const EXPANSION_MONTHS = 0
-const IDLE_PREFETCH_EXTRA_MONTHS = 0
-const RECENT_EVENT_SYNC_TTL_MS = 60 * 1000 // allow a short grace period for new events to appear in remote fetches
+const INITIAL_PAST_MONTHS = 5
+const INITIAL_FUTURE_MONTHS = 5
+const EXPANSION_MONTHS = 2
+const RECENT_EVENT_SYNC_TTL_MS = 60 * 1000
 
 const parseCalendarBoundary = (boundary) => {
   if (!boundary) return null
@@ -189,6 +336,11 @@ export const CalendarProvider = ({ children }) => {
   const suppressedTodoIdsRef = useRef(new Set())
   const pendingSyncEventIdsRef = useRef(new Map())
   const eventOverridesRef = useRef(new Map())
+  const dirtyOverrideIdsRef = useRef(new Set())
+  const persistTimerRef = useRef(null)
+  const hasMigratedLegacyRef = useRef(false)
+  const suppressUserStatePersistRef = useRef(true)
+  const lastSyncTimestampRef = useRef(0)
   const [checkedOffEventIds, setCheckedOffEventIds] = useState(() => {
     if (typeof window === 'undefined') return new Set()
     try {
@@ -202,60 +354,181 @@ export const CalendarProvider = ({ children }) => {
   })
   const optimisticRecurrenceMapRef = useRef(new Map())
   const optimisticEventCacheRef = useRef(new Map())
-  const idlePrefetchCancelRef = useRef(null)
-  const cacheTTLRef = useRef(24 * 60 * 60 * 1000) // 24h TTL
-  const calHashRef = useRef('all')
   const loadedMonthsRef = useRef(new Set())
   const inFlightMonthsRef = useRef(new Set())
   const snapshotSaveTimerRef = useRef(null)
   const hasBootstrappedRef = useRef(false)
-  const prevSelectedCalHashRef = useRef(null)
-  const persistEventOverrides = useCallback(() => {
-    if (typeof window === 'undefined') return
-    try {
-      const serialized = Array.from(eventOverridesRef.current.entries())
-      window.localStorage.setItem(EVENT_OVERRIDES_STORAGE_KEY, JSON.stringify(serialized))
-    } catch (_) {}
-  }, [])
-  const persistEventTodoLinks = useCallback(() => {
-    if (typeof window === 'undefined') return
-    try {
-      const serialized = Array.from(eventToTodoRef.current.entries())
-      window.localStorage.setItem(EVENT_TODO_LINKS_STORAGE_KEY, JSON.stringify(serialized))
-    } catch (_) {}
-  }, [])
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return
+  const checkAndRunBackfill = useCallback(async () => {
+    if (!user?.has_google_credentials) return
+    
     try {
-      const raw = JSON.parse(window.localStorage.getItem(EVENT_OVERRIDES_STORAGE_KEY) || '[]')
-      if (Array.isArray(raw)) {
-        eventOverridesRef.current = new Map(raw)
+      const response = await calendarApi.getSyncStatus()
+      const syncState = response.sync_state || {}
+      
+      // If no backfill timestamps exist, this user needs initial backfill
+      if (!syncState.backfill_before_ts && !syncState.backfill_after_ts) {
+        console.log('Initial backfill needed for existing user')
+        // Fire and forget - backfill runs in background on server
+        calendarApi.triggerBackfill(true)
+          .then(() => console.log('Backfill triggered'))
+          .catch(error => console.error('Initial backfill failed:', error))
       }
-    } catch (_) {
-      eventOverridesRef.current = new Map()
+    } catch (error) {
+      console.error('Failed to check sync status:', error)
+    }
+  }, [user?.has_google_credentials])
+
+  const hydrateEventUserState = useCallback(async () => {
+    try {
+      const response = await calendarApi.getEventUserState()
+      const states = response.states || []
+      
+      // Load checked off events
+      const checkedIds = states
+        .filter(state => state.is_checked_off)
+        .map(state => state.event_id)
+      setCheckedOffEventIds(new Set(checkedIds))
+      
+      // Load event overrides
+      const overrides = new Map()
+      states.forEach(state => {
+        if (state.time_overrides) {
+          overrides.set(state.event_id, state.time_overrides)
+        }
+      })
+      eventOverridesRef.current = overrides
+    } catch (error) {
+      console.error('Failed to load event user state:', error)
     }
   }, [])
 
+  const persistEventOverrides = useCallback(() => {
+    if (suppressUserStatePersistRef.current) return
+    const dirtyIds = Array.from(dirtyOverrideIdsRef.current)
+    if (!dirtyIds.length) return
+    dirtyOverrideIdsRef.current.clear()
+    
+    // Batch all updates into a single request
+    const updates = dirtyIds.map((eventId) => ({
+      eventId,
+      overrides: eventOverridesRef.current.get(eventId) || null
+    }))
+    
+    // Single batch API call instead of multiple individual calls
+    calendarApi.batchUpdateEventUserState(updates).catch(error => {
+      console.error('Failed to persist event overrides:', error)
+    })
+  }, [])
+
+  const queuePersistEventOverrides = useCallback(() => {
+    if (suppressUserStatePersistRef.current) return
+    if (persistTimerRef.current) return
+    persistTimerRef.current = setTimeout(() => {
+      persistTimerRef.current = null
+      persistEventOverrides()
+    }, 400)
+  }, [persistEventOverrides])
+
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    try {
-      const raw = JSON.parse(window.localStorage.getItem(EVENT_TODO_LINKS_STORAGE_KEY) || '[]')
-      if (Array.isArray(raw)) {
-        const map = new Map()
-        const reverse = new Map()
-        raw.forEach(([eventId, todoId]) => {
-          if (!eventId || !todoId) return
-          const eventKey = String(eventId)
-          const todoKey = String(todoId)
-          map.set(eventKey, todoKey)
-          reverse.set(todoKey, eventKey)
-        })
-        eventToTodoRef.current = map
-        todoToEventRef.current = reverse
+    return () => {
+      if (persistTimerRef.current) {
+        clearTimeout(persistTimerRef.current)
+        persistTimerRef.current = null
       }
-    } catch (_) {
-      eventToTodoRef.current = new Map()
+      suppressUserStatePersistRef.current = true
+    }
+  }, [])
+
+  const migrateLocalStorageToDB = useCallback(async () => {
+    if (typeof window === 'undefined') return
+    if (hasMigratedLegacyRef.current) return
+    const migrationKey = 'chronos:migration:event-state'
+    if (window.localStorage.getItem(migrationKey)) {
+      hasMigratedLegacyRef.current = true
+      return
+    }
+    
+    try {
+      // Migrate checked events
+      const checkedEventsRaw = window.localStorage.getItem('chronos:checked-events')
+      if (checkedEventsRaw) {
+        const checkedEvents = JSON.parse(checkedEventsRaw)
+        if (Array.isArray(checkedEvents)) {
+          const promises = checkedEvents.map(eventId =>
+            calendarApi.updateEventUserState(eventId, true)
+          )
+          await Promise.all(promises)
+          window.localStorage.removeItem('chronos:checked-events')
+        }
+      }
+      
+      // Migrate event overrides
+      const overridesRaw = window.localStorage.getItem('chronos:event-overrides')
+      if (overridesRaw) {
+        const overrides = JSON.parse(overridesRaw)
+        if (Array.isArray(overrides)) {
+          const promises = overrides.map(([eventId, timeOverrides]) =>
+            calendarApi.updateEventUserState(eventId, false, timeOverrides)
+          )
+          await Promise.all(promises)
+          window.localStorage.removeItem('chronos:event-overrides')
+        }
+      }
+      
+      // Migrate todo-event links
+      const linksRaw = window.localStorage.getItem('chronos:event-todo-links')
+      if (linksRaw) {
+        const links = JSON.parse(linksRaw)
+        if (Array.isArray(links)) {
+          const promises = links.map(([todoId, eventId]) =>
+            calendarApi.updateTodoEventLink(todoId, eventId, eventId)
+          )
+          await Promise.all(promises)
+          window.localStorage.removeItem('chronos:event-todo-links')
+        }
+      }
+      
+    } catch (error) {
+      console.error('Failed to migrate localStorage data:', error)
+    } finally {
+      try {
+        window.localStorage.setItem(migrationKey, '1')
+      } catch (_) {}
+      hasMigratedLegacyRef.current = true
+    }
+  }, [])
+
+  const hydrateEventTodoLinks = useCallback(async () => {
+    try {
+      const response = await calendarApi.getTodoEventLinks()
+      const links = response.links || []
+      
+      const map = new Map()
+      const reverse = new Map()
+      
+      links.forEach(link => {
+        if (link.event_id) {
+          map.set(link.todo_id, link.event_id)
+        }
+        if (link.google_event_id) {
+          reverse.set(link.todo_id, link.google_event_id)
+        }
+      })
+      
+      eventToTodoRef.current = map
+      todoToEventRef.current = reverse
+    } catch (error) {
+      console.error('Failed to load todo event links:', error)
+    }
+  }, [])
+
+  const persistEventTodoLinks = useCallback((todoId, eventId, googleEventId) => {
+    if (todoId && eventId) {
+      calendarApi.updateTodoEventLink(todoId, eventId, googleEventId)
+        .catch(error => {
+          console.error('Failed to persist todo event link:', error)
+        })
     }
   }, [])
 
@@ -284,19 +557,50 @@ export const CalendarProvider = ({ children }) => {
     } catch (_) {}
   }, [checkedOffEventIds])
 
+  const unlinkTodo = useCallback((todoId, eventId = null) => {
+    if (!todoId) return
+    const todoKey = String(todoId)
+    const eventKey = eventId ? String(eventId) : todoToEventRef.current.get(todoKey)
+    todoToEventRef.current.delete(todoKey)
+    if (eventKey) {
+      eventToTodoRef.current.delete(eventKey)
+    }
+    calendarApi.deleteTodoEventLink(todoKey)
+      .catch(error => {
+        console.error('Failed to delete todo event link:', error)
+      })
+  }, [])
+
   useEffect(() => {
     if (typeof window === 'undefined') return undefined
-    const handleTodoDeleted = (e) => {
+    const handleTodoDeleted = async (e) => {
       const todoId = e.detail?.todoId
       if (!todoId) return
-      suppressedTodoIdsRef.current.add(String(todoId))
+      const todoKey = String(todoId)
+      suppressedTodoIdsRef.current.add(todoKey)
       removeTodoFromAllSnapshots(todoId)
+      
+      // Get the linked event ID before unlinking
+      const linkedEventId = todoToEventRef.current.get(todoKey)
+      const linkedEvent = linkedEventId ? events.find(ev => ev.id === linkedEventId) : null
+      
       unlinkTodo(todoId)
-      // Remove any linked events immediately
-      setEvents(prev => prev.filter(ev => String(ev.todoId) !== String(todoId)), { skipDayIndexRebuild: true })
+      
+      // Remove any linked events immediately from local state
+      setEvents(prev => prev.filter(ev => String(ev.todoId) !== todoKey), { skipDayIndexRebuild: true })
       for (const [key, arr] of eventsByDayRef.current.entries()) {
-        const next = arr.filter(ev => String(ev.todoId) !== String(todoId))
+        const next = arr.filter(ev => String(ev.todoId) !== todoKey)
         eventsByDayRef.current.set(key, next)
+      }
+      
+      // Also delete the linked Google Calendar event from the backend
+      if (linkedEventId && linkedEvent) {
+        try {
+          const calendarId = linkedEvent.calendar_id || 'primary'
+          await calendarApi.deleteEvent(linkedEventId, calendarId)
+        } catch (error) {
+          console.error('Failed to delete linked calendar event:', error)
+        }
       }
     }
     const handler = (e) => {
@@ -314,10 +618,15 @@ export const CalendarProvider = ({ children }) => {
       window.removeEventListener('todoCompletionChanged', handler)
       window.removeEventListener('todoDeleted', handleTodoDeleted)
     }
-  }, [setEventCheckedState])
+  }, [setEventCheckedState, events, unlinkTodo])
 
-  const toggleEventChecked = useCallback((eventId) => {
+  const toggleEventChecked = useCallback(async (eventId) => {
     if (!eventId) return
+    
+    const isChecked = isEventChecked(eventId)
+    const newCheckedState = !isChecked
+    
+    // Update local state immediately for UI responsiveness
     setCheckedOffEventIds(prev => {
       const next = new Set(prev)
       if (next.has(eventId)) {
@@ -327,24 +636,52 @@ export const CalendarProvider = ({ children }) => {
       }
       return next
     })
-  }, [])
+    
+    // Persist to API
+    try {
+      await calendarApi.updateEventUserState(eventId, newCheckedState)
+    } catch (error) {
+      console.error('Failed to update event checked state:', error)
+      // Revert on error
+      setCheckedOffEventIds(prev => {
+        const next = new Set(prev)
+        if (newCheckedState) {
+          next.delete(eventId)
+        } else {
+          next.add(eventId)
+        }
+        return next
+      })
+    }
+  }, [isEventChecked])
 
   const removeEventOverride = useCallback((eventId) => {
     if (!eventId) return
     if (eventOverridesRef.current.delete(eventId)) {
-      persistEventOverrides()
+      dirtyOverrideIdsRef.current.add(eventId)
+      queuePersistEventOverrides()
     }
-  }, [persistEventOverrides])
+  }, [queuePersistEventOverrides])
 
   const recordEventOverride = useCallback((eventId, startDate, endDate) => {
     if (!eventId || !(startDate instanceof Date) || !(endDate instanceof Date)) return
-    eventOverridesRef.current.set(eventId, {
+    const nextOverride = {
       start: startDate.toISOString(),
       end: endDate.toISOString(),
       updatedAt: Date.now()
-    })
-    persistEventOverrides()
-  }, [persistEventOverrides])
+    }
+    const prev = eventOverridesRef.current.get(eventId)
+    if (
+      prev &&
+      prev.start === nextOverride.start &&
+      prev.end === nextOverride.end
+    ) {
+      return
+    }
+    eventOverridesRef.current.set(eventId, nextOverride)
+    dirtyOverrideIdsRef.current.add(eventId)
+    queuePersistEventOverrides()
+  }, [queuePersistEventOverrides])
 
   const clearOverrideIfSynced = useCallback((eventId, startDate, endDate) => {
     if (!eventId) return
@@ -412,7 +749,7 @@ export const CalendarProvider = ({ children }) => {
     const eventKey = String(eventId)
     todoToEventRef.current.set(todoKey, eventKey)
     eventToTodoRef.current.set(eventKey, todoKey)
-    persistEventTodoLinks()
+    persistEventTodoLinks(todoId, eventId)
   }, [persistEventTodoLinks])
 
   const unlinkEvent = useCallback((eventId) => {
@@ -422,30 +759,12 @@ export const CalendarProvider = ({ children }) => {
     if (todoKey) {
       eventToTodoRef.current.delete(eventKey)
       todoToEventRef.current.delete(todoKey)
-      persistEventTodoLinks()
+      calendarApi.deleteTodoEventLink(todoKey)
+        .catch(error => {
+          console.error('Failed to delete todo event link:', error)
+        })
     }
   }, [persistEventTodoLinks])
-
-  const unlinkTodo = useCallback((todoId) => {
-    if (!todoId) return
-    const todoKey = String(todoId)
-    const eventKey = todoToEventRef.current.get(todoKey)
-    if (eventKey) {
-      todoToEventRef.current.delete(todoKey)
-      eventToTodoRef.current.delete(eventKey)
-      persistEventTodoLinks()
-    }
-    suppressedTodoIdsRef.current.add(todoKey)
-  }, [persistEventTodoLinks])
-
-  const snapshotKey = useCallback((start, end, viewType = view) => {
-    const u = user?.id || 'anon'
-    const cal = calHashRef.current
-    const viewKey = viewType
-    const startIso = safeToISOString(start) || 'invalid'
-    const endIso = safeToISOString(end) || 'invalid'
-    return `chronos:snap:v1:${u}:${cal}:${viewKey}:${startIso}:${endIso}`
-  }, [user?.id, view])
 
   const extendLoadedRange = useCallback((start, end) => {
     if (!(start instanceof Date) || !(end instanceof Date)) return
@@ -507,16 +826,11 @@ export const CalendarProvider = ({ children }) => {
   useEffect(() => {
     if (selectedCalendars && Array.isArray(selectedCalendars) && selectedCalendars.length) {
       const norm = [...selectedCalendars].sort().join(',')
-      calHashRef.current = norm
+      // No longer using cache, but keep this for API consistency
     } else {
-      calHashRef.current = 'all'
+      // No longer using cache, but keep this for API consistency
     }
   }, [selectedCalendars])
-
-  // prune cache occasionally
-  useEffect(() => {
-    pruneOlderThan(cacheTTLRef.current).catch(() => {})
-  }, [])
 
 
 
@@ -566,7 +880,7 @@ export const CalendarProvider = ({ children }) => {
             if (parsed?.events) {
               const filtered = parsed.events.filter(ev => ev.id !== eventId)
               if (filtered.length !== parsed.events.length) {
-                window.sessionStorage.setItem(key, JSON.stringify({ events: filtered }))
+                window.sessionStorage.setItem(key, JSON.stringify({ version: SNAPSHOT_VERSION, events: filtered }))
               }
             }
           } catch (e) {
@@ -591,10 +905,33 @@ export const CalendarProvider = ({ children }) => {
         if (parsed?.events) {
           const filtered = parsed.events.filter(ev => String(ev.todoId || ev.todo_id) !== String(todoId))
           if (filtered.length !== parsed.events.length) {
-            window.sessionStorage.setItem(key, JSON.stringify({ events: filtered }))
+            window.sessionStorage.setItem(key, JSON.stringify({ version: SNAPSHOT_VERSION, events: filtered }))
           }
         }
       })
+    } catch (_) {}
+  }, [])
+  
+  const snapshotKey = useCallback((start, end, viewType = view) => {
+    if (!user?.id || !start || !end) return null
+    const ukey = user.id
+    const viewKey = viewType
+    const startIso = safeToISOString(start) || 'invalid'
+    const endIso = safeToISOString(end) || 'invalid'
+    return `chronos:snap:v${SNAPSHOT_VERSION}:${ukey}:${viewKey}:${startIso}:${endIso}`
+  }, [user?.id, view])
+  
+  const clearAllSnapshots = useCallback(() => {
+    if (typeof window === 'undefined') return
+    try {
+      const keysToRemove = []
+      for (let i = 0; i < window.sessionStorage.length; i++) {
+        const key = window.sessionStorage.key(i)
+        if (key && key.startsWith('chronos:snap:')) {
+          keysToRemove.push(key)
+        }
+      }
+      keysToRemove.forEach(key => window.sessionStorage.removeItem(key))
     } catch (_) {}
   }, [])
   
@@ -625,7 +962,7 @@ export const CalendarProvider = ({ children }) => {
       
       try {
         const existing = window.sessionStorage.getItem(key)
-        const parsed = existing ? JSON.parse(existing) : { events: [] }
+        const parsed = existing ? JSON.parse(existing) : { version: SNAPSHOT_VERSION, events: [] }
         let list = parsed.events || []
         
         // Add new event if not already in snapshot
@@ -656,7 +993,7 @@ export const CalendarProvider = ({ children }) => {
               viewerIsAttendee: Boolean(newEvent.viewerIsAttendee),
               viewerResponseStatus: newEvent.viewerResponseStatus || null
             })
-            window.sessionStorage.setItem(key, JSON.stringify({ events: list }))
+            window.sessionStorage.setItem(key, JSON.stringify({ version: SNAPSHOT_VERSION, events: list }))
           }
         }
       } catch (e) {
@@ -688,6 +1025,10 @@ export const CalendarProvider = ({ children }) => {
       const raw = window.sessionStorage.getItem(key)
       if (!raw) return false
       const parsed = JSON.parse(raw)
+      if (parsed?.version !== SNAPSHOT_VERSION) {
+        window.sessionStorage.removeItem(key)
+        return false
+      }
       if (!Array.isArray(parsed?.events)) return false
 
       const toAdd = []
@@ -818,96 +1159,9 @@ export const CalendarProvider = ({ children }) => {
         ? user.email.toLowerCase()
         : null
 
-      // 1) Try to hydrate from cache immediately
-      const ukey = user?.id || 'anon'
-      const calHash = calHashRef.current
-      const months = []
-      const cursor = new Date(rangeStart)
-      cursor.setDate(1)
-      while (cursor <= rangeEnd) {
-        months.push(cacheMonthKey(cursor))
-        cursor.setMonth(cursor.getMonth() + 1)
-      }
-      let hadCached = false
-      try {
-        const cached = await cacheGetMonths({ user: ukey, calHash, months })
-        if (cached.size) {
-          const cachedEvents = []
-          cached.forEach((row) => {
-            // row.events are serialized minimal events with iso strings
-            for (const ev of row.events || []) {
-              if (!eventIdsRef.current.has(ev.id)) {
-                const todoId = ev.todoId || ev.todo_id
-
-                const cachedViewerResponse = normalizeResponseStatus(ev.viewerResponseStatus)
-                // Ensure location is preserved from cache - it should already have the resolved meeting link
-                // but if it doesn't, try to resolve it from conferenceData if available
-                const resolvedLocation = ev.location || resolveEventMeetingLocation(ev, '')
-                
-                const cachedEvent = {
-                  id: ev.id,
-                  title: ev.title || ev.summary || 'Untitled',
-                  description: ev.description || null,
-                  start: new Date(ev.start),
-                  end: new Date(ev.end),
-                  color: ev.color || 'blue',
-                  isGoogleEvent: true,
-                  calendar_id: ev.calendar_id,
-                  isAllDay: Boolean(ev.isAllDay),
-                  location: resolvedLocation,
-                  participants: ev.participants || [],
-                  attendees: ev.attendees || [],
-                  todoId: todoId ? String(todoId) : undefined,
-                  recurrenceRule: ev.recurrenceRule || null,
-                  recurrenceSummary: ev.recurrenceSummary || null,
-                  recurrenceMeta: ev.recurrenceMeta || null,
-                  recurringEventId: ev.recurringEventId || null,
-                  organizerEmail: ev.organizerEmail || null,
-                  viewerResponseStatus: cachedViewerResponse,
-                  viewerIsOrganizer: Boolean(ev.viewerIsOrganizer),
-                  viewerIsAttendee: Boolean(ev.viewerIsAttendee),
-                  inviteCanRespond: Boolean(ev.inviteCanRespond),
-                  isInvitePending: cachedViewerResponse === 'needsAction',
-                  transparency: ev.transparency === 'transparent' ? 'transparent' : 'opaque',
-                  visibility: ev.visibility || 'default'
-                }
-                cachedEvents.push(applyEventTimeOverrides(cachedEvent))
-              }
-            }
-          })
-          if (cachedEvents.length) {
-            hadCached = true
-            setEvents((prev) => {
-              const merged = [...prev]
-              const seen = new Set()
-              for (const existing of prev) {
-                if (existing && existing.id) {
-                  seen.add(existing.id)
-                }
-              }
-              for (const ev of cachedEvents) {
-                if (!ev || !ev.id) continue
-                if (seen.has(ev.id)) continue
-                merged.push(ev)
-                seen.add(ev.id)
-                eventIdsRef.current.add(ev.id)
-                if (ev.todoId) {
-                  linkTodoEvent(ev.todoId, ev.id)
-                }
-                indexEventByDays(ev)
-              }
-              return merged
-            }, { skipDayIndexRebuild: true })
-            extendLoadedRange(rangeStart, rangeEnd)
-            if (!hasLoadedInitialRef.current) {
-              hasLoadedInitialRef.current = true
-              setInitialLoading(false)
-            }
-          }
-        }
-      } catch (_) {}
-
-      // 2) Proceed with network fetch
+      // Fetch events directly from API - no more cache
+      
+      // Proceed with network fetch
       if (!background) {
         activeForegroundRequestsRef.current += 1
         setLoading(true)
@@ -1051,7 +1305,15 @@ export const CalendarProvider = ({ children }) => {
         const segmentStartMs = segStart.getTime()
         const segmentEndMs = segEnd.getTime()
         const incomingById = new Map()
-        googleEvents.forEach(ev => incomingById.set(ev.id, ev))
+        googleEvents.forEach(ev => {
+          incomingById.set(ev.id, ev)
+          if (ev.todoId) {
+            const todoKey = String(ev.todoId)
+            const eventKey = String(ev.id)
+            todoToEventRef.current.set(todoKey, eventKey)
+            eventToTodoRef.current.set(eventKey, todoKey)
+          }
+        })
         const updatedEvents = []
         const newEvents = []
         const reinsertedOptimisticEvents = []
@@ -1158,57 +1420,7 @@ export const CalendarProvider = ({ children }) => {
             indexEventByDays(ev)
           }
 
-          try {
-            const byMonth = new Map()
-            for (const ev of toReindex) {
-              const normalizedStart = coerceDate(ev.start)
-              const normalizedEnd = coerceDate(ev.end)
-              if (!normalizedStart || !normalizedEnd) {
-                continue
-              }
-              const m = cacheMonthKey(normalizedStart)
-              const arr = byMonth.get(m) || []
-              const startIso = safeToISOString(normalizedStart)
-              const endIso = safeToISOString(normalizedEnd)
-              if (!startIso || !endIso) {
-                continue
-              }
-              arr.push({
-                id: ev.id,
-                title: ev.title,
-                start: startIso,
-                end: endIso,
-                color: ev.color,
-                calendar_id: ev.calendar_id,
-                isAllDay: ev.isAllDay,
-                location: ev.location || '',
-                participants: ev.participants || [],
-                attendees: ev.attendees || [],
-                todoId: ev.todoId,
-                recurrenceRule: ev.recurrenceRule || null,
-                recurrenceSummary: ev.recurrenceSummary || null,
-                recurrenceMeta: ev.recurrenceMeta || null,
-                recurringEventId: ev.recurringEventId || null,
-                viewerResponseStatus: ev.viewerResponseStatus || null,
-                viewerIsOrganizer: Boolean(ev.viewerIsOrganizer),
-                viewerIsAttendee: Boolean(ev.viewerIsAttendee),
-                inviteCanRespond: Boolean(ev.inviteCanRespond),
-                isInvitePending: typeof ev.isInvitePending === 'boolean'
-                  ? ev.isInvitePending
-                  : normalizeResponseStatus(ev.viewerResponseStatus) === 'needsAction',
-                transparency: ev.transparency || 'opaque',
-                visibility: ev.visibility || 'default'
-              })
-              byMonth.set(m, arr)
-            }
-            const tasks = []
-            byMonth.forEach((arr, m) => {
-              tasks.push(
-                cachePutMonth({ user: ukey, calHash, month: m, events: arr, updated: Date.now() })
-              )
-            })
-            Promise.allSettled(tasks).catch(() => {})
-          } catch (_) {}
+          // Caching removed - events are fetched fresh from DB
         }
 
         // mark months as loaded
@@ -1236,6 +1448,15 @@ export const CalendarProvider = ({ children }) => {
         hasLoadedInitialRef.current = true
         setInitialLoading(false)
       }
+      
+      // Save events to localStorage cache for instant load on next refresh
+      // Use setTimeout to avoid blocking the UI
+      setTimeout(() => {
+        setEvents(currentEvents => {
+          saveEventsToCache(user?.id, currentEvents)
+          return currentEvents
+        })
+      }, 100)
     } catch (error) {
       console.error('Failed to fetch events for range:', error)
       if (!hasLoadedInitialRef.current) {
@@ -1367,11 +1588,22 @@ export const CalendarProvider = ({ children }) => {
     }
   }, [removeEventFromAllSnapshots])
 
-  const addOptimisticRecurrenceInstances = useCallback((parentEvent, recurrenceMeta) => {
-    if (!parentEvent || !recurrenceMeta?.enabled) return
-    const visibleRange = getVisibleRange(currentDate, view)
-    if (!visibleRange?.start || !visibleRange?.end) return
-    const occurrences = expandRecurrenceInstances(parentEvent, recurrenceMeta, visibleRange.start, visibleRange.end, 400)
+  const addOptimisticRecurrenceInstances = useCallback((parentEvent, recurrenceMetaInput, rangeOverride = null) => {
+    if (!parentEvent) return
+    let recurrenceMeta = recurrenceMetaInput
+    if (!recurrenceMeta?.enabled && parentEvent.recurrenceRule) {
+      recurrenceMeta = parseRecurrenceRule(parentEvent.recurrenceRule, parentEvent.start)
+    }
+    if (!recurrenceMeta?.enabled) return
+    const targetRange = rangeOverride || getVisibleRange(currentDate, view)
+    if (!targetRange?.start || !targetRange?.end) return
+    const occurrences = expandRecurrenceInstances(
+      parentEvent,
+      recurrenceMeta,
+      targetRange.start,
+      targetRange.end,
+      400
+    )
     if (!occurrences.length) return
     const baseStart = coerceDate(parentEvent.start)
     if (!baseStart) return
@@ -1600,17 +1832,22 @@ export const CalendarProvider = ({ children }) => {
   const lastFetchGoogleEventsRef = useRef({ start: null, end: null, time: 0 })
   const FETCH_GOOGLE_EVENTS_COOLDOWN_MS = 5000 // 5 seconds cooldown
 
-  const fetchGoogleEvents = useCallback(async (background = false, reset = false) => {
+  const fetchGoogleEvents = useCallback(async (background = false, reset = false, forceRefresh = false) => {
     const { start, end } = getVisibleRange(currentDate, view)
     const rangeKey = `${start.getTime()}_${end.getTime()}`
     const now = Date.now()
     
-    // Skip if same range was just fetched recently (unless reset or initial load)
-    if (!reset && hasLoadedInitialRef.current && background) {
+    // Skip if same range was just fetched recently (unless reset, forceRefresh, or initial load)
+    if (!reset && !forceRefresh && hasLoadedInitialRef.current && background) {
       const lastKey = `${lastFetchGoogleEventsRef.current.start}_${lastFetchGoogleEventsRef.current.end}`
       if (rangeKey === lastKey && (now - lastFetchGoogleEventsRef.current.time) < FETCH_GOOGLE_EVENTS_COOLDOWN_MS) {
         return
       }
+    }
+
+    // If we've already loaded once and not resetting/forcing, skip re-fetching
+    if (!reset && !forceRefresh && hasLoadedInitialRef.current) {
+      return
     }
 
     if (reset) {
@@ -1637,13 +1874,37 @@ export const CalendarProvider = ({ children }) => {
       } catch (_) {}
     }
 
-    const shouldStageVisibleRange = reset || !hasLoadedInitialRef.current
+    const isInitialLoad = !hasLoadedInitialRef.current
+    
+    // On initial load, fetch a wide range (5 years back + 5 years forward) for instant scrolling
+    const wideStart = startOfMonth(addMonths(currentDate, -3))
+    wideStart.setHours(0, 0, 0, 0)
+    
+    const wideEnd = endOfMonth(addMonths(currentDate, 3))
+    wideEnd.setHours(23, 59, 59, 999)
 
     try {
-      if (shouldStageVisibleRange) {
-        await fetchEventsForRange(start, end, background, true)
-        // Don't automatically prefetch - only on user scroll/action
-        // ensureRangeLoaded(start, end, true, false).catch(() => {})
+      if (isInitialLoad) {
+        // Initial load: fetch wide range for smooth scrolling
+        await fetchEventsForRange(wideStart, wideEnd, background, true)
+        loadedRangeRef.current = { start: wideStart, end: wideEnd }
+        hasLoadedInitialRef.current = true
+        setInitialLoading(false)
+      } else if (reset) {
+        // Refresh: only re-fetch visible range + some buffer (fast!)
+        const bufferStart = new Date(start)
+        bufferStart.setMonth(bufferStart.getMonth() - 2)
+        const bufferEnd = new Date(end)
+        bufferEnd.setMonth(bufferEnd.getMonth() + 2)
+        await fetchEventsForRange(bufferStart, bufferEnd, background, true)
+        hasLoadedInitialRef.current = true
+        setInitialLoading(false)
+      } else if (forceRefresh) {
+        // Background refresh after sync - just refresh the already loaded range
+        const currentRange = loadedRangeRef.current
+        if (currentRange) {
+          await fetchEventsForRange(currentRange.start, currentRange.end, true, true)
+        }
       } else {
         await ensureRangeLoaded(start, end, background, reset)
       }
@@ -1680,18 +1941,83 @@ export const CalendarProvider = ({ children }) => {
     if (authLoading) return
     if (!user) {
       hasBootstrappedRef.current = false
+      suppressUserStatePersistRef.current = true
+      clearEventsCache()
       return
     }
     if (!user.has_google_credentials) {
+      suppressUserStatePersistRef.current = true
       return
     }
     if (hasBootstrappedRef.current) return
-    hydrateFromSnapshot()
-    // Start fetching calendar events immediately in parallel with todos
-    // background=true, reset=false
-    fetchGoogleEventsRef.current(true, false)
     hasBootstrappedRef.current = true
-  }, [authLoading, user?.id, user?.has_google_credentials, hydrateFromSnapshot])
+    
+    // Bootstrap: Load cache, sync with Google, then fetch fresh data
+    const bootstrap = async () => {
+      const cacheVersionKey = 'chronos:cache-version'
+      const storedVersion = localStorage.getItem(cacheVersionKey)
+      if (storedVersion !== String(SNAPSHOT_VERSION)) {
+        await clearEventsCache()
+        clearAllSnapshots()
+        localStorage.setItem(cacheVersionKey, String(SNAPSHOT_VERSION))
+      }
+      
+      const cachedEvents = await loadEventsFromCache(user.id)
+      
+      // Show cached events immediately for instant UX
+      if (cachedEvents && cachedEvents.length > 0) {
+        setEvents(cachedEvents)
+        for (const e of cachedEvents) {
+          eventIdsRef.current.add(e.id)
+          indexEventByDays(e)
+        }
+        hasLoadedInitialRef.current = true
+        setInitialLoading(false)
+      }
+      
+      hydrateFromSnapshot()
+      
+      // Fetch events first for fast initial render
+      loadedMonthsRef.current.clear()
+      hasLoadedInitialRef.current = false
+      await fetchGoogleEventsRef.current(true, false)
+      
+      // Then hydrate user state (checked off, overrides) AFTER events are loaded
+      await hydrateEventUserState()
+      await hydrateEventTodoLinks()
+      
+      // Now enable persist - only user actions after this point will trigger saves
+      suppressUserStatePersistRef.current = false
+      
+      // Run migrations in background (non-blocking)
+      migrateLocalStorageToDB()
+      checkAndRunBackfill()
+      
+      // Sync with Google Calendar in background, then refresh
+      const syncKey = 'chronos:last-sync-ts'
+      let lastSync = lastSyncTimestampRef.current || 0
+      if (!lastSync && typeof window !== 'undefined') {
+        const raw = window.sessionStorage.getItem(syncKey)
+        lastSync = raw ? Number(raw) || 0 : 0
+      }
+      const nowTs = Date.now()
+      const shouldSync = nowTs - lastSync > 5 * 60 * 1000
+      if (shouldSync) {
+        lastSyncTimestampRef.current = nowTs
+        if (typeof window !== 'undefined') {
+          try { window.sessionStorage.setItem(syncKey, String(nowTs)) } catch (_) {}
+        }
+        calendarApi.syncCalendar()
+          .then(() => {
+            // Background refresh without reset - just update existing data
+            // Use forceRefresh=true to bypass the "already loaded" check
+            fetchGoogleEventsRef.current(true, false, true).catch(() => {})
+          })
+          .catch(() => {})
+      }
+    }
+    bootstrap()
+  }, [authLoading, user?.id, user?.has_google_credentials, hydrateFromSnapshot, migrateLocalStorageToDB, checkAndRunBackfill, hydrateEventUserState, hydrateEventTodoLinks, indexEventByDays])
 
   // Persist a tiny snapshot of the visible window in sessionStorage for instant rehydration
   useEffect(() => {
@@ -1747,15 +2073,27 @@ export const CalendarProvider = ({ children }) => {
     }, 200) // debounce
   }, [currentDate, view, initialLoading, events, getVisibleRange, dateKey, snapshotKey])
 
-  const refreshEvents = useCallback(() => {
+  const refreshEvents = useCallback(async () => {
     if (!user || !user.has_google_credentials) return
-    fetchGoogleEventsRef.current(false, true)
+    setIsRevalidating(true)
+    try {
+      // Wait for sync to complete before fetching
+      await calendarApi.syncCalendar()
+      console.log('Sync completed, fetching fresh events...')
+    } catch (e) {
+      console.log('Sync failed, fetching from DB anyway...')
+    }
+    // Force re-fetch with reset=true
+    await fetchGoogleEventsRef.current(false, true)
+    setIsRevalidating(false)
   }, [user])
 
   const lastFetchParamsRef = useRef({ date: null, view: null })
   
   useEffect(() => {
     if (!user || !user.has_google_credentials) return
+    // Skip if bootstrap hasn't completed yet - bootstrap handles initial fetch
+    if (!hasLoadedInitialRef.current) return
     
     const currentDateKey = currentDate?.getTime()
     const lastDateKey = lastFetchParamsRef.current.date
@@ -1773,34 +2111,7 @@ export const CalendarProvider = ({ children }) => {
     fetchGoogleEventsRef.current(false)
   }, [user?.id, currentDate, view])
 
-  useEffect(() => {
-    if (!user) {
-      prevSelectedCalHashRef.current = null
-      return
-    }
-    if (!user.has_google_credentials) return
-    const currentHash = calHashRef.current || 'all'
-    if (!hasBootstrappedRef.current) {
-      prevSelectedCalHashRef.current = currentHash
-      return
-    }
-    if (prevSelectedCalHashRef.current === currentHash) {
-      return
-    }
-    prevSelectedCalHashRef.current = currentHash
-    // Only reset if calendars actually changed
-    fetchGoogleEventsRef.current(false, true)
-  }, [user?.id, selectedCalendars])
-
-  // Disabled automatic focus-triggered fetches - only fetch on user action
-  // useEffect(() => {
-  //   ... focus fetch logic disabled ...
-  // }, [user?.id])
-
-  // Disabled automatic periodic refresh - only refresh on user action
-  // useEffect(() => {
-  //   ... periodic refresh disabled ...
-  // }, [user?.id])
+  // Persist a tiny snapshot of the visible window in sessionStorage for instant rehydration
 
   // Listen for todo conversion events and add event immediately (optimistic update)
   useEffect(() => {
@@ -1847,7 +2158,7 @@ export const CalendarProvider = ({ children }) => {
           if (override && newEvent.id) {
             eventOverridesRef.current.set(String(newEvent.id), { ...override })
             eventOverridesRef.current.delete(String(replaceId))
-            persistEventOverrides()
+            queuePersistEventOverrides()
           }
         }
 
@@ -1959,7 +2270,7 @@ export const CalendarProvider = ({ children }) => {
       window.removeEventListener('todoConvertedToEvent', handleTodoConverted)
       window.removeEventListener('todoConversionFailed', handleTodoConversionFailed)
     }
-  }, [linkTodoEvent, unlinkEvent, persistEventOverrides])
+  }, [linkTodoEvent, unlinkEvent])
 
   // Disabled automatic idle prefetching - only fetch on user scroll/action
   // useEffect(() => {
@@ -2072,6 +2383,8 @@ export const CalendarProvider = ({ children }) => {
       ? eventData.recurrence
       : (eventData.recurrenceRule ? [eventData.recurrenceRule] : undefined)
 
+    const targetCalendarId = eventData.calendar_id || eventData.calendarId || 'primary'
+
     const processedData = {
       ...eventData,
       start,
@@ -2080,7 +2393,8 @@ export const CalendarProvider = ({ children }) => {
       reminders: eventData.reminders || null,
       isAllDay,
       transparency: eventData.transparency === 'transparent' ? 'transparent' : 'opaque',
-      visibility: eventData.visibility || 'public'
+      visibility: eventData.visibility || 'public',
+      calendar_id: targetCalendarId
     }
 
     if (recurrenceArray) {
@@ -2096,6 +2410,13 @@ export const CalendarProvider = ({ children }) => {
     }
     if (eventData.recurrenceMeta) {
       processedData.recurrenceMeta = eventData.recurrenceMeta
+    } else if (recurrenceArray && recurrenceArray.length) {
+      // Ensure we have meta/summary for optimistic expansion even if the caller didn't pass it
+      const { state, summary } = describeRecurrence(recurrenceArray[0], start)
+      processedData.recurrenceMeta = state
+      if (!processedData.recurrenceSummary) {
+        processedData.recurrenceSummary = summary
+      }
     }
 
     const clientKey = uuidv4()
@@ -2122,10 +2443,16 @@ export const CalendarProvider = ({ children }) => {
     // Now update state - React will re-render and event will already be in eventsByDayRef
     setEvents(prev => [...prev, newEvent], { skipDayIndexRebuild: true })
     
+    // Save to IndexedDB cache immediately
+    addEventToCache(user?.id, { ...newEvent, isGoogleEvent: true }).catch(() => {})
+    
     // Force immediate snapshot save for all views
     saveSnapshotsForAllViews(newEvent)
     if (processedData.recurrenceMeta?.enabled) {
-      addOptimisticRecurrenceInstances(newEvent, processedData.recurrenceMeta)
+      const rangeOverride = loadedRangeRef.current
+        ? { start: loadedRangeRef.current.start, end: loadedRangeRef.current.end }
+        : null
+      addOptimisticRecurrenceInstances(newEvent, processedData.recurrenceMeta, rangeOverride)
     }
     
     try {
@@ -2235,18 +2562,22 @@ export const CalendarProvider = ({ children }) => {
       // Remove optimistic event from all snapshots and add real event
       removeEventFromAllSnapshots(newEvent.id)
       saveSnapshotsForAllViews(normalizedWithPending)
+      
+      // Update IndexedDB cache with real event
+      removeEventFromCache(newEvent.id).catch(() => {})
+      addEventToCache(user?.id, { ...normalizedWithPending, isGoogleEvent: true }).catch(() => {})
 
       const resolvedServerStart =
-        parseCalendarBoundary(serverEvent?.start) ||
-        (serverEvent?.start?.dateTime ? new Date(serverEvent.start.dateTime) : null) ||
-        coerceDate(serverEvent?.start) ||
+        parseCalendarBoundary(created?.start) ||
+        (created?.start?.dateTime ? new Date(created.start.dateTime) : null) ||
+        coerceDate(created?.start) ||
         start
       const resolvedServerEnd =
-        parseCalendarBoundary(serverEvent?.end) ||
-        (serverEvent?.end?.dateTime ? new Date(serverEvent.end.dateTime) : null) ||
-        coerceDate(serverEvent?.end) ||
+        parseCalendarBoundary(created?.end) ||
+        (created?.end?.dateTime ? new Date(created.end.dateTime) : null) ||
+        coerceDate(created?.end) ||
         end
-      clearOverrideIfSynced(id, resolvedServerStart, resolvedServerEnd)
+      clearOverrideIfSynced(normalizedEvent.id, resolvedServerStart, resolvedServerEnd)
 
       if (processedData.recurrence || processedData.recurrenceRule || processedData.recurrenceSummary) {
         try {
@@ -2365,10 +2696,20 @@ export const CalendarProvider = ({ children }) => {
         ...processedData,
         id
       }
-      addOptimisticRecurrenceInstances(parentSnapshot, recurrenceMeta)
+      const rangeOverride = loadedRangeRef.current
+        ? { start: loadedRangeRef.current.start, end: loadedRangeRef.current.end }
+        : null
+      addOptimisticRecurrenceInstances(parentSnapshot, recurrenceMeta, rangeOverride)
     }
 
-    recordEventOverride(id, start, end)
+    const existingStart = coerceDate(existingEvent?.start)
+    const existingEnd = coerceDate(existingEvent?.end)
+    const startsSame = existingStart && Math.abs(existingStart.getTime() - start.getTime()) < 60 * 1000
+    const endsSame = existingEnd && Math.abs(existingEnd.getTime() - end.getTime()) < 60 * 1000
+    const hasOverride = eventOverridesRef.current.has(id)
+    if (!(startsSame && endsSame && !hasOverride)) {
+      recordEventOverride(id, start, end)
+    }
 
     const emitTodoScheduleUpdate = (todoId, newStart, newEnd, allDayFlag) => {
       if (!todoId || !(newStart instanceof Date) || !(newEnd instanceof Date)) return
@@ -2441,8 +2782,10 @@ export const CalendarProvider = ({ children }) => {
       // Find existing event to get its calendar id
       const calendarId = existingEvent?.calendar_id || 'primary'
       const sendNotifications = processedData.sendNotifications || false
-      const backendEventId = existingEvent?.recurringEventId || id
-      const response = await calendarApi.updateEvent(backendEventId, processedData, calendarId, sendNotifications)
+      const payloadForBackend = recurringEditScope
+        ? { ...processedData, recurringEditScope }
+        : processedData
+      const response = await calendarApi.updateEvent(id, payloadForBackend, calendarId, sendNotifications)
       const serverEvent = response?.event || response
       if (serverEvent) {
         const resolvedLocation = resolveEventMeetingLocation(serverEvent, processedData.location)
@@ -2484,8 +2827,7 @@ export const CalendarProvider = ({ children }) => {
         })
       }
       if ((recurringEditScope === 'future' || recurringEditScope === 'all') && user?.id) {
-        const calHash = calHashRef.current || 'all'
-        clearCacheForCalHash({ user: user.id, calHash }).catch(() => {})
+        // No longer using cache, no need to clear
       }
       if (processedData.recurrence || processedData.recurrenceRule || processedData.recurrenceSummary) {
         try {
@@ -2604,18 +2946,15 @@ export const CalendarProvider = ({ children }) => {
     if (!rawId) return
 
     const calendarId = eventObject.calendar_id || eventObject.calendarId || 'primary'
-    const deleteSeries = eventObject.deleteScope === 'series' || Boolean(eventObject.deleteSeries)
+    const deleteScope = eventObject.deleteScope
+    const deleteSeries = deleteScope === 'series' || deleteScope === 'all' || deleteScope === 'future' || Boolean(eventObject.deleteSeries)
     const isOptimistic = Boolean(eventObject.isOptimistic) || (typeof rawId === 'string' && rawId.startsWith('temp-'))
-    const linkedTodoId = eventToTodoRef.current.get(String(rawId)) || null
+    const directTodoId = eventObject.todoId || eventObject.todo_id || eventObject.extendedProperties?.private?.todoId
+    const linkedTodoId = eventToTodoRef.current.get(String(rawId)) || (directTodoId ? String(directTodoId) : null)
     const linkedEventIdForTodo = linkedTodoId ? todoToEventRef.current.get(String(linkedTodoId)) : null
-    // Clear any cached snapshot for the visible range so deleted events don't reappear on refresh
-    try {
-      const { start, end } = getVisibleRange(currentDate, view)
-      const snapKey = snapshotKey(start, end)
-      if (snapKey) {
-        window.sessionStorage.removeItem(snapKey)
-      }
-    } catch (_) {}
+    // Clear all caches to ensure deleted event doesn't reappear
+    clearEventsCache().catch(() => {})
+    clearAllSnapshots()
 
     const emitTodoScheduleUpdate = (todoId, start, end, isAllDay) => {
       if (!todoId) return
@@ -2688,6 +3027,7 @@ export const CalendarProvider = ({ children }) => {
         if (linkedTodoId) {
           removalIds.forEach(id => eventToTodoRef.current.delete(String(id)))
           todoToEventRef.current.delete(String(linkedTodoId))
+          calendarApi.deleteTodoEventLink(String(linkedTodoId)).catch(() => {})
           window.dispatchEvent(new CustomEvent('todoScheduleUpdated', {
             detail: {
               todoId: linkedTodoId,
@@ -2775,10 +3115,12 @@ export const CalendarProvider = ({ children }) => {
       pendingSyncEventIdsRef.current.delete(id)
       unlinkEvent(id)
       removeEventFromAllSnapshots(id)
+      removeEventFromCache(id).catch(() => {})
     })
     if (linkedTodoId) {
       idsToRemove.forEach(id => eventToTodoRef.current.delete(String(id)))
       todoToEventRef.current.delete(String(linkedTodoId))
+      calendarApi.deleteTodoEventLink(String(linkedTodoId)).catch(() => {})
       emitTodoScheduleUpdate(linkedTodoId, null, null, false)
       suppressedTodoIdsRef.current.add(String(linkedTodoId))
       removeTodoFromAllSnapshots(linkedTodoId)

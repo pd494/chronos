@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { FiChevronLeft, FiChevronRight, FiChevronDown, FiPlus, FiUser, FiLogOut, FiRefreshCcw } from 'react-icons/fi'
+import { FiChevronLeft, FiChevronRight, FiChevronDown, FiPlus, FiUser, FiLogOut, FiRefreshCcw, FiCloud } from 'react-icons/fi'
 import { useCalendar } from '../context/CalendarContext'
 import { useTaskContext } from '../context/TaskContext'
 import { useAuth } from '../context/AuthContext'
+import { calendarApi } from '../lib/api'
 import './header.css'
 
 const ViewButton = ({ view, currentView, onChange }) => {
@@ -43,6 +44,8 @@ const Header = () => {
   const [showViewDropdown, setShowViewDropdown] = useState(false)
   const [showUserMenu, setShowUserMenu] = useState(false)
   const [isManualRefresh, setIsManualRefresh] = useState(false)
+  const [isSyncing, setIsSyncing] = useState(false)
+  const [lastSyncTime, setLastSyncTime] = useState(null)
   
   // Task context for categories
   const { tasks } = useTaskContext()
@@ -84,6 +87,20 @@ const Header = () => {
       console.error('Manual refresh failed:', error)
     } finally {
       setIsManualRefresh(false)
+    }
+  }
+
+  const handleSync = async () => {
+    if (isSyncing) return
+    setIsSyncing(true)
+    try {
+      await calendarApi.syncCalendar()
+      setLastSyncTime(new Date())
+      await refreshEvents()
+    } catch (error) {
+      console.error('Sync failed:', error)
+    } finally {
+      setIsSyncing(false)
     }
   }
 
@@ -145,6 +162,17 @@ const Header = () => {
         >
           <FiRefreshCcw size={14} className={isManualRefresh ? 'animate-spin' : ''} />
           <span className="ml-1">{isManualRefresh ? 'Refreshing' : 'Refresh'}</span>
+        </button>
+
+        <button
+          onClick={handleSync}
+          className={`clean-button ${isSyncing ? 'opacity-60 cursor-wait' : ''}`}
+          style={{ WebkitAppRegion: 'no-drag' }}
+          disabled={isSyncing}
+          title={lastSyncTime ? `Last synced: ${lastSyncTime.toLocaleTimeString()}` : 'Sync with Google Calendar'}
+        >
+          <FiCloud size={14} className={isSyncing ? 'animate-pulse' : ''} />
+          <span className="ml-1">{isSyncing ? 'Syncing...' : 'Sync'}</span>
         </button>
         
         {/* View Dropdown - Borderless with completely redone dropdown */}

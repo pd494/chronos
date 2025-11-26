@@ -1,11 +1,33 @@
 # Calendar Sync Engine Migration Plan
 
+## Progress Summary
+
+**Phase 1: Database Schema - ✅ COMPLETE**
+
+### Completed
+- ✅ Created all 8 new tables with proper schema
+- ✅ Added performance indexes for range queries
+- ✅ Set up RLS policies (users can only access their own data)
+- ✅ Migrated 2 users from `google_credentials` → `calendar_accounts`
+- ✅ Added `provider_account_id` to support multiple accounts per user
+- ✅ Removed `sync_enabled` field (sync always enabled when account exists)
+
+### Schema Adjustments Made
+- **`calendar_accounts`**: 
+  - Added `provider_account_id` field (allows multiple Google accounts per user)
+  - Removed `sync_enabled` field (sync always enabled)
+  - Unique constraint: `(user_id, provider, provider_account_id)`
+- **Conference data support**: Added `conference_data` (JSONB) and `hangout_link` (TEXT) to both `events` and `event_instances` tables
+
+### Next Steps
+- Phase 2: Build `CalendarSyncService` class for backfill and delta sync
+
 ## Goals
 - Remove reliance on browser localStorage/sessionStorage as source of truth; persist all calendar data in Supabase DB
 - Build bidirectional sync between Google Calendar and database
 - Enable infinite calendar navigation (no 3-month cap) with efficient DB reads
 - Keep app snappy with optimistic updates and simple caching
-- Initial backfill: 2 years past + 2 years future
+- Initial backfill: 5 years past + 5 years future (onboarding spinner until complete)
 - Sync strategy: On-demand (user refresh or manual sync button) — **no background/cron sync** for now; freshness depends on user activity
 
 ## Simplified Caching Strategy
@@ -44,16 +66,17 @@
 
 #### `calendar_accounts`
 - `id` (uuid PK)
-- `user_id` (uuid FK → users, unique)
+- `user_id` (uuid FK → users)
 - `provider` (text, default 'google')
-- `access_token` (text, encrypted)
-- `refresh_token` (text, encrypted)
-- **Store tokens encrypted/KMS-backed; lock table with strict RLS**
+- `provider_account_id` (text) - Unique identifier for the account (e.g., email address)
+- `access_token` (text) - Store encrypted at application level
+- `refresh_token` (text) - Store encrypted at application level
 - `expires_at` (timestamptz)
 - `scopes` (text[])
-- `sync_enabled` (boolean, default true)
 - `last_auth_error` (text, nullable)
 - `created_at`, `updated_at` (timestamptz)
+- **Unique**: (user_id, provider, provider_account_id) - Allows multiple accounts per provider (e.g., personal + school Google accounts)
+- **Note**: `sync_enabled` field removed - sync is always enabled when account exists
 
 #### `calendar_list`
 - `id` (uuid PK)
@@ -167,21 +190,25 @@
 ## Sync Engine Architecture
 
 ### Initial Backfill Strategy
-1. On first sync or calendar connection:
-   - Fetch calendars from Google → populate `calendar_list`
-   - For each selected calendar:
-     - Calculate range: 2 years past to 2 years future from today
+1. **On first sync (onboarding):**
+   - Show onboarding spinner with message: "Syncing all your events, please be patient"
+   - Fetch calendars from Google → populate `calendar_list` (store all, but sync only primary)
+   - **Sync ONLY primary calendar** (not all calendars):
+     - Calculate range: **5 years past to 5 years future** from today
      - Fetch events in monthly chunks (to avoid Google API limits)
      - Store events in `events` table
      - Expand recurring events into `event_instances` table
      - Update `event_sync_state.backfill_before_ts` and `backfill_after_ts`
      - Capture `nextSyncToken` from final request → store in `event_sync_state`
+   - **Only show calendar after 5-year backfill completes**
+   - User can add more calendars later via "Add Account" (background sync, no spinner)
 
-2. On-demand expansion:
+2. **On-demand expansion (after initial sync):**
    - When user scrolls beyond `backfill_before_ts` or `backfill_after_ts`:
      - API detects missing coverage
      - Triggers background fetch for missing range
      - Extends backfill boundaries
+     - Show loading indicator for that range
    - When events are cancelled/deleted: soft-delete `events` row and prune matching `event_instances` to avoid orphaned instances
 
 ### Delta Sync Strategy
@@ -193,7 +220,7 @@
    - Store new `nextSyncToken` for next sync
 
 2. Handle sync token expiration (410 error):
-   - Fallback to a **full 2-year window resync** (or entire calendar if feasible) to avoid missing older deletions
+   - Fallback to a **full 5-year window resync** (or entire calendar if feasible) to avoid missing older deletions
    - Then resume delta sync with new token
 
 3. Sync triggers:
@@ -241,8 +268,12 @@
 
 #### `POST /calendar/sync`
 - Trigger manual sync for current user
-- Query params: `calendar_ids` (optional), `force_full` (boolean)
-- Returns sync status and progress
+- Query params: `calendar_ids` (optional), `force_full` (boolean), `initial_backfill` (boolean)
+- Returns sync status and progress:
+  - `status`: 'in_progress', 'completed', 'failed'
+  - `progress`: { months_synced: 45, total_months: 120, percentage: 37.5 }
+  - `eta_seconds`: estimated time remaining
+  - For initial backfill: blocks until complete (onboarding flow)
 
 #### `GET /calendar/changes`
 - Change feed for incremental hydration
@@ -294,9 +325,14 @@
    - Handle conflicts (server data newer than local)
 
 6. **Sync UI**:
-   - Add sync button in header
-   - Show sync status indicator (last synced time, in-progress, errors)
-   - Display coverage info (e.g., "Events loaded until Dec 2026")
+   - **Onboarding spinner**: Show full-screen loading during initial 5-year backfill
+     - Static message: "Syncing all your events, please be patient"
+     - Don't show calendar until sync completes
+     - Triggered automatically after credentials are saved on first login
+   - **Sync button**: Add to header for manual refresh (delta sync)
+   - **Sync status indicator**: Show last synced time, in-progress, errors
+   - **Coverage info**: Display "Events loaded until Dec 2030" (after initial sync)
+   - **Adding second account**: Background sync (no spinner, non-blocking)
    - Make freshness expectations clear (manual sync only; no background job)
 
 ### TaskContext.jsx Migration
@@ -312,22 +348,75 @@
 
 ## Implementation Steps
 
-### Phase 1: Database Schema
-1. Create migration SQL for all new tables
-2. Add indexes for performance
-3. Migrate existing `google_credentials` → `calendar_accounts`
-4. Decide if multiple calendar accounts per user are needed; if so, drop the unique constraint on `calendar_accounts.user_id` and key by provider+user
-5. Set up RLS policies for all tables
+### Phase 1: Database Schema ✅ COMPLETE
+1. ✅ Create migration SQL for all new tables
+2. ✅ Add indexes for performance
+3. ✅ Migrate existing `google_credentials` → `calendar_accounts`
+   - Migrated 2 users successfully
+   - Set `provider_account_id = 'primary'` for existing accounts
+   - New accounts will use actual email/identifier as `provider_account_id`
+4. ✅ Multiple calendar accounts per user supported
+   - Added `provider_account_id` field
+   - Unique constraint: (user_id, provider, provider_account_id)
+   - Allows users to connect multiple Google accounts (e.g., personal + school)
+5. ✅ Set up RLS policies for all tables
+6. ✅ Removed `sync_enabled` field - sync always enabled when account exists
 
 ### Phase 2: Sync Service (Server)
-1. Create `CalendarSyncService` class:
-   - Initial backfill logic (2 years past/future)
-   - Delta sync with syncToken
-   - Recurring event expansion
-   - Error handling and retries
-   - Outbound change processor: drain `event_changes` queue to Google with retry/backoff
-2. Create background sync endpoint (`POST /calendar/sync`)
-3. Integrate with existing `GoogleCalendarService`
+1. **Update `save_credentials` endpoint** (`POST /calendar/credentials` in `chronosServer/endpoints/calendar.py`):
+   - Migrate from `google_credentials` table to `calendar_accounts` table
+   - Extract `provider_account_id` from user's email (from OAuth session)
+   - Store credentials with `provider='google'` and `provider_account_id=user_email`
+   - After saving credentials, check if this is first-time sync (no `event_sync_state` exists for primary calendar)
+   - If first-time: Trigger initial backfill for PRIMARY calendar only (blocking, show spinner)
+   - Return sync status: `{ syncing: true }` if initial backfill started
+
+2. **Create `CalendarSyncService` class** (`chronosServer/db/calendar_sync.py`):
+   - **Initial backfill** (for onboarding):
+     - Sync ONLY primary calendar (not all calendars)
+     - 5 years past to 5 years future (120 months)
+     - Fetch events month-by-month to avoid Google API limits
+     - Store events in `events` table with proper field mapping
+     - Expand recurring events into `event_instances` table (cap at 200 instances per event)
+     - Store primary calendar in `calendar_list` table
+     - Update `event_sync_state` with backfill boundaries and syncToken
+     - Extract and store conference data (Google Meet links) in `conference_data` and `hangout_link` fields
+   - **Delta sync** (for manual refresh):
+     - Use stored `next_sync_token` from `event_sync_state`
+     - Fetch only changes from Google Calendar API using syncToken
+     - Process creates/updates/deletes (soft delete for cancelled events)
+     - Update `events` and `event_instances` tables
+     - Handle sync token expiration (410 error) with fallback to full 5-year resync
+   - **Recurring event expansion**:
+     - Parse RRULE strings from Google events
+     - Generate instances for date range (use Python `dateutil.rrule` or port JS logic)
+     - Store in `event_instances` table
+     - Handle exceptions (modified instances) with `is_exception=true`
+   - **Helper methods**:
+     - `_store_event_in_db()`: Convert Google event format to DB format, handle conference data
+     - `_expand_recurring_instances()`: Expand RRULE into individual instances
+     - `_get_or_create_sync_state()`: Manage sync state per calendar
+     - `_update_sync_state()`: Update sync progress and tokens
+     - `_soft_delete_event()`: Mark events as deleted instead of hard delete
+     - `_parse_boundaries()`: Normalize start/end to UTC, honor `start.timeZone`/`end.timeZone`, guard missing/invalid timestamps, and treat all-day end as exclusive (use provided end.date if present, otherwise start+1 day)
+
+3. **Update `GoogleCalendarService`** (`chronosServer/db/google_credentials.py`):
+   - Modify `get_credentials()` to read from `calendar_accounts` instead of `google_credentials`
+   - Add `provider_account_id` parameter to constructor
+   - Query: `WHERE user_id = X AND provider = 'google' AND provider_account_id = Y`
+   - Update `refresh_token_if_needed()` to save to `calendar_accounts` table
+
+4. **Create sync endpoint** (`POST /calendar/sync` in `chronosServer/endpoints/calendar.py`):
+   - Query params: `provider_account_id` (required), `initial_backfill` (boolean, default false)
+   - For initial backfill: Block until complete, return when done
+   - For delta sync: Return immediately with sync results
+   - Return: `{ status: 'completed' | 'in_progress' | 'failed', calendars: {...} }`
+
+5. **Add calendar endpoint** (`POST /calendar/add-account`):
+   - For adding second Google account later (different email)
+   - Save credentials to `calendar_accounts` with new `provider_account_id`
+   - Trigger background sync (non-blocking, no spinner)
+   - Return immediately, sync happens in background
 
 ### Phase 3: API Endpoints
 1. Implement new DB-backed endpoints:
@@ -356,7 +445,8 @@
    - Clear localStorage after migration
 2. Initial backfill for existing users:
    - Trigger sync for all connected calendars
-   - Backfill 2 years past/future
+   - Backfill 5 years past/future
+   - Show onboarding spinner during backfill
 
 ### Phase 6: Testing & Cleanup
 1. Test infinite scroll in all directions
@@ -385,14 +475,44 @@
 
 ## Migration Checklist
 
-- [ ] Create database schema (all tables + indexes)
-- [ ] Migrate `google_credentials` → `calendar_accounts`
-- [ ] Build `CalendarSyncService` with backfill + delta sync
-- [ ] Implement new API endpoints
-- [ ] Update client to use DB endpoints
-- [ ] Migrate localStorage data to DB
-- [ ] **Delete `cache.js` and remove all IndexedDB code**
-- [ ] Add sync UI (button + status indicator)
+### Phase 1: Database Schema ✅
+- [x] Create database schema (all tables + indexes)
+- [x] Migrate `google_credentials` → `calendar_accounts` (2 users migrated)
+- [x] Support multiple calendar accounts per user (added `provider_account_id`)
+- [x] Set up RLS policies for all tables
+- [x] Remove `sync_enabled` field (sync always enabled)
+
+### Phase 2: Sync Service (Server)
+- [x] Update `save_credentials` endpoint to use `calendar_accounts` table
+- [x] Extract `provider_account_id` from user email in credentials endpoint
+- [x] Create `CalendarSyncService` class with initial backfill (all calendars)
+- [x] Add `sync_date_range()` method for reusable date range syncing
+- [x] Add `ensure_coverage()` method for defensive prefetch (2-year expansion)
+- [x] Update `GoogleCalendarService` to read from `calendar_accounts` table
+- [x] Add `provider_account_id` support to `GoogleCalendarService`
+- [x] Implement delta sync with syncToken support
+- [x] Add recurring event expansion logic
+- [x] Create `POST /calendar/sync` endpoint
+- [x] Wire `backfill_calendar()` into `save_credentials` endpoint
+- [x] Add coverage check to `GET /calendar/events` endpoint
+- [x] Create `POST /calendar/add-account` endpoint for second accounts
+
+### Phase 3: API Endpoints
+- [x] Implement new DB-backed endpoints
+- [x] Modify mutation endpoints to write DB first
+- [x] Add event change logging
+
+### Phase 4: Client Migration
+- [x] Update `CalendarContext.jsx` to use DB endpoints
+- [x] Migrate localStorage data to DB
+- [x] **Delete `cache.js` and remove all IndexedDB code**
+- [x] Add sync UI (button + status indicator)
+
+### Phase 5: Data Migration
+- [x] Migrate localStorage data to DB (client-side script)
+- [x] Run initial backfill for existing users
+
+### Phase 6: Testing & Cleanup
 - [ ] Test infinite scroll and coverage expansion
+- [ ] Test sync conflicts and resolution
 - [ ] Remove obsolete code
-- [ ] Run initial backfill for existing users

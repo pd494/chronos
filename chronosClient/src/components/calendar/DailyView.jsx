@@ -1,11 +1,12 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
-import { format, getHours, getMinutes, addDays } from 'date-fns'
+import { format, getHours, getMinutes, addDays, differenceInMinutes } from 'date-fns'
 import { useCalendar } from '../../context/CalendarContext'
 import { useTaskContext } from '../../context/TaskContext'
 import DayEvent from '../events/DayEvent'
 import AllDayEvent from '../events/AllDayEvent'
 import Sortable from 'sortablejs'
 import { calculateTimeGridLayout } from '../../lib/eventLayout'
+import { getEventColors } from '../../lib/eventColors'
 import './DailyView.css'
 
 const HOUR_HEIGHT = 60 // Height of one hour in pixels
@@ -64,6 +65,7 @@ const DailyView = () => {
   const activeDropCellRef = useRef(null)
   const [isEventResizing, setIsEventResizing] = useState(false)
   const isEventResizeActiveRef = useRef(false)
+  const [dragPreviewEvent, setDragPreviewEvent] = useState(null) // Ghost preview for dragged event
   
   useEffect(() => {
     // Scroll to current time on initial load
@@ -241,11 +243,22 @@ const DailyView = () => {
     const newStart = new Date(currentDate)
     newStart.setHours(snappedHour, snappedMinutes, 0, 0)
     const newEnd = new Date(newStart.getTime() + durationMs)
+    
+    // Set ghost preview state for rendering
+    setDragPreviewEvent({
+      id: dragMeta.id,
+      title: dragMeta.title,
+      color: dragMeta.color,
+      start: newStart,
+      end: newEnd
+    })
+    
     emitDragPreviewUpdate(newStart, newEnd)
   };
 
   const clearEventDragPreview = () => {
     clearDropTarget();
+    setDragPreviewEvent(null);
     emitDragPreviewUpdate(null, null);
   };
   const resetPreviewIfNoTarget = () => {
@@ -856,6 +869,49 @@ const DailyView = () => {
                 position={{ column, columns, gap: TIMED_EVENT_GAP }}
               />
             ))}
+            
+            {/* Ghost preview showing where dragged event will be placed */}
+            {dragPreviewEvent && (() => {
+              const colors = getEventColors(dragPreviewEvent.color || 'blue')
+              const previewStart = dragPreviewEvent.start
+              const previewEnd = dragPreviewEvent.end
+              const previewTop = (previewStart.getHours() - DAY_START_HOUR) * HOUR_HEIGHT + (previewStart.getMinutes() / 60) * HOUR_HEIGHT
+              const previewDuration = Math.max(5, differenceInMinutes(previewEnd, previewStart))
+              const previewHeight = (previewDuration / 60) * HOUR_HEIGHT
+              
+              return (
+                <div
+                  className="absolute rounded-lg p-1 overflow-hidden text-sm pointer-events-none"
+                  style={{
+                    top: `${previewTop}px`,
+                    minHeight: `${previewHeight}px`,
+                    left: '4px',
+                    right: '4px',
+                    backgroundColor: colors.background,
+                    opacity: 0.7,
+                    border: `2px dashed ${colors.border}`,
+                    zIndex: 50
+                  }}
+                >
+                  <div 
+                    className="absolute top-0 bottom-0 w-1 rounded-full pointer-events-none" 
+                    style={{ 
+                      left: '2px',
+                      backgroundColor: colors.border,
+                      zIndex: 3
+                    }}
+                  />
+                  <div className="ml-3">
+                    <div className="font-medium text-xs" style={{ color: colors.text }}>
+                      {dragPreviewEvent.title || 'Event'}
+                    </div>
+                    <div className="text-xs" style={{ color: 'rgba(55, 65, 81, 0.7)' }}>
+                      {format(previewStart, 'h:mm a')} - {format(previewEnd, 'h:mm a')}
+                    </div>
+                  </div>
+                </div>
+              )
+            })()}
           </div>
         </div>
       </div>

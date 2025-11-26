@@ -488,9 +488,15 @@ const MonthlyView = () => {
   }, []);
 
   // Handle event drop for dragging events to different days
-  const handleEventDrop = useCallback((e, targetDate) => {
+  const handleEventDrop = useCallback(async (e, targetDate) => {
     e.preventDefault()
     e.stopPropagation()
+    
+    // Remove dragover class immediately
+    e.currentTarget.classList.remove('event-dragover')
+    document.querySelectorAll('.event-dragover').forEach(el => {
+      el.classList.remove('event-dragover')
+    })
     
     const eventData = e.dataTransfer.getData('event')
     if (!eventData) return
@@ -500,25 +506,38 @@ const MonthlyView = () => {
       const oldStart = new Date(draggedEvent.start)
       const oldEnd = new Date(draggedEvent.end)
       
-      // Calculate time difference
-      const timeDiff = targetDate.getTime() - new Date(oldStart.getFullYear(), oldStart.getMonth(), oldStart.getDate()).getTime()
+      // Calculate the day difference (preserve time of day)
+      const oldStartDay = startOfDay(oldStart)
+      const targetDay = startOfDay(targetDate)
+      const dayDiff = targetDay.getTime() - oldStartDay.getTime()
       
-      // Create new start and end dates
-      const newStart = new Date(oldStart.getTime() + timeDiff)
-      const newEnd = new Date(oldEnd.getTime() + timeDiff)
+      // Create new start and end dates (preserving original time)
+      const newStart = new Date(oldStart.getTime() + dayDiff)
+      const newEnd = new Date(oldEnd.getTime() + dayDiff)
       
-      // Update the event
-      updateEvent(draggedEvent.id, {
-        ...draggedEvent,
+      console.log('Dragging event:', draggedEvent.title, 'from', oldStart, 'to', newStart)
+      
+      // Update the event with new dates
+      await updateEvent(draggedEvent.id, {
         start: newStart,
-        end: newEnd
+        end: newEnd,
+        isAllDay: draggedEvent.isAllDay
       })
     } catch (error) {
       console.error('Error dropping event:', error)
+    } finally {
+      if (typeof window !== 'undefined') {
+        if (window.__chronosDraggedEventMeta?.id) {
+          window.__chronosDraggedEventMeta = null
+        }
+      }
+      document.querySelectorAll('[data-dragging]').forEach(el => {
+        el.removeAttribute('data-dragging')
+      })
+      document.querySelectorAll('.event-dragover').forEach(el => {
+        el.classList.remove('event-dragover')
+      })
     }
-    
-    // Remove dragover class
-    e.currentTarget.classList.remove('event-dragover')
   }, [updateEvent])
 
   const handleDragOver = useCallback((e) => {
@@ -876,14 +895,34 @@ const MonthlyView = () => {
             ? format(new Date(span.event.start), 'h:mma').toLowerCase()
             : null
           
+          const handleSpanDragStart = (e) => {
+            if (isPreview) return
+            e.stopPropagation()
+            e.dataTransfer.effectAllowed = 'move'
+            e.dataTransfer.setData('event', JSON.stringify(span.event))
+            e.dataTransfer.setData('eventId', span.event.id)
+            e.currentTarget.setAttribute('data-dragging', 'true')
+          }
+          
+          const handleSpanDragEnd = (e) => {
+            e.currentTarget.removeAttribute('data-dragging')
+            document.querySelectorAll('.event-dragover').forEach(el => {
+              el.classList.remove('event-dragover')
+            })
+          }
+          
           return (
             <div
               key={`${weekStart}-${span.id || 'preview'}-${lane}`}
               className={`month-multiday-span ${isAllDay ? 'all-day' : 'timed'} ${extraClass}`}
+              draggable={!isPreview}
+              onDragStart={handleSpanDragStart}
+              onDragEnd={handleSpanDragEnd}
               style={{
                 top: `${spanTop}px`,
                 left: spanLeft,
                 width: spanWidth,
+                cursor: isPreview ? 'default' : 'grab',
                 ...bgStyle
               }}
               onMouseDown={(e) => isPreview ? undefined : e.stopPropagation()}
@@ -962,16 +1001,20 @@ const MonthlyView = () => {
                     key={formatDateKey(day)}
                     onDoubleClick={() => {
                       const startDate = new Date(day);
-                      startDate.setHours(12, 0, 0, 0);
+                      startDate.setHours(0, 0, 0, 0);
                       const endDate = new Date(day);
-                      endDate.setHours(13, 0, 0, 0);
+                      endDate.setDate(endDate.getDate() + 1);
+                      endDate.setHours(0, 0, 0, 0);
 
-                      openEventModal({
-                        start: startDate,
-                        end: endDate,
-                        title: 'New Event',
-                        color: '#1761C7'
-                      }, true);
+                      openEventModal(null, true);
+                      window.prefilledEventDates = {
+                        startDate,
+                        endDate,
+                        title: '',
+                        color: 'blue',
+                        isAllDay: true,
+                        fromDayClick: true
+                      };
                     }}
                     style={{
                       height: `${rowHeight}px`,

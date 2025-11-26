@@ -103,7 +103,7 @@ const Sidebar = ({ activeCategory, isSidebarCollapsed, sidebarWidth, sidebarVisi
               categoryIcon={renderCategoryIcon()}
               showCategoryHeader={false}
               showAddButton={false}
-              placeholder="New todo @list @2pm, or compose email"
+              placeholder="New Todo "
             />
           )}
           

@@ -62,15 +62,16 @@ const DayEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) => 
   // Ensure we're working with proper Date objects
   const startDate = event.start instanceof Date ? event.start : new Date(event.start)
   const endDate = event.end instanceof Date ? event.end : new Date(event.end)
-  const displayStart = previewTimes?.start ?? startDate
-  const displayEnd = resizePreview?.end ?? previewTimes?.end ?? endDate
+  // Keep original position when dragging - ghost preview shows new position
+  const displayStart = resizePreview?.start ?? startDate
+  const displayEnd = resizePreview?.end ?? endDate
   
   const startHour = startDate.getHours()
   const startMinute = startDate.getMinutes()
   const endHour = endDate.getHours()
   const endMinute = endDate.getMinutes()
   
-  // Calculate position and height
+  // Calculate position and height - use original position, not preview
   const top = (displayStart.getHours() - dayStartHour) * hourHeight + (displayStart.getMinutes() / 60) * hourHeight
   const duration = Math.max(5, differenceInMinutes(displayEnd, displayStart))
   const height = (duration / 60) * hourHeight
@@ -285,10 +286,10 @@ const DayEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) => 
   }
 
   const backgroundColor = isDeclined
-    ? 'rgba(148, 163, 184, 0.225)'
+    ? (colors.background.startsWith('#') ? hexToRgba(colors.background, 0.45) : colors.background)
     : visuallyChecked
-      ? (colors.background.startsWith('#') ? hexToRgba(colors.background, 0.35) : colors.background)
-      : (colors.background.startsWith('#') ? hexToRgba(colors.background, 0.7) : colors.background)
+      ? lightenHexColor(colors.background, 25)
+      : colors.background
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -309,7 +310,7 @@ const DayEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) => 
   }, [event.id])
 
   const isPreviewing = Boolean(previewTimes)
-  const dayChanged = previewTimes ? !isSameDay(displayStart, startDate) : false
+  // No longer showing day change in original event - ghost preview handles this
   const showRecurringIcon = isRecurringCalendarEvent(event)
 
   return (
@@ -338,14 +339,15 @@ const DayEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) => 
     >
       {/* Vertical line - rounded and floating */}
       <div 
-        className="absolute left-1 top-0 bottom-0 w-1 rounded-full pointer-events-none" 
+        className="absolute top-0.5 bottom-0.5 w-1 rounded-full pointer-events-none" 
         style={{ 
+          left: '1px',
           backgroundColor: colors.border,
           zIndex: 3
         }}
       ></div>
       
-      <div className="ml-3.5"> {/* Add margin to accommodate for the vertical line */}
+      <div className="ml-2"> {/* Add margin to accommodate for the vertical line */}
         <div 
           className="font-medium mb-0.5 flex items-start gap-1.5" 
           style={{ 
@@ -354,7 +356,7 @@ const DayEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) => 
         >
           <span 
             className="break-words whitespace-normal flex-1 min-w-0" 
-            style={titleStyle}
+            style={{...titleStyle, marginLeft: '2px'}}
           >
             {event.title}
           </span>
@@ -367,22 +369,10 @@ const DayEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) => 
           data-event-time="true"
           style={{ 
             color: timeColor,
-            fontWeight: isPreviewing ? 600 : 500
+            fontWeight: 500
           }}
         >
           {`${formatTime(displayStart)} – ${formatTime(displayEnd)}`}
-          {isPreviewing && (
-            <>
-              <span className="block text-[10px] uppercase tracking-wide text-slate-500">
-                New time
-              </span>
-              {dayChanged && (
-                <span className="block text-[10px] uppercase tracking-wide text-slate-500">
-                  {format(displayStart, 'EEE')}
-                </span>
-              )}
-            </>
-          )}
         </div>
         {(() => {
           // Check for meeting links in various fields (hangoutLink, conferenceData, location)

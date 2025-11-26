@@ -63,10 +63,19 @@ async def get_todos(
 ) -> JSONResponse:
     
     try:
-        result = (
+        # Get both todos and categories in parallel
+        todos_result = (
             supabase.table("todos")
             .select("*")
             .eq("user_id", str(user.id))
+            .order("created_at", desc=False)
+            .execute()
+        )
+        categories_result = (
+            supabase.table("categories")
+            .select("*")
+            .eq("user_id", str(user.id))
+            .order("order", desc=False)
             .execute()
         )
     except Exception as e:
@@ -79,19 +88,11 @@ async def get_todos(
             )
         raise
     
-    if not result.data:
-        return JSONResponse(
-            status_code=status.HTTP_200_OK,
-            content={
-                "message": "No todos found",
-                "data": []
-            }
-        )
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content={
-            "message": "Todos fetched successfully",
-            "data": result.data
+            "todos": todos_result.data or [],
+            "categories": categories_result.data or []
         },
     )
 
@@ -100,21 +101,21 @@ async def bootstrap_todos(
     supabase: Client = Depends(get_supabase_client),
     user: User = Depends(get_current_user)
 ) -> JSONResponse:
-    user_id = str(user.id)
+    """
+    Returns todos and categories for initial hydration.
+    """
     try:
-        # Execute queries sequentially but efficiently - Supabase client handles connection pooling
-        # The database indices will make these queries fast
         todos_result = (
             supabase.table("todos")
             .select("*")
-            .eq("user_id", user_id)
+            .eq("user_id", str(user.id))
             .order("created_at", desc=False)
             .execute()
         )
         categories_result = (
             supabase.table("categories")
             .select("*")
-            .eq("user_id", user_id)
+            .eq("user_id", str(user.id))
             .order("order", desc=False)
             .execute()
         )
@@ -131,10 +132,9 @@ async def bootstrap_todos(
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content={
-            "message": "Todos bootstrap fetched successfully",
             "todos": todos_result.data or [],
             "categories": categories_result.data or []
-        }
+        },
     )
 @router.put("/{todo_id}")
 async def edit_todo(
@@ -207,18 +207,28 @@ async def delete_todo(
     user: User = Depends(get_current_user)
 ) -> JSONResponse:
     
-    result = (
+    # First, delete any todo-event links for this todo
+    try:
+        supabase.table("todo_event_links").delete().eq("user_id", str(user.id)).eq("todo_id", todo_id).execute()
+    except Exception:
+        pass  # Ignore errors - link may not exist
+    
+    # First check if the todo exists
+    check_result = (
         supabase.table("todos")
-        .delete()
+        .select("id")
         .eq("id", todo_id)
         .eq("user_id", str(user.id))
         .execute()
     )
-    if not result.data:
+    if not check_result.data:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Todo not found or is not yours"
         )
+    
+    # Now delete it
+    supabase.table("todos").delete().eq("id", todo_id).eq("user_id", str(user.id)).execute()
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content={
@@ -552,12 +562,30 @@ async def convert_todo_to_event(
         try:
             supabase.table("todos").update({
                 "date": start_date,
-                "google_event_id": created_event.get("id")
+                "google_event_id": created_event.get("id"),
+                "scheduled_date": start_date,
+                "scheduled_at": start_date,
+                "scheduled_end": end_date,
+                "scheduled_is_all_day": is_all_day
             }).eq("id", todo_id).eq("user_id", str(user.id)).execute()
         except Exception as update_error:
             import logging
             logging.getLogger(__name__).warning(
                 "Failed to persist scheduled date for todo %s: %s", todo_id, update_error
+            )
+        
+        # Create todo-event link in the database
+        try:
+            supabase.table("todo_event_links").upsert({
+                "user_id": str(user.id),
+                "todo_id": str(todo_id),
+                "event_id": created_event.get("id"),
+                "google_event_id": created_event.get("id")
+            }, on_conflict="user_id,todo_id").execute()
+        except Exception as link_error:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to create todo-event link for todo %s: %s", todo_id, link_error
             )
         
         return JSONResponse(

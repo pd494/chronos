@@ -31,12 +31,20 @@ class Todo(BaseModel):
     category_id: Optional[UUID] = None
     category_name: Optional[str] = None
     google_event_id: Optional[str] = None
+    scheduled_date: Optional[datetime] = None
+    scheduled_at: Optional[datetime] = None
+    scheduled_end: Optional[datetime] = None
+    scheduled_is_all_day: Optional[bool] = None
     
 class TodoUpdate(BaseModel):
     content: Optional[str] = None
-    completed: Optional[bool] = False
+    completed: Optional[bool] = None
     date: Optional[datetime] = None
     order: Optional[int] = None
     category_id: Optional[UUID] = None
     category_name: Optional[str] = None
     google_event_id: Optional[str] = None
+    scheduled_date: Optional[datetime] = None
+    scheduled_at: Optional[datetime] = None
+    scheduled_end: Optional[datetime] = None
+    scheduled_is_all_day: Optional[bool] = None
