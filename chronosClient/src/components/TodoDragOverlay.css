@@ -1,0 +1,37 @@
+.todo-drag-overlay {
+  position: fixed;
+  z-index: 99999;
+  pointer-events: none;
+  transition: opacity 120ms ease-out, transform 120ms ease-out;
+  opacity: 1;
+}
+
+.todo-drag-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 36px 14px 14px;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.28);
+  font-size: 16px;
+  font-weight: 500;
+  max-width: 700px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.todo-drag-pill-line {
+  width: 4px;
+  height: 20px;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.todo-drag-pill-title {
+  max-width: 630px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

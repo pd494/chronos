@@ -8,7 +8,8 @@ import './WeeklyView.css'
 import { calculateTimeGridLayout } from '../../lib/eventLayout'
 import { getEventColors } from '../../lib/eventColors'
 
-const HOUR_HEIGHT = 60 // Height of one hour in pixels
+const HOUR_HEIGHT = 55 // Height of one hour in pixels (zoomed out ~15% from default)
+const TIME_FOCUS_RATIO = 0.4 // Position current time ~60% down the viewport
 const DAY_START_HOUR = 0 // Start displaying from 12 AM
 const DAY_END_HOUR = 23 // End displaying at 11 PM
 const ALL_DAY_SECTION_HEIGHT = 40 // Height of the all-day events section
@@ -51,6 +52,7 @@ const buildHourlyRange = (day, hour) => {
 const WeeklyView = () => {
   const {
     currentDate,
+    view,
     events,
     getDaysInWeek,
     navigateToNext,
@@ -58,13 +60,14 @@ const WeeklyView = () => {
     selectDate,
     openEventModal,
     getEventsForDate,
-    updateEvent
+    updateEvent,
+    showEventModal
   } = useCalendar()
   
   const { convertTodoToEvent } = useTaskContext()
   
   const [days, setDays] = useState(getDaysInWeek(currentDate))
-  const containerRef = useRef(null)
+  const scrollContainerRef = useRef(null)
   const touchStartX = useRef(null)
   const [isScrolling, setIsScrolling] = useState(false)
   const scrollThreshold = 50
@@ -75,6 +78,7 @@ const WeeklyView = () => {
   const [dragStart, setDragStart] = useState(null)
   const [dragEnd, setDragEnd] = useState(null)
   const [dragDay, setDragDay] = useState(null)
+  const [persistedDragPreview, setPersistedDragPreview] = useState(null) // Keeps preview visible while modal is open
   const [todoDragPreview, setTodoDragPreview] = useState(null) // Preview while dragging a todo into the week grid
   
   const hasDraggedRef = useRef(false)
@@ -106,36 +110,65 @@ const WeeklyView = () => {
   const clearTodoDragPreview = useCallback(() => setTodoDragPreview(null), [])
 
   const setTodoDropPreview = useCallback((startDate, endDate, isAllDay = false) => {
+    if (typeof window !== 'undefined' && window.__chronosTodoOverlayActive) {
+      return
+    }
     const meta = getDraggedTodoMeta()
+    const metaColor = typeof meta?.color === 'string' ? meta.color.toLowerCase() : meta?.color
     setTodoDragPreview({
       start: startDate,
       end: endDate,
       isAllDay,
       title: meta?.title || 'New task',
-      color: meta?.color || '#a78bfa'
+      color: metaColor || 'blue'
     })
   }, [getDraggedTodoMeta])
+  
+  // When the floating todo pill is active, immediately clear any
+  // inline todo previews so they never appear at the same time.
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const handler = (evt) => {
+      if (evt?.detail?.active) {
+        setTodoDragPreview(null)
+      }
+    }
+    window.addEventListener('chronos-todo-overlay-state', handler)
+    return () => window.removeEventListener('chronos-todo-overlay-state', handler)
+  }, [])
   
   useEffect(() => {
     setDays(getDaysInWeek(currentDate))
   }, [currentDate, getDaysInWeek])
   
   useEffect(() => {
-    // Scroll to current time on initial load
-    if (containerRef.current) {
-      const now = new Date()
-      const currentHour = getHours(now)
-      const currentMinute = getMinutes(now)
-      
-      if (currentHour >= DAY_START_HOUR && currentHour <= DAY_END_HOUR) {
-        const scrollPosition = (currentHour - DAY_START_HOUR) * HOUR_HEIGHT + 
-                             (currentMinute / 60) * HOUR_HEIGHT - 100
-        containerRef.current.scrollTop = scrollPosition
-      } else {
-        containerRef.current.scrollTop = 60 // Scroll to 9 AM by default
-      }
+    if (!showEventModal && persistedDragPreview) {
+      setPersistedDragPreview(null)
     }
+  }, [showEventModal])
+  
+  const scrollToCurrentTime = useCallback(() => {
+    const container = scrollContainerRef.current
+    if (!container) return
+    const now = new Date()
+    const currentHour = getHours(now)
+    const currentMinute = getMinutes(now)
+    const withinDay = currentHour >= DAY_START_HOUR && currentHour <= DAY_END_HOUR
+    const rawPosition = withinDay
+      ? ((currentHour - DAY_START_HOUR) * HOUR_HEIGHT) + ((currentMinute / 60) * HOUR_HEIGHT)
+      : 60
+    const centeredPosition = rawPosition - (container.clientHeight * TIME_FOCUS_RATIO) + (HOUR_HEIGHT / 2)
+    const maxScroll = Math.max(0, container.scrollHeight - container.clientHeight)
+    container.scrollTop = Math.max(0, Math.min(centeredPosition, maxScroll))
   }, [])
+
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => {
+      scrollToCurrentTime()
+      requestAnimationFrame(scrollToCurrentTime)
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [scrollToCurrentTime, view, currentDate])
   
   // Set up current time indicator
   useEffect(() => {
@@ -156,7 +189,6 @@ const WeeklyView = () => {
     return () => clearInterval(interval)
   }, [])
   
-  // Handle scroll for infinite scrolling
   const handleWheel = (e) => {
     if (Math.abs(e.deltaX) > Math.abs(e.deltaY) && Math.abs(e.deltaX) > scrollThreshold) {
       if (isScrolling) return
@@ -206,12 +238,10 @@ const WeeklyView = () => {
   const handleCellMouseDown = (e, day, hour) => {
     if (e.button !== 0) return
 
-    // Don't start drag-to-create if an event is being resized
     if (typeof window !== 'undefined' && window.__chronosEventResizing) {
       return
     }
     
-    // Don't start drag-to-create if a todo drag is in progress
     if (document.body.classList.contains('task-dragging')) {
       return
     }
@@ -335,7 +365,7 @@ const WeeklyView = () => {
 
       const newEvent = {
         id: `temp-${Date.now()}`,
-        title: 'New Event',
+        title: '',
         start: startDate,
         end: endDate,
         color: 'blue',
@@ -394,11 +424,20 @@ const WeeklyView = () => {
       window.prefilledEventDates = {
         startDate,
         endDate,
-        title: 'New Event',
-        color: '#1761C7',
+        title: '',
+        color: 'blue',
         isAllDay: false, // Explicitly set to false for timed events
         fromDayClick: true
       };
+      
+      // Persist the drag preview while modal is open
+      setPersistedDragPreview({
+        day: savedDragDay,
+        startHour: startVal,
+        endHour: endVal,
+        startDate,
+        endDate
+      });
       
       openEventModal(newEvent, true);
 
@@ -429,7 +468,7 @@ const WeeklyView = () => {
 
     const newEvent = {
       id: `temp-${Date.now()}`,
-      title: 'New Event',
+      title: '',
       start: startDate,
       end: endDate,
       color: 'blue',
@@ -440,7 +479,7 @@ const WeeklyView = () => {
     window.prefilledEventDates = {
       startDate,
       endDate,
-      title: 'New Event',
+      title: '',
       color: 'blue',
       isAllDay: false,
       fromDayClick: true
@@ -552,7 +591,8 @@ const WeeklyView = () => {
 
   // Handle todo drop on hour cell
   const handleTodoDropOnHourCell = async (e, targetDay, targetHour, _hourCellElement = null) => {
-    if (!document.body.classList.contains('task-dragging')) return;
+    const isTodoDrag = document.body.classList.contains('task-dragging') || !!getDraggedTodoMeta();
+    if (!isTodoDrag) return;
     
     e.preventDefault();
     e.stopPropagation();
@@ -634,7 +674,8 @@ const WeeklyView = () => {
 
   // Handle todo drop on all-day section
   const handleTodoDropOnAllDay = async (e, targetDay) => {
-    if (!document.body.classList.contains('task-dragging')) return;
+    const isTodoDrag = document.body.classList.contains('task-dragging') || !!getDraggedTodoMeta();
+    if (!isTodoDrag) return;
     
     e.preventDefault();
     e.stopPropagation();
@@ -799,7 +840,7 @@ const WeeklyView = () => {
 
     const newEvent = {
       id: `temp-${Date.now()}`,
-      title: 'New Event',
+      title: '',
       start: startDate,
       end: endDate,
       color: 'blue',
@@ -833,7 +874,7 @@ const WeeklyView = () => {
     window.prefilledEventDates = {
       startDate,
       endDate,
-      title: 'New Event',
+      title: '',
       color: 'blue',
       isAllDay: true
     };
@@ -952,7 +993,6 @@ const WeeklyView = () => {
   
   return (
     <div 
-      ref={containerRef}
       className="view-container flex flex-col h-full"
       onWheel={handleWheel}
       onDragEnter={() => {
@@ -1089,13 +1129,17 @@ const WeeklyView = () => {
         );
       })()}
       
-      <div className="relative flex flex-1 overflow-y-auto min-h-0">
+      <div
+        ref={scrollContainerRef}
+        className="relative flex flex-1 overflow-y-auto min-h-0"
+      >
         {/* Time labels */}
         <div className="w-16 flex-shrink-0 relative z-10 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700" style={{ height: `${(DAY_END_HOUR - DAY_START_HOUR + 1) * HOUR_HEIGHT}px`, minHeight: `${(DAY_END_HOUR - DAY_START_HOUR + 1) * HOUR_HEIGHT}px` }}>
           {hours.map((hour) => (
             <div 
               key={hour} 
-              className="h-[60px] relative"
+              className="relative"
+              style={{ height: `${HOUR_HEIGHT}px` }}
             >
               <span className="absolute left-2 text-xs text-gray-500" style={{ top: hour === 0 ? '4px' : '-10px' }}>
                 {hour === 0 ? '12 AM' : hour < 12 ? `${hour} AM` : hour === 12 ? '12 PM' : `${hour - 12} PM`}
@@ -1207,20 +1251,66 @@ const WeeklyView = () => {
                   />
                 ))}
                 
-                {/* Drag selection indicator */}
-                {isDragging && dragDay && isSameDay(dragDay, day) && (
-                  <div
-                    className="absolute left-0 right-0 bg-blue-200 dark:bg-blue-700 opacity-50 pointer-events-none rounded"
-                    style={{
-                      top: `${(Math.min(dragStart, dragEnd) - DAY_START_HOUR) * HOUR_HEIGHT}px`,
-                      height: `${Math.abs(dragEnd - dragStart) * HOUR_HEIGHT || HOUR_HEIGHT/4}px`,
-                      left: '2px',
-                      right: '2px',
-                      borderRadius: '6px',
-                      zIndex: 10
-                    }}
-                  />
-                )}
+                {/* Drag selection indicator - actual event marker UI (shows during drag AND while modal is open) */}
+                {((isDragging && dragDay && isSameDay(dragDay, day)) || (persistedDragPreview && isSameDay(persistedDragPreview.day, day))) && (() => {
+                  const colors = getEventColors('blue')
+                  const startHourVal = persistedDragPreview && isSameDay(persistedDragPreview.day, day) 
+                    ? persistedDragPreview.startHour 
+                    : Math.min(dragStart, dragEnd)
+                  const endHourVal = persistedDragPreview && isSameDay(persistedDragPreview.day, day)
+                    ? persistedDragPreview.endHour
+                    : Math.max(dragStart, dragEnd)
+                  const previewTop = (startHourVal - DAY_START_HOUR) * HOUR_HEIGHT
+                  const previewHeight = Math.max((endHourVal - startHourVal) * HOUR_HEIGHT, HOUR_HEIGHT / 4)
+                  
+                  // Calculate preview times
+                  const previewStartDate = persistedDragPreview && isSameDay(persistedDragPreview.day, day)
+                    ? persistedDragPreview.startDate
+                    : (() => {
+                        const d = new Date(day)
+                        d.setHours(Math.floor(startHourVal), Math.round((startHourVal % 1) * 60), 0, 0)
+                        return d
+                      })()
+                  const previewEndDate = persistedDragPreview && isSameDay(persistedDragPreview.day, day)
+                    ? persistedDragPreview.endDate
+                    : (() => {
+                        const d = new Date(day)
+                        d.setHours(Math.floor(endHourVal), Math.round((endHourVal % 1) * 60), 0, 0)
+                        return d
+                      })()
+                  
+                  return (
+                    <div
+                      className="absolute rounded-lg p-1 overflow-hidden text-sm pointer-events-none"
+                      style={{
+                        top: `${previewTop}px`,
+                        minHeight: `${previewHeight}px`,
+                        left: '2px',
+                        right: '2px',
+                        backgroundColor: colors.background,
+                        opacity: 0.9,
+                        zIndex: 50
+                      }}
+                    >
+                      <div 
+                        className="absolute top-0.5 bottom-0.5 w-1 rounded-full pointer-events-none" 
+                        style={{ 
+                          left: '1px',
+                          backgroundColor: colors.border,
+                          zIndex: 3
+                        }}
+                      />
+                      <div className="ml-2">
+                        <div className="font-medium text-xs" style={{ color: colors.text, marginLeft: '2px' }}>
+                          New Event
+                        </div>
+                        <div className="text-xs" style={{ color: 'rgba(55, 65, 81, 0.7)', fontWeight: 500 }}>
+                          {format(previewStartDate, 'h:mm a')} – {format(previewEndDate, 'h:mm a')}
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })()}
 
                 {/* Preview while dragging a todo into this day/hour slot */}
                 {todoDragPreview && !todoDragPreview.isAllDay && isSameDay(todoDragPreview.start, day) && (() => {
@@ -1281,7 +1371,7 @@ const WeeklyView = () => {
 
                   const layouts = calculateTimeGridLayout(dayEvents);
 
-                  return layouts.map(({ event, column, columns }) => (
+                  return layouts.map(({ event, column, columns, stackIndex, stackCount }) => (
                     <WeekEvent
                       key={event.clientKey || event.id || `${(event.start instanceof Date ? event.start : new Date(event.start)).getTime()}-${column}-${columns}`}
                       event={{
@@ -1291,7 +1381,7 @@ const WeeklyView = () => {
                       hourHeight={HOUR_HEIGHT}
                       dayStartHour={DAY_START_HOUR}
                       dayEndHour={DAY_END_HOUR}
-                      position={{ column, columns, gap: TIMED_EVENT_GAP }}
+                      position={{ column, columns, stackIndex, stackCount, gap: TIMED_EVENT_GAP }}
                     />
                   ));
                 })()}

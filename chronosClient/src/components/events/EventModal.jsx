@@ -344,7 +344,7 @@ const EventModal = () => {
   const [eventEndDate, setEventEndDate] = useState(format(new Date(), 'yyyy-MM-dd'))
   const [timeStart, setTimeStart] = useState(DEFAULT_TIMED_START)
   const [timeEnd, setTimeEnd] = useState(DEFAULT_TIMED_END)
-  const [color, setColor] = useState('#1761C7')
+  const [color, setColor] = useState('blue')
   const [isAllDay, setIsAllDay] = useState(true)
   const [location, setLocation] = useState('')
   const [conferenceRequestId, setConferenceRequestId] = useState(null)
@@ -372,6 +372,7 @@ const EventModal = () => {
       }
     }
   }, [])
+  const titleInputRef = useRef(null)
   const locationInputRef = useRef(null)
   const locationContainerRef = useRef(null)
   const descriptionInputRef = useRef(null)
@@ -418,6 +419,20 @@ const EventModal = () => {
   const [inviteResponseLoading, setInviteResponseLoading] = useState(false)
   const [inviteResponseError, setInviteResponseError] = useState('')
   const [optimisticRSVPStatus, setOptimisticRSVPStatus] = useState(null)
+  const isHolidayEvent = useMemo(() => {
+    if (!selectedEvent) return false
+    const calendarId = selectedEvent.calendar_id || selectedEvent.calendarId
+    const organizer = selectedEvent.organizerEmail || selectedEvent.organizer
+    return Boolean(
+      selectedEvent.isHoliday === true ||
+      (typeof calendarId === 'string' && calendarId.toLowerCase().includes('holiday@')) ||
+      (typeof organizer === 'string' && organizer.toLowerCase().includes('holiday@'))
+    )
+  }, [selectedEvent])
+  const visibleParticipants = useMemo(() => {
+    if (!isHolidayEvent || !selectedEvent?.organizerEmail) return participants
+    return participants.filter(p => p !== selectedEvent.organizerEmail)
+  }, [isHolidayEvent, participants, selectedEvent?.organizerEmail])
   
   // Normalize response status to prevent invalid values like "ip"
   const normalizeResponseStatus = useCallback((value) => {
@@ -698,6 +713,11 @@ const EventModal = () => {
     
     // Prevent horizontal scrolling
     document.body.style.overflowX = 'hidden'
+    
+    // Auto-focus title input
+    if (titleInputRef.current) {
+      titleInputRef.current.focus()
+    }
     
     return () => {
       document.body.style.overflowX = ''
@@ -1119,8 +1139,10 @@ const EventModal = () => {
     // Set initial participants - don't include current user if they are the organizer
     let initialParticipants = selectedEvent?.participants || [];
     
-    // Remove current user from participants if they are the organizer
-    if (selectedEvent?.organizerEmail === user?.email) {
+    if (isHolidayEvent) {
+      initialParticipants = initialParticipants.filter(p => p !== selectedEvent?.organizerEmail);
+    } else if (selectedEvent?.organizerEmail === user?.email) {
+      // Remove current user from participants if they are the organizer
       initialParticipants = initialParticipants.filter(p => p !== user.email);
     } else {
       // Add organizer to participants if they're not already included and not the current user
@@ -1151,7 +1173,7 @@ const EventModal = () => {
     setExpandedChips(new Set())
     setParticipantEmail('')
 
-  }, [selectedEvent, cleanupTemporaryEvent])
+  }, [selectedEvent, cleanupTemporaryEvent, isHolidayEvent, user?.email])
 
   useEffect(() => {
     setIsDescriptionExpanded(false)
@@ -2065,11 +2087,12 @@ const EventModal = () => {
                 )}
                 <div className="flex-1">
                   <input
+                    ref={titleInputRef}
                     type="text"
                     value={eventName}
                     onChange={(e) => setEventName(e.target.value)}
-                    placeholder="Add title"
-                    className="w-full px-0 py-1 text-xl font-semibold text-gray-900 border-none focus:outline-none focus:ring-0"
+                    placeholder="New event"
+                    className="w-full px-0 py-1 text-xl font-semibold text-gray-900 border-none focus:outline-none focus:ring-0 placeholder-gray-400"
                     style={{ letterSpacing: '0.01em' }}
                   />
                   <div className="border-b border-transparent">
@@ -2124,7 +2147,7 @@ const EventModal = () => {
                     placeholder="Add guests"
                     className="w-full px-0 py-1 text-sm text-gray-900 bg-transparent border-none focus:outline-none focus:ring-0"
                   />
-                    {participants.length > 0 && (() => {
+                    {visibleParticipants.length > 0 && (() => {
                       // For viewing existing events with attendee data
                       const hasAttendeeData = selectedEvent?.attendees && Array.isArray(selectedEvent.attendees)
                       const attendeesMap = hasAttendeeData 
@@ -2137,7 +2160,7 @@ const EventModal = () => {
                       
                       // Count declined: count each participant with declined status
                       let declinedCount = 0
-                      participants.forEach(email => {
+                      visibleParticipants.forEach(email => {
                         const attendee = attendeesMap.get(email)
                         if (attendee?.responseStatus === 'declined') {
                           declinedCount++
@@ -2146,7 +2169,7 @@ const EventModal = () => {
                       
                       // Count awaiting: count each participant based on their status
                       let awaitingCount = 0
-                      participants.forEach(email => {
+                      visibleParticipants.forEach(email => {
                         const attendee = attendeesMap.get(email)
                         if (!attendee) {
                           // Participant not in attendees list (newly added, not yet synced)
@@ -2164,7 +2187,7 @@ const EventModal = () => {
                       return (
                         <div className="space-y-2">
                           <div className="flex items-center">
-                            {participants.slice(0, 5).map((email, index) => {
+                            {visibleParticipants.slice(0, 5).map((email, index) => {
                               const bgColor = getParticipantColor(email)
                               const attendee = attendeesMap.get(email)
                               const isAccepted = attendee?.responseStatus === 'accepted'
@@ -2222,7 +2245,7 @@ const EventModal = () => {
                                 </div>
                               )
                             })}
-                            {participants.length > 5 && (
+                            {visibleParticipants.length > 5 && (
                               <div
                                 className="rounded-full text-xs font-semibold bg-gray-200 text-gray-600 flex items-center justify-center border-2 border-white"
                                 style={{ 
@@ -2232,7 +2255,7 @@ const EventModal = () => {
                                   height: '33.6px'
                                 }}
                               >
-                                +{participants.length - 5}
+                                +{visibleParticipants.length - 5}
                               </div>
                             )}
                             {(goingCount > 0 || declinedCount > 0 || awaitingCount > 0) && (
@@ -2248,7 +2271,7 @@ const EventModal = () => {
                           {expandedChips.size > 0 && (
                             <div className="pt-1">
                               <span className="text-xs text-gray-600">
-                                {participants.filter(email => expandedChips.has(email)).map((email, index, array) => {
+                                {visibleParticipants.filter(email => expandedChips.has(email)).map((email, index, array) => {
                                   const isOrganizer = selectedEvent?.organizerEmail === email && email !== user?.email
                                   const attendee = attendeesMap.get(email)
                                   const isAccepted = attendee?.responseStatus === 'accepted'
@@ -3034,7 +3057,7 @@ const EventModal = () => {
                 </button>
               )}
             </div>
-            {participants.length > 0 && !selectedEvent?.inviteCanRespond && (
+            {visibleParticipants.length > 0 && !selectedEvent?.inviteCanRespond && (
               <div className="flex items-center gap-2 text-xs text-gray-600">
                 <input
                   type="checkbox"

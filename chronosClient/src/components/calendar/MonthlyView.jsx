@@ -28,7 +28,9 @@ import Sortable from 'sortablejs';
 import './MonthlyView.css';
 
 // ─── Constants ────────────────────────────────────────────────────────────
-const BUFFER_WEEKS     = 260; // ~5 years either side (10 years total range)
+// Use a large week buffer so the month view feels effectively infinite
+// in both directions while still keeping rendering performant.
+const BUFFER_WEEKS     = 1040; // ~20 years either side (~40 years total range)
 const WEEKS_PER_VIEW   = 6;   // always render 6 rows (standard month view)
 const ABOVE            = Math.floor(WEEKS_PER_VIEW / 2); // 3 when view = 6
 const BELOW            = WEEKS_PER_VIEW - 1 - ABOVE;     // 2
@@ -284,6 +286,18 @@ const MonthlyView = () => {
       document.body.style.userSelect = ''
     }
   }, [])
+
+  // Clear month todo preview whenever the floating todo pill is active
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const handler = (evt) => {
+      if (evt?.detail?.active) {
+        clearTodoPreview()
+      }
+    }
+    window.addEventListener('chronos-todo-overlay-state', handler)
+    return () => window.removeEventListener('chronos-todo-overlay-state', handler)
+  }, [clearTodoPreview])
 
   const scrollContainerRef = useRef(null);
   const headerRef = useRef(null);
@@ -557,7 +571,13 @@ const MonthlyView = () => {
       const dayCell = e.currentTarget;
       const dateStr = dayCell.getAttribute('data-date');
       if (dateStr) {
-        setTodoPreviewDate(dateStr);
+        const overlayActive = typeof window !== 'undefined' && window.__chronosTodoOverlayActive;
+        if (overlayActive) {
+          // While the pill is visible, keep the inline preview hidden
+          clearTodoPreview();
+        } else {
+          setTodoPreviewDate(dateStr);
+        }
       }
       dayCell.classList.add('event-dragover');
       document.body.classList.add('calendar-drag-focus');
@@ -842,55 +862,12 @@ const MonthlyView = () => {
             : `calc(${span.length} * (100% / 7) - 8px)`
           const spanTop = MULTI_DAY_TOP_OFFSET + lane * MULTI_DAY_LANE_HEIGHT
           
-          // Use existing color system from getEventColors
-          const eventColorName = span.event.color || 'blue'
+          const eventColorName = normalizeToPaletteColor(span.event.color || 'blue')
           const colors = getEventColors(eventColorName)
           const isAllDay = span.event.isAllDay
-          const isHexColor = eventColorName && eventColorName.startsWith('#')
-          
-          // Helper functions for color manipulation
-          const lightenHexColor = (hex, percent) => {
-            if (typeof hex !== 'string' || !hex.startsWith('#')) return hex
-            const normalized = hex.replace('#', '')
-            const r = parseInt(normalized.substring(0, 2), 16)
-            const g = parseInt(normalized.substring(2, 4), 16)
-            const b = parseInt(normalized.substring(4, 6), 16)
-            const lightenedR = Math.min(255, Math.floor(r + (255 - r) * (percent / 100)))
-            const lightenedG = Math.min(255, Math.floor(g + (255 - g) * (percent / 100)))
-            const lightenedB = Math.min(255, Math.floor(b + (255 - b) * (percent / 100)))
-            return `#${lightenedR.toString(16).padStart(2, '0')}${lightenedG.toString(16).padStart(2, '0')}${lightenedB.toString(16).padStart(2, '0')}`
-          }
-          
-          const darkenHexColor = (hex, percent) => {
-            if (typeof hex !== 'string' || !hex.startsWith('#')) return hex
-            const normalized = hex.replace('#', '')
-            const r = parseInt(normalized.substring(0, 2), 16)
-            const g = parseInt(normalized.substring(2, 4), 16)
-            const b = parseInt(normalized.substring(4, 6), 16)
-            const darkenedR = Math.floor(r * (1 - percent / 100))
-            const darkenedG = Math.floor(g * (1 - percent / 100))
-            const darkenedB = Math.floor(b * (1 - percent / 100))
-            return `#${darkenedR.toString(16).padStart(2, '0')}${darkenedG.toString(16).padStart(2, '0')}${darkenedB.toString(16).padStart(2, '0')}`
-          }
-          
-          // Get background color for hex colors (matching EventIndicator)
-          const getBgStyle = () => {
-            if (isPreview) return { backgroundColor: getEventColors('blue').background }
-            if (isHexColor) {
-              return { backgroundColor: lightenHexColor(eventColorName, 70) }
-            }
-            return { backgroundColor: colors.background }
-          }
-          
-          // Get text color - match EventIndicator exactly (same color for all events)
-          const getTextColor = () => {
-            if (isHexColor) return darkenHexColor(eventColorName, 40)
-            return 'rgb(55, 65, 81)'
-          }
-          
-          const lineColor = isHexColor ? eventColorName : (colors.border || colors.text)
-          const bgStyle = getBgStyle()
-          const textColor = getTextColor()
+          const lineColor = colors.border || colors.text
+          const bgStyle = { backgroundColor: isPreview ? getEventColors('blue').background : colors.background }
+          const textColor = colors.text
           const startTimeLabel = (!isPreview && span.event.start && !span.event.originalIsAllDay)
             ? format(new Date(span.event.start), 'h:mma').toLowerCase()
             : null
@@ -934,14 +911,9 @@ const MonthlyView = () => {
             >
               {/* Left border line for all multi-day events */}
               {!isPreview && (
-                <div 
-                  style={{ 
-                    width: '3.2px', 
-                    height: '14px',
-                    backgroundColor: lineColor,
-                    borderRadius: '2px',
-                    flexShrink: 0
-                  }}
+                <div
+                  className="month-event-line"
+                  style={{ backgroundColor: lineColor }}
                 />
               )}
               
@@ -1085,9 +1057,17 @@ const MonthlyView = () => {
                         />
                       ))}
                       {remainingCount > 0 && (
-                        <div className="text-xs font-medium text-gray-500 dark:text-gray-400">
+                        <button
+                          type="button"
+                          className="text-xs font-medium text-gray-500 dark:text-gray-400 transition-colors hover:text-gray-700 dark:hover:text-gray-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 pl-2"
+                          style={{ marginLeft: '-4.5px' }}
+                          onClick={() => {
+                            selectDate(day);
+                            setView('day');
+                          }}
+                        >
                           {remainingCount} more
-                        </div>
+                        </button>
                       )}
                     </div>
                   </div>

@@ -157,7 +157,6 @@ async def get_events(
 ):
     start_dt = datetime.fromisoformat(start.replace('Z', '+00:00'))
     end_dt = datetime.fromisoformat(end.replace('Z', '+00:00'))
-    # Clamp overly broad ranges to keep queries fast (~18 months window)
     max_span_days = 18 * 31
     if end_dt - start_dt > timedelta(days=max_span_days):
         end_dt = start_dt + timedelta(days=max_span_days)
@@ -885,7 +884,11 @@ async def update_todo_event_link(
     user: User = Depends(get_current_user),
     supabase: Client = Depends(get_supabase_client)
 ):
-    body = await request.json()
+    try:
+        body = await request.json()
+    except ClientDisconnect:
+        # Client bailed mid-request; surface clean 400 instead of bubbling an error
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Client disconnected during request")
     todo_id = body.get("todo_id")
     event_id = body.get("event_id")
     google_event_id = body.get("google_event_id")

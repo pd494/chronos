@@ -51,7 +51,8 @@ const DailyView = () => {
     navigateToPrevious,
     openEventModal,
     getEventsForDate,
-    updateEvent
+    updateEvent,
+    showEventModal
   } = useCalendar()
   
   const { convertTodoToEvent } = useTaskContext()
@@ -66,6 +67,7 @@ const DailyView = () => {
   const [isDragging, setIsDragging] = useState(false)
   const [dragStart, setDragStart] = useState(null)
   const [dragEnd, setDragEnd] = useState(null)
+  const [persistedDragPreview, setPersistedDragPreview] = useState(null) // Keeps preview visible while modal is open
   const hasDraggedRef = useRef(false)
   const dragTimeoutRef = useRef(null)
   const dragInitialHourRef = useRef(null)
@@ -228,7 +230,8 @@ const DailyView = () => {
 
   // Handle todo drop on hour cell
   const handleTodoDropOnHourCell = async (e, hour, _hourCellElement = null) => {
-    if (!document.body.classList.contains('task-dragging')) return;
+    const isTodoDrag = document.body.classList.contains('task-dragging') || !!getDraggedTodoMeta();
+    if (!isTodoDrag) return;
     
     e.preventDefault();
     e.stopPropagation();
@@ -259,7 +262,8 @@ const DailyView = () => {
 
   // Combined drop handler for hour cells
   const handleCombinedDropOnHourCell = async (e, hour, hourCellElement = null) => {
-    if (document.body.classList.contains('task-dragging')) {
+    const isTodoDrag = document.body.classList.contains('task-dragging') || !!getDraggedTodoMeta();
+    if (isTodoDrag) {
       await handleTodoDropOnHourCell(e, hour, hourCellElement);
     } else {
       handleEventDrop(e, hour, hourCellElement);
@@ -268,7 +272,8 @@ const DailyView = () => {
 
   // Handle todo drop on all-day section
   const handleTodoDropOnAllDay = async (e) => {
-    if (!document.body.classList.contains('task-dragging')) return;
+    const isTodoDrag = document.body.classList.contains('task-dragging') || !!getDraggedTodoMeta();
+    if (!isTodoDrag) return;
     
     e.preventDefault();
     e.stopPropagation();
@@ -416,15 +421,32 @@ const DailyView = () => {
   }, [])
 
   const setTodoDropPreview = useCallback((startDate, endDate, isAllDay = false) => {
+    if (typeof window !== 'undefined' && window.__chronosTodoOverlayActive) {
+      return
+    }
     const meta = getDraggedTodoMeta()
+    const metaColor = typeof meta?.color === 'string' ? meta.color.toLowerCase() : meta?.color
     setTodoDragPreview({
       start: startDate,
       end: endDate,
       isAllDay,
       title: meta?.title || 'New task',
-      color: meta?.color || '#a78bfa'
+      color: metaColor || 'blue'
     })
   }, [getDraggedTodoMeta])
+
+  // When the floating todo pill is active, immediately clear any
+  // inline todo previews so they never appear at the same time.
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const handler = (evt) => {
+      if (evt?.detail?.active) {
+        setTodoDragPreview(null)
+      }
+    }
+    window.addEventListener('chronos-todo-overlay-state', handler)
+    return () => window.removeEventListener('chronos-todo-overlay-state', handler)
+  }, [])
 
   const cancelDragCreatePreview = useCallback(() => {
     setIsDragging(false);
@@ -637,6 +659,14 @@ const DailyView = () => {
       const endDate = new Date(currentDate);
       endDate.setHours(Math.floor(endHour), Math.round((endHour % 1) * 60), 0, 0);
       
+      // Persist the drag preview while modal is open
+      setPersistedDragPreview({
+        startHour,
+        endHour,
+        startDate,
+        endDate
+      });
+      
       openEventModal(null, true);
       window.prefilledEventDates = {
         startDate,
@@ -675,6 +705,13 @@ const DailyView = () => {
     document.addEventListener('mouseup', handleMouseUp);
     return () => document.removeEventListener('mouseup', handleMouseUp);
   }, [isDragging, dragStart, dragEnd, currentDate, openEventModal])
+  
+  // Clear persisted drag preview when modal closes
+  useEffect(() => {
+    if (!showEventModal && persistedDragPreview) {
+      setPersistedDragPreview(null)
+    }
+  }, [showEventModal])
   
   // Generate time slots
   const hours = []
@@ -791,7 +828,8 @@ const DailyView = () => {
                 height: `${requiredHeight}px`
               }}
               onDrop={async (e) => {
-                if (document.body.classList.contains('task-dragging')) {
+                const isTodoDrag = document.body.classList.contains('task-dragging') || !!getDraggedTodoMeta();
+                if (isTodoDrag) {
                   await handleTodoDropOnAllDay(e);
                 } else {
                   handleAllDayEventDrop(e);
@@ -944,28 +982,68 @@ const DailyView = () => {
               />
             ))}
             
-            {/* Drag preview */}
-            {isDragging && !isEventResizing && dragStart !== null && dragEnd !== null && (
-              <div
-                className="absolute left-0 right-0 bg-blue-200 dark:bg-blue-700 opacity-50 pointer-events-none rounded"
-                style={{
-                  top: `${Math.min(dragStart, dragEnd) * HOUR_HEIGHT}px`,
-                  height: `${Math.abs(dragEnd - dragStart) * HOUR_HEIGHT}px`,
-                  marginLeft: '8px',
-                  marginRight: '8px'
-                }}
-              />
-            )}
+            {/* Drag preview - actual event marker UI (shows during drag AND while modal is open) */}
+            {(isDragging && !isEventResizing && dragStart !== null && dragEnd !== null || persistedDragPreview) && (() => {
+              const colors = getEventColors('blue')
+              const startHourVal = persistedDragPreview ? persistedDragPreview.startHour : Math.min(dragStart, dragEnd)
+              const endHourVal = persistedDragPreview ? persistedDragPreview.endHour : Math.max(dragStart, dragEnd)
+              const previewTop = startHourVal * HOUR_HEIGHT
+              const previewHeight = Math.max((endHourVal - startHourVal) * HOUR_HEIGHT, HOUR_HEIGHT / 4)
+              
+              // Calculate preview times
+              const previewStartDate = persistedDragPreview ? persistedDragPreview.startDate : (() => {
+                const d = new Date(currentDate)
+                d.setHours(Math.floor(startHourVal), Math.round((startHourVal % 1) * 60), 0, 0)
+                return d
+              })()
+              const previewEndDate = persistedDragPreview ? persistedDragPreview.endDate : (() => {
+                const d = new Date(currentDate)
+                d.setHours(Math.floor(endHourVal), Math.round((endHourVal % 1) * 60), 0, 0)
+                return d
+              })()
+              
+              return (
+                <div
+                  className="absolute rounded-lg p-1 overflow-hidden text-sm pointer-events-none"
+                  style={{
+                    top: `${previewTop}px`,
+                    minHeight: `${previewHeight}px`,
+                    left: '4px',
+                    right: '4px',
+                    backgroundColor: colors.background,
+                    opacity: 0.9,
+                    zIndex: 50
+                  }}
+                >
+                  <div 
+                    className="absolute top-0.5 bottom-0.5 w-1 rounded-full pointer-events-none" 
+                    style={{ 
+                      left: '1px',
+                      backgroundColor: colors.border,
+                      zIndex: 3
+                    }}
+                  />
+                  <div className="ml-2">
+                    <div className="font-medium text-xs" style={{ color: colors.text, marginLeft: '2px' }}>
+                      New Event
+                    </div>
+                    <div className="text-xs" style={{ color: 'rgba(55, 65, 81, 0.7)', fontWeight: 500 }}>
+                      {format(previewStartDate, 'h:mm a')} – {format(previewEndDate, 'h:mm a')}
+                    </div>
+                  </div>
+                </div>
+              )
+            })()}
 
             {/* Events for this day (only regular events, not all-day) */}
-            {calculateTimeGridLayout(regularEvents).map(({ event, column, columns }) => (
+            {calculateTimeGridLayout(regularEvents).map(({ event, column, columns, stackIndex, stackCount }) => (
               <DayEvent 
                 key={event.clientKey || event.id || `${(event.start instanceof Date ? event.start : new Date(event.start)).getTime()}-${column}-${columns}`} 
                 event={event} 
                 hourHeight={HOUR_HEIGHT} 
                 dayStartHour={DAY_START_HOUR}
                 dayEndHour={DAY_END_HOUR}
-                position={{ column, columns, gap: TIMED_EVENT_GAP }}
+                position={{ column, columns, stackIndex, stackCount, gap: TIMED_EVENT_GAP }}
               />
             ))}
 

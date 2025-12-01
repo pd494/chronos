@@ -58,10 +58,6 @@ class CalendarSyncService:
         return UUID(result.data[0]["id"])
     
     def _parse_event_boundaries(self, google_event: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Normalize start/end boundaries to UTC, honoring timeZone when provided.
-        All-day end is exclusive; if absent, fallback to start+1 day.
-        """
         start_data = google_event.get("start", {}) or {}
         end_data = google_event.get("end", {}) or {}
         is_all_day = "date" in start_data
@@ -164,10 +160,6 @@ class CalendarSyncService:
         return saved_event
     
     def _expand_recurring_event(self, event: Dict[str, Any], calendar_id: UUID):
-        """
-        Expand recurring event into instances using RRULE parsing.
-        Limits expansion to reasonable range (5 years past/future).
-        """
         recurrence_rule = event.get('recurrence_rule')
         if not recurrence_rule:
             return
@@ -176,8 +168,10 @@ class CalendarSyncService:
             rule = rrulestr(recurrence_rule, dtstart=datetime.fromisoformat(event['start_ts'].replace('Z', '+00:00')))
             
             now = datetime.now(timezone.utc)
-            expansion_start = now - timedelta(days=5 * 365)
-            expansion_end = now + timedelta(days=5 * 365)
+            # Expand recurring instances across a wide window so
+            # long-running series are visible far in the past/future.
+            expansion_start = now - timedelta(days=20 * 365)
+            expansion_end = now + timedelta(days=20 * 365)
             
             instances = []
             for instance_start in rule.between(expansion_start, expansion_end):
@@ -211,19 +205,6 @@ class CalendarSyncService:
             logger.error(f"Failed to expand recurring event {event['id']}: {e}")
     
     def sync_state(self, calendar_id: UUID, **updates) -> Dict[str, Any]:
-        """
-        Get or update sync state for a calendar.
-        
-        If sync state exists: updates it with provided fields (preserves existing values if not provided).
-        If sync state doesn't exist: creates new one with defaults.
-        
-        Args:
-            calendar_id: UUID of the calendar
-            **updates: Fields to update (e.g., next_sync_token="abc", backfill_before_ts="2020-01-01")
-        
-        Returns:
-            Dict with sync state data
-        """
         defaults = {
             "user_id": self.user_id,
             "calendar_id": str(calendar_id),
@@ -321,39 +302,6 @@ class CalendarSyncService:
                 current = datetime(current.year, current.month + 1, 1, tzinfo=timezone.utc)
         
         return next_sync_token
-    
-    def ensure_coverage(self, calendar_id: UUID, google_calendar_id: str, requested_start: datetime, requested_end: datetime):
-        """
-        Defensive prefetch: if user is within 2 years of boundary, fetch 2 more years ahead.
-        """
-        sync_state = self.sync_state(calendar_id)
-        
-        backfill_before = sync_state.get('backfill_before_ts')
-        backfill_after = sync_state.get('backfill_after_ts')
-        
-        if backfill_before:
-            backfill_before_dt = datetime.fromisoformat(backfill_before.replace('Z', '+00:00'))
-        else:
-            backfill_before_dt = None
-        
-        if backfill_after:
-            backfill_after_dt = datetime.fromisoformat(backfill_after.replace('Z', '+00:00'))
-        else:
-            backfill_after_dt = None
-        
-        two_years = timedelta(days=2 * 365)
-        
-        if backfill_before_dt and requested_start < backfill_before_dt + two_years:
-            expand_to = backfill_before_dt - two_years
-            logger.info(f"Defensive prefetch: expanding backward from {backfill_before_dt} to {expand_to}")
-            self.sync_date_range(calendar_id, google_calendar_id, expand_to, backfill_before_dt)
-            self.sync_state(calendar_id, backfill_before_ts=expand_to.isoformat())
-        
-        if backfill_after_dt and requested_end > backfill_after_dt - two_years:
-            expand_to = backfill_after_dt + two_years
-            logger.info(f"Defensive prefetch: expanding forward from {backfill_after_dt} to {expand_to}")
-            self.sync_date_range(calendar_id, google_calendar_id, backfill_after_dt, expand_to)
-            self.sync_state(calendar_id, backfill_after_ts=expand_to.isoformat())
     
     def delta_sync(self, calendar_id: UUID, google_calendar_id: str) -> Dict[str, Any]:
         """
@@ -473,8 +421,10 @@ class CalendarSyncService:
             calendar_id = self.get_calendar_id(calendar)
             
             now = datetime.now(timezone.utc)
-            backfill_start = now - timedelta(days=5 * 365)
-            backfill_end = now + timedelta(days=5 * 365)
+            # Backfill a generous window so holiday calendars and
+            # recurring events are available far from “today”.
+            backfill_start = now - timedelta(days=20 * 365)
+            backfill_end = now + timedelta(days=20 * 365)
             
             next_sync_token = self.sync_date_range(calendar_id, google_calendar_id, backfill_start, backfill_end)
             

@@ -123,8 +123,8 @@
   overflow-x: auto;
   overflow-y: hidden;
   white-space: nowrap;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.9) transparent;
+  scrollbar-width: none;
+  scrollbar-color: transparent transparent;
   display: flex;
   gap: 8px;
   flex: 1;
@@ -138,21 +138,7 @@
 }
 
 .category-tabs-scroll::-webkit-scrollbar {
-  height: 4px;
-}
-
-.category-tabs-scroll::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.06);
-  border-radius: 999px;
-}
-
-.category-tabs-scroll::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.9);
-  border-radius: 999px;
-}
-
-.category-tabs-scroll::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.9);
+  display: none;
 }
 
 /* Gradient fade at scroll edge (right next to + button) */

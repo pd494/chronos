@@ -126,14 +126,32 @@ const EventIndicator = ({ event, isMonthView }) => {
     return baseTitleStyle
   })()
 
+  const titleTextStyle = {
+    textDecoration: visuallyDeclined ? 'line-through' : undefined,
+    display: 'inline-block'
+  }
+
   const timeStyle = (isPendingInvite || isTentative || visuallyDeclined)
     ? { color: 'rgba(71, 85, 105, 0.55)' }
     : {}
+  const now = new Date()
+  const isPast = (() => {
+    try {
+      const rawEnd = event.end || event.endTime || event.start
+      if (!rawEnd) return false
+      const endDate = rawEnd instanceof Date ? rawEnd : new Date(rawEnd)
+      return endDate < now
+    } catch (_) {
+      return false
+    }
+  })()
+
   const baseOpacity = (() => {
     if (visuallyDeclined) {
       return treatAsAllDay ? 0.6 : 0.55
     }
     if ((isPendingInvite || isTentative) && isMonthView) return 0.9
+    if (isPast) return 0.7
     return 1
   })()
 
@@ -144,7 +162,7 @@ const EventIndicator = ({ event, isMonthView }) => {
       onDragEnd={handleDragEnd}
       className={`text-xs mb-1 flex items-center gap-1 px-1 py-0.5 transition-opacity calendar-event calendar-event-hover ${isMonthView && treatAsAllDay ? 'rounded-md' : ''} ${
         (isPendingInvite || isTentative) && isMonthView ? 'pending-month-invite' : ''
-      } ${visuallyDeclined && isMonthView ? 'declined-month-event' : ''} ${showDropAnim ? 'event-drop-pop' : ''}`}
+      } ${isDeclined && isMonthView ? 'declined-month-event' : ''} ${showDropAnim ? 'event-drop-pop' : ''}`}
       onClick={handleClick}
       data-event-id={event.id}
       data-active={isSelected ? 'true' : 'false'}
@@ -172,7 +190,7 @@ const EventIndicator = ({ event, isMonthView }) => {
                 ...titleStyle
               }}
             >
-              {event.title}
+              <span style={titleTextStyle}>{event.title}</span>
             </div>
           </div>
           

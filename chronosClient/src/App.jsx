@@ -6,6 +6,7 @@ import WeeklyView from './components/calendar/WeeklyView'
 import DailyView from './components/calendar/DailyView'
 import Sidebar from './components/todo/sidebar/Sidebar'
 import FloatingChatBar from './components/FloatingChatBar'
+import TodoDragOverlay from './components/TodoDragOverlay'
 import { useTaskContext } from './context/TaskContext'
 import { useAuth } from './context/AuthContext'
 import CategoryTabs from './components/todo/sidebar/CategoryTabs'
@@ -96,9 +97,9 @@ function AppContent() {
   // Listen for event deletion to show toast
   useEffect(() => {
     const handleEventDeleted = (e) => {
-      const message = e.detail?.message || 'Deleted event'
+      const message = e.detail?.message || 'Deleted Event'
       
-      if (message === 'Deleted event') {
+      if (message === 'Deleted Event') {
         // Clear previous timer if it exists
         if (deletionTimerRef.current) {
           clearTimeout(deletionTimerRef.current)
@@ -106,7 +107,7 @@ function AppContent() {
         
         // Increment counter and update toast
         deletionCountRef.current += 1
-        setToastMessage(`Deleted event (${deletionCountRef.current})`)
+        setToastMessage(`Deleted Event (${deletionCountRef.current})`)
         setToastVisible(true)
         
         // Reset counter after 5 seconds of no deletions
@@ -276,6 +277,7 @@ function AppContent() {
         onToggleSidebar={toggleSidebar}
         onSidebarWidthChange={handleSidebarChange}
       />
+      <TodoDragOverlay />
       {showEventModal && <EventModal />}
       {!showEventModal && <FloatingChatBar />}
       <Toast 

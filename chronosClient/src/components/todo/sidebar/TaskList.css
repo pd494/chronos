@@ -30,6 +30,29 @@
   z-index: 1001 !important;
 }
 
+/* When over calendar, hide ALL sortable drag/ghost elements globally, and
+   hide any task-item that is not in the sidebar. */
+body.calendar-drag-focus .sortable-drag,
+body.calendar-drag-focus .sortable-ghost,
+body.calendar-drag-focus .task-drag,
+body.calendar-drag-focus .task-ghost,
+body.calendar-drag-focus [data-is-clone="true"],
+body.calendar-drag-focus .task-item {
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+/* Keep the original task items visible in the sidebar with normal styling */
+body.calendar-drag-focus .task-list .task-item.sortable-chosen,
+body.calendar-drag-focus .sidebar .task-item.sortable-chosen,
+body.calendar-drag-focus .sidebar .task-item {
+  opacity: 1 !important;
+  visibility: visible !important;
+  display: flex !important;
+  pointer-events: auto !important;
+}
+
 .task-item {
   display: flex;
   align-items: center;
@@ -49,11 +72,23 @@
   background-color: transparent;
 }
 
-.task-item.dragging {
+/* Only apply dragging styles when body has task-dragging class */
+body.task-dragging .task-item.dragging,
+body.task-dragging .task-item.sortable-chosen {
   opacity: 0.5;
   cursor: pointer;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
   background-color: rgba(0, 0, 0, 0.05);
+}
+
+/* Reset dragging styles when not dragging */
+body:not(.task-dragging) .task-item {
+  opacity: 1 !important;
+  cursor: default !important;
+}
+
+body:not(.task-dragging) .task-item .task-drag-handle {
+  cursor: grab;
 }
 
 .task-checkbox {

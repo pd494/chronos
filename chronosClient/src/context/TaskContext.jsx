@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { todosApi } from '../lib/api';
+import { normalizeToPaletteColor } from '../lib/eventColors';
 import { useAuth } from './AuthContext';
 
 const TaskContext = createContext();
@@ -112,6 +113,7 @@ export const TaskProvider = ({ children }) => {
       : [ALL_CATEGORY]
   );
   const snapshotKey = useMemo(() => null, []);
+  const conversionInFlightRef = useRef(new Set());
   const hasHydratedSnapshotRef = useRef(false);
   const bootstrapPromiseRef = useRef(null);
   const lastBootstrapAtRef = useRef(0);
@@ -338,11 +340,6 @@ export const TaskProvider = ({ children }) => {
     window.addEventListener('todoScheduleUpdated', handleScheduleUpdate)
     return () => window.removeEventListener('todoScheduleUpdated', handleScheduleUpdate)
   }, [setTasksEnhanced])
-
-  // Disabled automatic refresh on focus/visibility/online - only refresh on CRUD operations
-  // useEffect(() => {
-  //   ... automatic refresh logic disabled ...
-  // }, [])
 
   const resolveCategory = useCallback(
     (categoryName, sourceCategories) => pickCategoryFromList(categoryName, sourceCategories ?? categories),
@@ -643,18 +640,27 @@ export const TaskProvider = ({ children }) => {
   );
 
   const convertTodoToEvent = async (todoId, startDate, endDate, isAllDay = false) => {
+    const todoKey = String(todoId);
+    if (conversionInFlightRef.current.has(todoKey)) {
+      return;
+    }
+    conversionInFlightRef.current.add(todoKey);
+
     const task = tasks.find(t => t.id === todoId);
     if (!task) {
+      conversionInFlightRef.current.delete(todoKey);
       throw new Error('Task not found');
     }
     if (task.scheduled_date || task.scheduled_at) {
+      conversionInFlightRef.current.delete(todoKey);
       return;
     }
 
-    // Find the category color for this task
+    // Find the category color for this task (fall back to drag meta if available)
     const taskCategory = categories.find(cat => cat.name === task.category_name);
-    const rawCategoryColor = taskCategory?.icon || '#1761C7'; // Default to blue if no category found
-    const uiCategoryColor = rawCategoryColor === '#1761C7' ? 'blue' : rawCategoryColor; // Normalize to palette blue
+    const dragMetaColor = typeof window !== 'undefined' ? window.__chronosDraggedTodoMeta?.color : null;
+    const rawCategoryColor = taskCategory?.icon || taskCategory?.color || dragMetaColor || 'blue'; // Default to palette blue
+    const uiCategoryColor = normalizeToPaletteColor(rawCategoryColor);
 
     const isoStart = startDate.toISOString();
     const isoEnd = endDate.toISOString();
@@ -667,49 +673,31 @@ export const TaskProvider = ({ children }) => {
           : toLocalDateOnlyString(new Date(startDate.getTime() + 24 * 60 * 60 * 1000)))
       : isoEnd;
 
-    // Create optimistic event immediately with category color
-    const optimisticEventId = `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const optimisticId = `temp-todo-${todoKey}-${Date.now()}`;
     const optimisticEvent = {
-      id: optimisticEventId,
-      summary: task.content,
-      title: task.content,
-      start: isAllDay 
-        ? { date: startDateOnly }
-        : { dateTime: isoStart },
-      end: isAllDay
-        ? { date: payloadEnd }
-        : { dateTime: isoEnd },
-      calendar_id: 'primary',
+      id: optimisticId,
+      title: task.content || 'New task',
+      start: startDate,
+      end: endDate,
+      isGoogleEvent: true,
       isAllDay,
       color: uiCategoryColor,
-      todoId,
-      todo_id: todoId
+      calendar_id: 'primary',
+      todoId: todoKey,
+      todo_id: todoKey,
+      _freshDrop: true
     };
 
-    // Optimistically mark the task as scheduled so badges show immediately
-    const scheduledDateValue = isAllDay ? startDateOnly : isoStart;
-    const previousTasksSnapshot = tasks;
-    setTasksEnhanced(prev =>
-      prev.map(t =>
-        t.id === todoId
-          ? {
-              ...t,
-              scheduled_date: scheduledDateValue,
-              scheduled_at: scheduledDateValue,
-              scheduled_is_all_day: isAllDay
-            }
-          : t
-      )
-    );
-
-    // Dispatch immediately for instant UI update
-    window.dispatchEvent(new CustomEvent('todoConvertedToEvent', {
-      detail: { 
-        eventData: optimisticEvent,
-        isOptimistic: true,
-        todoId
-      }
-    }));
+    // Show the event immediately (optimistic) so the drop feels instant
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('todoConvertedToEvent', {
+        detail: { 
+          eventData: optimisticEvent,
+          isOptimistic: true,
+          todoId
+        }
+      }));
+    }
 
     try {
       // Call the backend API to create the actual event
@@ -720,13 +708,19 @@ export const TaskProvider = ({ children }) => {
         category_color: rawCategoryColor
       });
 
+      const scheduledDateValue = isAllDay ? startDateOnly : isoStart;
+
       const resolvedEvent = {
         ...response.data,
         title: response.data?.summary || task.content,
+        start: response.data?.start || response.data?.start_date || startDate,
+        end: response.data?.end || response.data?.end_date || endDate,
+        isGoogleEvent: true,
         isAllDay,
         color: uiCategoryColor,
         todoId,
-        todo_id: todoId
+        todo_id: todoId,
+        _freshDrop: false
       };
 
       // Ensure task schedule stays in sync with server response
@@ -737,47 +731,39 @@ export const TaskProvider = ({ children }) => {
                 ...t,
                 scheduled_date: scheduledDateValue,
                 scheduled_at: scheduledDateValue,
+                scheduled_end: isAllDay ? null : payloadEnd,
                 scheduled_is_all_day: isAllDay
               }
             : t
         )
       );
 
-      // Update with real event data
-      window.dispatchEvent(new CustomEvent('todoConvertedToEvent', {
-        detail: { 
-          eventData: resolvedEvent,
-          isOptimistic: false,
-          replaceId: optimisticEventId, // Replace the optimistic event
-          todoId
-        }
-      }));
+      // Notify calendar with the real event data (single deterministic event)
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('todoConvertedToEvent', {
+          detail: { 
+            eventData: resolvedEvent,
+            isOptimistic: false,
+            todoId
+          }
+        }));
+      }
 
       // Don't refresh tasks after scheduling - keep UI stable
 
       return resolvedEvent;
     } catch (error) {
       console.error('Failed to convert todo to event:', error);
-      
-      // Remove the optimistic event on failure
-      window.dispatchEvent(new CustomEvent('todoConversionFailed', {
-        detail: { eventId: optimisticEventId }
-      }));
-
-      // Revert optimistic task scheduling state
-      setTasksEnhanced(prev =>
-        prev.map(t => {
-          if (t.id !== todoId) return t
-          const original = previousTasksSnapshot.find(p => p.id === todoId)
-          return original || t
-        })
-      );
-
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('todoConversionFailed', {
+          detail: { eventId: optimisticId }
+        }));
+      }
       throw error;
+    } finally {
+      conversionInFlightRef.current.delete(todoKey);
     }
   };
-
-  // Removed problematic calendar sync handler that was clearing todo schedule metadata
 
   return (
     <TaskContext.Provider value={{ 

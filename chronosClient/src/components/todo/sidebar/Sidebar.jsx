@@ -70,6 +70,8 @@ const Sidebar = ({ activeCategory, isSidebarCollapsed, sidebarWidth, sidebarVisi
   return (
     <div 
       className={`sidebar ${isSidebarCollapsed ? 'collapsed' : ''}`}
+      onDragEnter={() => document.body.classList.remove('calendar-drag-focus')}
+      onDragOver={() => document.body.classList.remove('calendar-drag-focus')}
     >
       {!isSidebarCollapsed && (
         <>

@@ -9,7 +9,166 @@ const DRAG_CLICK_SUPPRESSION_MS = 1200;
 // Shared drag state across all category groups
 const globalDragState = { dragging: false, lastEnd: 0 };
 
-const TaskItem = ({ task, onToggleComplete }) => {
+// Pre-load a 1x1 transparent image to use as drag image (avoids browser default icon)
+const transparentDragImage = new Image();
+transparentDragImage.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
+let dragMonitorCleanup = null;
+let hideAnimationFrameId = null;
+let isOverCalendar = false;
+
+const hideSortableDragElements = () => {
+  // Hide ALL drag/ghost/clone elements by setting inline styles, but never hide
+  // the original sidebar todo items themselves.
+  document
+    .querySelectorAll(
+      '.sortable-drag, .sortable-ghost, .sortable-fallback, .task-drag, .task-ghost, [data-is-clone="true"]'
+    )
+    .forEach(el => {
+      const isSidebarTaskItem = el.classList.contains('task-item') && !!el.closest('.sidebar');
+      const isClone = el.getAttribute('data-is-clone') === 'true';
+
+      // If it's the original sidebar item (not a clone), keep it visible.
+      if (isSidebarTaskItem && !isClone) {
+        return;
+      }
+
+      el.style.setProperty('display', 'none', 'important');
+      el.style.setProperty('opacity', '0', 'important');
+      el.style.setProperty('visibility', 'hidden', 'important');
+      el.style.setProperty('pointer-events', 'none', 'important');
+      el.style.setProperty('position', 'fixed', 'important');
+      el.style.setProperty('left', '-9999px', 'important');
+      el.style.setProperty('top', '-9999px', 'important');
+    });
+};
+
+const showSortableDragElements = () => {
+  document
+    .querySelectorAll(
+      '.sortable-drag, .sortable-ghost, .sortable-fallback, .task-drag, .task-ghost'
+    )
+    .forEach(el => {
+      // NEVER show clones - they should always be removed, not shown
+      if (el.getAttribute('data-is-clone') === 'true') {
+        return;
+      }
+      el.style.removeProperty('display');
+      el.style.removeProperty('opacity');
+      el.style.removeProperty('visibility');
+      el.style.removeProperty('pointer-events');
+      el.style.removeProperty('position');
+      el.style.removeProperty('left');
+      el.style.removeProperty('top');
+    });
+};
+
+// Continuously hide elements while over calendar (Sortable.js re-applies styles)
+const startHideLoop = () => {
+  const loop = () => {
+    if (isOverCalendar) {
+      hideSortableDragElements();
+      hideAnimationFrameId = requestAnimationFrame(loop);
+    }
+  };
+  hideAnimationFrameId = requestAnimationFrame(loop);
+};
+
+const stopHideLoop = () => {
+  if (hideAnimationFrameId) {
+    cancelAnimationFrame(hideAnimationFrameId);
+    hideAnimationFrameId = null;
+  }
+};
+
+const startCalendarDragMonitor = () => {
+  const sidebarEl = document.querySelector('.sidebar');
+  if (!sidebarEl) return;
+  const rect = sidebarEl.getBoundingClientRect();
+  const handler = (evt) => {
+    if (!document.body.classList.contains('task-dragging')) return;
+    const wasOverCalendar = isOverCalendar;
+    isOverCalendar = evt.clientX > rect.right;
+    
+    if (isOverCalendar) {
+      document.body.classList.add('calendar-drag-focus');
+      if (!wasOverCalendar) {
+        // Just crossed from sidebar into calendar: hide ghosts and switch
+        // the browser drag image to a transparent pixel so the blue pill
+        // disappears while over the calendar.
+        if (evt.dataTransfer) {
+          try {
+            evt.dataTransfer.setDragImage(transparentDragImage, 0, 0);
+          } catch (_) {}
+        }
+        startHideLoop();
+      }
+    } else {
+      document.body.classList.remove('calendar-drag-focus');
+      if (wasOverCalendar) {
+        stopHideLoop();
+        showSortableDragElements();
+      }
+    }
+  };
+  window.addEventListener('dragover', handler, true);
+  dragMonitorCleanup = () => {
+    window.removeEventListener('dragover', handler, true);
+    stopHideLoop();
+    isOverCalendar = false;
+  };
+};
+const stopCalendarDragMonitor = () => {
+  if (typeof dragMonitorCleanup === 'function') {
+    dragMonitorCleanup();
+  }
+  dragMonitorCleanup = null;
+};
+
+const cleanupDragArtifacts = () => {
+  try {
+    // Stop the hide loop
+    stopHideLoop();
+    isOverCalendar = false;
+    
+    document.body.classList.remove('calendar-drag-focus');
+    document.body.classList.remove('task-dragging');
+    document.documentElement.classList.remove('dragging');
+    
+    // FIRST: Remove ALL clones everywhere (including inside task list)
+    // This is critical to prevent duplicate todos
+    document.querySelectorAll('[data-is-clone="true"]').forEach(el => {
+      if (el && el.parentNode) {
+        el.parentNode.removeChild(el);
+      }
+    });
+    
+    // Clean up sortable classes from all task items
+    document.querySelectorAll('.task-item').forEach(el => {
+      el.classList.remove('sortable-chosen', 'sortable-ghost', 'sortable-drag', 'task-chosen', 'task-ghost', 'task-drag', 'dragging');
+      el.removeAttribute('data-dragging');
+    });
+    
+    // Remove ghost/drag elements outside of task list
+    ['.sortable-ghost', '.task-ghost', '.sortable-drag', '.task-drag'].forEach(sel => {
+      document.querySelectorAll(sel).forEach(el => {
+        if (!el.closest('.task-list')) {
+          el.parentNode?.removeChild(el);
+        }
+      });
+    });
+    
+    // Also remove inline styles from any remaining drag elements
+    showSortableDragElements();
+    
+    // Clear dragover styling
+    document.querySelectorAll('.event-dragover, .sortable-dragover').forEach(el => {
+      el.classList.remove('event-dragover', 'sortable-dragover');
+    });
+  } catch (_) {}
+};
+
+const TaskItem = ({ task, onToggleComplete, categoryColor }) => {
   const checkboxRef = useRef(null);
   const [isChecking, setIsChecking] = useState(false);
   const isScheduled = Boolean(task.scheduled_date || task.scheduled_at);
@@ -37,6 +196,9 @@ const TaskItem = ({ task, onToggleComplete }) => {
     <div 
       className={`task-item ${task.completed ? 'completed' : ''} ${isScheduled ? 'scheduled' : ''}`}
       data-id={task.id}
+      data-task-id={task.id}
+      data-task-title={task.content || ''}
+      data-task-color={categoryColor || ''}
       data-scheduled={isScheduled ? 'true' : 'false'}
     >
       <div 
@@ -71,6 +233,41 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
       newTaskInputRef.current.focus();
     }
   }, [isEditingNewTask]);
+
+  // Global dragend listener to catch cancelled drags
+  useEffect(() => {
+    const handleGlobalDragEnd = () => {
+      // Clean up if drag ends anywhere (cancelled or otherwise)
+      setTimeout(() => {
+        if (!globalDragState.dragging) return;
+        globalDragState.dragging = false;
+        cleanupDragArtifacts();
+        stopCalendarDragMonitor();
+        if (typeof window !== 'undefined') {
+          window.__chronosDraggedTodoMeta = null;
+        }
+        setRenderKey(prev => prev + 1);
+      }, 50);
+    };
+
+    document.addEventListener('dragend', handleGlobalDragEnd);
+    return () => {
+      document.removeEventListener('dragend', handleGlobalDragEnd);
+    };
+  }, []);
+  
+  // Set transparent drag image on native dragstart to hide browser ghost
+  useEffect(() => {
+    const container = tasksContainerRef.current;
+    if (!container) return;
+    
+    const handleDragStart = (e) => {
+      if (!e.target.closest('.task-drag-handle')) return;
+    };
+    
+    container.addEventListener('dragstart', handleDragStart, true);
+    return () => container.removeEventListener('dragstart', handleDragStart, true);
+  }, [isCollapsed]);
   
   useEffect(() => {
     if (!tasksContainerRef.current || isCollapsed) {
@@ -109,47 +306,109 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
         globalDragState.dragging = true;
         document.body.classList.add('task-dragging');
         document.documentElement.classList.add('dragging');
+        startCalendarDragMonitor();
+        
         if (evt.item) {
           const taskId = evt.item.getAttribute('data-id');
           evt.item.setAttribute('data-task-id', taskId);
+          evt.item.setAttribute('data-dragging', 'true');
+          const title = evt.item.getAttribute('data-task-title') || 'New task';
+          const colorAttr = evt.item.getAttribute('data-task-color') || '';
+          const color = colorAttr ? colorAttr.toLowerCase() : 'blue';
+          if (typeof window !== 'undefined') {
+            window.__chronosDraggedTodoMeta = {
+              title,
+              color,
+              taskId
+            };
+          }
         }
       },
       onClone(evt) {
         // Mark the clone so we know it's safe to remove
         if (evt.clone) {
           evt.clone.setAttribute('data-is-clone', 'true');
+          // Hide the clone immediately - we only want the drag ghost visible
+          evt.clone.style.setProperty('display', 'none', 'important');
         }
       },
+      onUnchoose(evt) {
+        // When drag is cancelled or ends, immediately remove all clones
+        document.querySelectorAll('[data-is-clone="true"]').forEach(el => {
+          if (el && el.parentNode) {
+            el.parentNode.removeChild(el);
+          }
+        });
+      },
       onEnd(evt) {
+        // Immediate state cleanup
         document.body.classList.remove('task-dragging');
+        document.body.classList.remove('calendar-drag-focus');
         document.documentElement.classList.remove('dragging');
         globalDragState.lastEnd = Date.now();
+        if (typeof window !== 'undefined') {
+          window.__chronosDraggedTodoMeta = null;
+        }
+        
+        // IMMEDIATELY remove all clones - this prevents duplicate todos
+        document.querySelectorAll('[data-is-clone="true"]').forEach(el => {
+          if (el && el.parentNode) {
+            el.parentNode.removeChild(el);
+          }
+        });
+        
+        // Immediate cleanup
+        cleanupDragArtifacts();
+        stopCalendarDragMonitor();
+        
+        // Remove dragging attribute and sortable classes from source item
+        if (evt.item) {
+          evt.item.removeAttribute('data-dragging');
+          evt.item.classList.remove('sortable-chosen', 'sortable-ghost', 'sortable-drag', 'task-chosen', 'task-ghost', 'task-drag', 'dragging');
+        }
+        
+        // Clean up all sortable classes from task items in the sidebar
+        document.querySelectorAll('.task-item').forEach(el => {
+          el.classList.remove('sortable-chosen', 'sortable-ghost', 'sortable-drag', 'task-chosen', 'task-ghost', 'task-drag', 'dragging');
+          el.removeAttribute('data-dragging');
+          el.style.opacity = '';
+          el.style.cursor = '';
+        });
+        
+        // Clear dragover styling
+        document.querySelectorAll('.event-dragover, .sortable-dragover').forEach(el => {
+          el.classList.remove('event-dragover', 'sortable-dragover');
+        });
         
         // Delay clearing the dragging flag to prevent race conditions
         setTimeout(() => {
           globalDragState.dragging = false;
         }, 100);
         
-        // Clean up only clones and ghost elements
-        setTimeout(() => {
+        // Thorough cleanup of all drag artifacts
+        requestAnimationFrame(() => {
           try {
-            // Remove clones that were dropped outside
+            // Remove any remaining clones
             document.querySelectorAll('[data-is-clone="true"]').forEach(el => {
               if (el && el.parentNode) {
                 el.parentNode.removeChild(el);
               }
             });
-            // Remove ghost elements
-            document.querySelectorAll('.sortable-ghost, .task-ghost').forEach(el => {
-              if (el && el.parentNode) {
-                el.parentNode.removeChild(el);
-              }
+            // Remove ghost elements that are NOT in the task list
+            ['.sortable-ghost', '.task-ghost', '.sortable-drag', '.task-drag', '.sortable-chosen'].forEach(sel => {
+              document.querySelectorAll(sel).forEach(el => {
+                if (!el.closest('.task-list')) {
+                  el.parentNode?.removeChild(el);
+                }
+              });
+            });
+            
+            // Final cleanup of task items
+            document.querySelectorAll('.task-item').forEach(el => {
+              el.classList.remove('sortable-chosen', 'sortable-ghost', 'sortable-drag', 'task-chosen', 'task-ghost', 'task-drag', 'dragging');
             });
           } catch (_) {}
-        }, 0);
-        
-        // Force React re-render as safety net (one frame delay)
-        requestAnimationFrame(() => {
+          
           setRenderKey(prev => prev + 1);
         });
       }
@@ -245,6 +504,7 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
             <TaskItem
               key={task.id}
               task={task}
+              categoryColor={typeof category.icon === 'string' && category.icon.startsWith('#') ? category.icon : ''}
               onToggleComplete={onToggleComplete}
             />
           ))}
@@ -292,6 +552,34 @@ const TaskList = ({ tasks, onToggleComplete, activeCategory, categories }) => {
   const categoryContainerRef = useRef(null);
   const categorySortableRef = useRef(null);
 
+  // Global dragstart handler: ensure todos always use a transparent drag image
+  // so the browser's default blue overlay ghost never appears.
+  useEffect(() => {
+    const handleGlobalDragStart = (e) => {
+      // Only adjust drags that originate from todo items / drag handles
+      const isTodoDrag =
+        !!e.target.closest('.task-item') ||
+        !!e.target.closest('.task-drag-handle');
+      if (!isTodoDrag) return;
+      if (!e.dataTransfer) return;
+
+      try {
+        // Use the pre-loaded transparent image so the OS drag image
+        // itself is invisible; the visible blue pill comes from
+        // Sortable's DOM ghost, which we can hide when focused on the
+        // calendar via calendar-drag-focus.
+        e.dataTransfer.setDragImage(transparentDragImage, 0, 0);
+      } catch (_) {
+        // If setDragImage is not supported, fail silently.
+      }
+    };
+
+    window.addEventListener('dragstart', handleGlobalDragStart, true);
+    return () => {
+      window.removeEventListener('dragstart', handleGlobalDragStart, true);
+    };
+  }, []);
+
   useEffect(() => {
     const handleKeyDown = (event) => {
       if (event.key.toLowerCase() !== 'n') return;
@@ -312,6 +600,30 @@ const TaskList = ({ tasks, onToggleComplete, activeCategory, categories }) => {
     addTask({ content: text, categoryName });
   };
   
+  useEffect(() => {
+    const handleGlobalDragEnd = () => cleanupDragArtifacts();
+    document.addEventListener('dragend', handleGlobalDragEnd);
+    document.addEventListener('drop', handleGlobalDragEnd);
+    return () => {
+      document.removeEventListener('dragend', handleGlobalDragEnd);
+      document.removeEventListener('drop', handleGlobalDragEnd);
+      stopCalendarDragMonitor();
+    };
+  }, []);
+
+  // Set transparent drag image on native dragstart to hide browser ghost
+  useEffect(() => {
+    const container = regularTasksContainerRef.current;
+    if (!container) return;
+    
+    const handleDragStart = (e) => {
+      if (!e.target.closest('.task-drag-handle')) return;
+    };
+    
+    container.addEventListener('dragstart', handleDragStart, true);
+    return () => container.removeEventListener('dragstart', handleDragStart, true);
+  }, [activeCategory]);
+
   useEffect(() => {
     if (regularTasksContainerRef.current && activeCategory !== 'All') {
       if (regularSortableRef.current) {
@@ -342,44 +654,64 @@ const TaskList = ({ tasks, onToggleComplete, activeCategory, categories }) => {
           globalDragState.dragging = true;
           document.body.classList.add('task-dragging');
           document.documentElement.classList.add('dragging');
+          startCalendarDragMonitor();
+          
           if (evt.item) {
             const taskId = evt.item.getAttribute('data-id');
             evt.item.setAttribute('data-task-id', taskId);
+            evt.item.setAttribute('data-dragging', 'true');
+            const title = evt.item.getAttribute('data-task-title') || 'New task';
+            const colorAttr = evt.item.getAttribute('data-task-color') || '';
+            const color = colorAttr ? colorAttr.toLowerCase() : 'blue';
+            if (typeof window !== 'undefined') {
+              window.__chronosDraggedTodoMeta = {
+                title,
+                color,
+                taskId
+              };
+            }
           }
         },
         onClone: function(evt) {
           // Mark the clone so we know it's safe to remove
           if (evt.clone) {
             evt.clone.setAttribute('data-is-clone', 'true');
+            // Hide the clone immediately - we only want the drag ghost visible
+            evt.clone.style.setProperty('display', 'none', 'important');
           }
+        },
+        onUnchoose: function(evt) {
+          // When drag is cancelled or ends, immediately remove all clones
+          document.querySelectorAll('[data-is-clone="true"]').forEach(el => {
+            if (el && el.parentNode) {
+              el.parentNode.removeChild(el);
+            }
+          });
         },
         onEnd: function(evt) {
           document.body.classList.remove('task-dragging');
+          document.body.classList.remove('calendar-drag-focus');
           document.documentElement.classList.remove('dragging');
           globalDragState.lastEnd = Date.now();
+          if (typeof window !== 'undefined') {
+            window.__chronosDraggedTodoMeta = null;
+          }
+          
+          // IMMEDIATELY remove all clones - this prevents duplicate todos
+          document.querySelectorAll('[data-is-clone="true"]').forEach(el => {
+            if (el && el.parentNode) {
+              el.parentNode.removeChild(el);
+            }
+          });
+          
+          // Immediate cleanup
+          cleanupDragArtifacts();
+          stopCalendarDragMonitor();
           
           // Delay clearing the dragging flag to prevent race conditions
           setTimeout(() => {
             globalDragState.dragging = false;
           }, 100);
-          
-          // Clean up only clones and ghost elements
-          setTimeout(() => {
-            try {
-              // Remove clones that were dropped outside
-              document.querySelectorAll('[data-is-clone="true"]').forEach(el => {
-                if (el && el.parentNode) {
-                  el.parentNode.removeChild(el);
-                }
-              });
-              // Remove ghost elements
-              document.querySelectorAll('.sortable-ghost, .task-ghost').forEach(el => {
-                if (el && el.parentNode) {
-                  el.parentNode.removeChild(el);
-                }
-              });
-            } catch (_) {}
-          }, 0);
           
           // Force React re-render as safety net (one frame delay)
           requestAnimationFrame(() => {

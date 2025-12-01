@@ -14,6 +14,24 @@ const isRecurringCalendarEvent = (event) => {
   return false
 }
 
+const truncateDescription = (description, sentenceLimit = 2) => {
+  if (!description || typeof description !== 'string') return ''
+  const plainText = description
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!plainText) return ''
+  const sentences = plainText.split(/(?<=[.!?])\s+/)
+  const limited = sentences.slice(0, sentenceLimit).join(' ').trim()
+  if (!limited) return ''
+  const needsEllipsis = sentences.length > sentenceLimit
+  if (!needsEllipsis) return limited
+  const endsWithPunctuation = /[.!?]$/.test(limited)
+  return `${endsWithPunctuation ? limited : `${limited}.`} ...`
+}
+
+const DESCRIPTION_MIN_HEIGHT = 80
+
 const hexToRgba = (hex, alpha) => {
   if (typeof hex !== 'string' || !hex.startsWith('#')) return hex
   const normalized = hex.replace('#', '')
@@ -258,11 +276,11 @@ const DayEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) => 
   const columnIndex = position?.column || 0
   const stackIndex = position?.stackIndex || 0
   
-  // Google Calendar style: overlapping with staggered slices
-  // Each event has a fixed width; horizontal offset creates overlap but
-  // the hover/click area only covers the visible slice, not the whole row.
-  const sliceWidthPercent = 70
-  const offsetPercent = 20
+  // Google Calendar style: overlapping with staggered slices.
+  // When there's only one event column, let it span the full width.
+  const isSingleColumn = columns <= 1
+  const sliceWidthPercent = isSingleColumn ? 100 : 70
+  const offsetPercent = isSingleColumn ? 0 : 20
   const padding = 6
   const maxLeft = Math.max(0, 100 - sliceWidthPercent)
   const rawLeft = columnIndex * offsetPercent
@@ -293,8 +311,11 @@ const DayEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) => 
   const timeColor = 'rgba(55, 65, 81, 0.7)'
   const titleStyle = {
     color: titleColor,
-    textDecoration: (isDeclined || visuallyChecked) ? 'line-through' : undefined,
     fontSize: `${compactFontSize}px`
+  }
+  const titleTextStyle = {
+    textDecoration: (isDeclined || visuallyChecked) ? 'line-through' : undefined,
+    display: 'inline-block'
   }
 
   const backgroundColor = isDeclined
@@ -302,6 +323,17 @@ const DayEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) => 
     : visuallyChecked
       ? lightenHexColor(colors.background, 25)
       : colors.background
+  
+  const now = new Date()
+  const isPast = displayEnd < now
+  const pastOpacity = 0.7
+  const eventOpacity = isDragging
+    ? 0.25
+    : (showPendingStyling
+        ? 0.9
+        : (visuallyChecked
+            ? 0.7
+            : (isPast ? pastOpacity : 1)))
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -324,6 +356,8 @@ const DayEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) => 
   const isPreviewing = Boolean(previewTimes)
   // No longer showing day change in original event - ghost preview handles this
   const showRecurringIcon = isRecurringCalendarEvent(event)
+  const truncatedDescription = truncateDescription(event.description)
+  const showDescription = Boolean(truncatedDescription && height >= DESCRIPTION_MIN_HEIGHT)
 
   const laneBaseZ = 20 + columnIndex * 100
   const laneStackZ = laneBaseZ + stackIndex
@@ -345,16 +379,18 @@ const DayEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) => 
       style={{
         cursor: isDragging ? 'grabbing' : 'pointer',
         top: `${top}px`,
-        minHeight: `${height}px`,
+        height: `${height}px`,
+        maxHeight: `${height}px`,
         left: leftCalc,
         width: widthCalc,
         minWidth: '64px',
         backgroundColor,
         zIndex: resolvedZIndex,
         boxShadow: isSelected ? '0 0 0 2px rgba(23, 97, 199, 0.6)' : undefined,
-        opacity: isDragging ? 0.25 : (showPendingStyling ? 0.9 : 1),
+        opacity: eventOpacity,
         border: showPendingStyling ? '1px dashed rgba(148, 163, 184, 0.9)' : undefined,
-        filter: showPendingStyling ? 'saturate(0.9)' : undefined
+        filter: showPendingStyling ? 'saturate(0.9)' : undefined,
+        overflow: 'hidden'
       }}
     >
       {/* Vertical line - rounded and floating */}
@@ -366,8 +402,10 @@ const DayEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) => 
           zIndex: 3
         }}
       ></div>
-      
-      <div className="ml-2"> {/* Add margin to accommodate for the vertical line */}
+      <div 
+        className="ml-2" 
+        style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}
+      >
         <div 
           className="font-medium mb-0.5 flex items-start gap-1.5" 
           style={{ 
@@ -378,7 +416,7 @@ const DayEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) => 
             className="flex-1 min-w-0 whitespace-nowrap overflow-hidden text-ellipsis" 
             style={{...titleStyle, marginLeft: '2px'}}
           >
-            {event.title}
+            <span style={titleTextStyle}>{event.title}</span>
           </span>
           {showRecurringIcon && (
             <FiRepeat className="flex-shrink-0 mt-0.5" size={14} />
@@ -450,15 +488,20 @@ const DayEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) => 
           }
           
           // Otherwise, show description if it exists
-          if (event.description) {
+          if (showDescription) {
             return (
               <div 
                 className="text-xs mt-1 break-words whitespace-normal opacity-80"
                 style={{ 
-                  color: timeColor
+                  color: timeColor,
+                  display: '-webkit-box',
+                  WebkitLineClamp: 2,
+                  WebkitBoxOrient: 'vertical',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis'
                 }}
               >
-                {event.description}
+                {truncatedDescription}
               </div>
             );
           }

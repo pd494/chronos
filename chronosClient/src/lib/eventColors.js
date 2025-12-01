@@ -122,6 +122,20 @@ const detectPaletteFromHex = (hex) => {
   return 'blue'
 }
 
+export const normalizeToPaletteColor = (colorName = 'blue') => {
+  if (!colorName) return 'blue'
+  const lower = String(colorName).toLowerCase()
+  if (EVENT_COLORS[lower]) return lower
+  if (lower === 'purple') return 'violet'
+  if (lower.startsWith('#')) {
+    const mapped = HEX_TO_PALETTE[lower]
+    if (mapped && EVENT_COLORS[mapped]) return mapped
+    const detected = detectPaletteFromHex(lower)
+    return EVENT_COLORS[detected] ? detected : 'blue'
+  }
+  return 'blue'
+}
+
 // Get colors for an event based on its color property
 export const getEventColors = (colorName) => {
   if (colorName && typeof colorName === 'string') {

@@ -38,7 +38,7 @@
   width: 3px;
   height: 14px;
   flex: 0 0 3px;
-  border-radius: 2px; /* more rounded for all-day markers */
+  border-radius: 2px; 
 }
 
 body.month-range-selecting {

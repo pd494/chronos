@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { format, differenceInCalendarDays, startOfDay } from 'date-fns'
-import { getEventColors } from '../../lib/eventColors'
+import { getEventColors, normalizeToPaletteColor } from '../../lib/eventColors'
 import { useAuth } from '../../context/AuthContext'
 import { useCalendar } from '../../context/CalendarContext'
 import { FiRepeat } from 'react-icons/fi'
@@ -51,8 +51,17 @@ const hexToRgba = (hex, alpha) => {
 const AllDayEvent = ({ event, onOpen, className = '', style = {} }) => {
   const { user } = useAuth()
   const { isEventChecked } = useCalendar()
-  const colors = getEventColors(event.color || 'blue')
+  const colors = getEventColors(normalizeToPaletteColor(event.color || 'blue'))
   const [isDragging, setIsDragging] = useState(false)
+  const [showDropAnim, setShowDropAnim] = useState(() => Boolean(event._freshDrop))
+  
+  // Clear animation after it plays
+  useEffect(() => {
+    if (showDropAnim) {
+      const timer = setTimeout(() => setShowDropAnim(false), 500)
+      return () => clearTimeout(timer)
+    }
+  }, [showDropAnim])
 
   const handleClick = (e) => {
     if (isDragging) return
@@ -122,14 +131,28 @@ const AllDayEvent = ({ event, onOpen, className = '', style = {} }) => {
       ? hexToRgba(colors.text, 0.65)
       : colors.text
   const titleStyle = {
-    color: titleColor,
-    textDecoration: (isDeclined || visuallyChecked) ? 'line-through' : undefined
+    color: titleColor
+  }
+  const titleTextStyle = {
+    textDecoration: (isDeclined || visuallyChecked) ? 'line-through' : undefined,
+    display: 'inline-block'
   }
   const backgroundColor = isDeclined
     ? hexToRgba(colors.background, 0.45)
     : visuallyChecked
       ? lightenHexColor(colors.background, 25)
       : colors.background
+  
+  const now = new Date()
+  const isPast = new Date(event.end) < now
+  const pastOpacity = 0.7
+  const eventOpacity = isDragging
+    ? 0.5
+    : (showPendingStyling
+        ? 0.9
+        : (visuallyChecked
+            ? 0.7
+            : (isPast ? pastOpacity : 1)))
 
   const spansMultipleDays = (() => {
     if (!event?.start || !event?.end) return false
@@ -149,7 +172,7 @@ const AllDayEvent = ({ event, onOpen, className = '', style = {} }) => {
 
   const showRecurringIcon = isRecurringCalendarEvent(event)
 
-  const indicatorColor = (isDeclined || visuallyChecked)
+  const indicatorColor = isDeclined
     ? 'rgba(148, 163, 184, 0.8)'
     : (colors.border || colors.text)
 
@@ -159,12 +182,12 @@ const AllDayEvent = ({ event, onOpen, className = '', style = {} }) => {
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
       onClick={handleClick}
-      className={`rounded-md px-2 py-1 cursor-pointer text-xs relative flex items-center gap-2 event-draggable calendar-event-hover ${showPendingStyling ? 'pending-invite-block' : ''} ${(isDeclined || visuallyChecked) ? 'declined-event-block' : ''} ${className}`.trim()}
+      className={`rounded-md px-2 py-1 cursor-pointer text-xs relative flex items-center gap-2 event-draggable calendar-event-hover ${showPendingStyling ? 'pending-invite-block' : ''} ${isDeclined ? 'declined-event-block' : ''} ${showDropAnim ? 'event-drop-pop' : ''} ${className}`.trim()}
       data-event-view="week"
       style={{
         backgroundColor,
         color: titleColor,
-        opacity: isDragging ? 0.5 : (showPendingStyling ? 0.9 : 1),
+        opacity: eventOpacity,
         border: showPendingStyling ? '1px dashed rgba(148, 163, 184, 0.9)' : undefined,
         filter: showPendingStyling ? 'saturate(0.9)' : undefined,
         ...style
@@ -180,7 +203,7 @@ const AllDayEvent = ({ event, onOpen, className = '', style = {} }) => {
       ></div>
       
       <span className="font-medium flex items-center gap-1.5 flex-1 min-w-0 ml-2" style={titleStyle}>
-        <span className="truncate flex-1 min-w-0">{event.title}</span>
+        <span className="truncate flex-1 min-w-0" style={titleTextStyle}>{event.title}</span>
         {formattedStartTime && (
           <span className="text-[11px] font-semibold text-slate-600 whitespace-nowrap flex-shrink-0">
             {formattedStartTime}

@@ -379,6 +379,32 @@ body.task-dragging .hour-cell:hover {
   animation: calendar-bounce 0.6s ease;
 }
 
+/* Cute stick-pop animation for todo dropped onto calendar */
+@keyframes todo-drop-pop {
+  0% {
+    transform: scale(0.3) translateY(-8px);
+    opacity: 0;
+  }
+  40% {
+    transform: scale(1.12) translateY(2px);
+    opacity: 1;
+  }
+  60% {
+    transform: scale(0.92) translateY(-1px);
+  }
+  80% {
+    transform: scale(1.04) translateY(0);
+  }
+  100% {
+    transform: scale(1) translateY(0);
+    opacity: 1;
+  }
+}
+
+.event-drop-pop {
+  animation: todo-drop-pop 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
 /* Custom cursor when dragging tasks */
 body.task-dragging {
   cursor: grabbing !important;
@@ -412,19 +438,6 @@ html.dragging .sortable-drag {
   position: relative;
 }
 
-.calendar-day.sortable-dragover::after {
-  content: '📌';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  font-size: 24px;
-  opacity: 0.6;
-  animation: pin-bounce 0.5s ease-in-out infinite alternate;
-  pointer-events: none;
-  z-index: 100;
-}
-
 @keyframes month-cell-pulse {
   from {
     background-color: rgba(59, 130, 246, 0.1);
@@ -449,19 +462,6 @@ html.dragging .sortable-drag {
   animation: day-cell-pulse 0.8s ease-in-out infinite alternate;
 }
 
-.day-hour-cell.sortable-dragover::after {
-  content: '📌';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  font-size: 20px;
-  opacity: 0.6;
-  animation: pin-bounce 0.5s ease-in-out infinite alternate;
-  pointer-events: none;
-  z-index: 100;
-}
-
 @keyframes day-cell-pulse {
   from {
     background-color: rgba(59, 130, 246, 0.15);
@@ -476,19 +476,6 @@ html.dragging .sortable-drag {
   background-color: rgba(59, 130, 246, 0.15) !important;
   outline: 2px dashed rgba(59, 130, 246, 0.5);
   position: relative;
-}
-
-.day-all-day-section.sortable-dragover::after {
-  content: '📌';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  font-size: 24px;
-  opacity: 0.6;
-  animation: pin-bounce 0.5s ease-in-out infinite alternate;
-  pointer-events: none;
-  z-index: 100;
 }
 
 /* Pin bounce animation */
@@ -607,4 +594,46 @@ html.dragging .sortable-drag {
 .declined-event-block > * {
   position: relative;
   z-index: 1;
+}
+
+/* ===== GLOBAL: Hide sortable drag clone when cursor is over calendar ===== */
+/* When dragging a todo and cursor is over the calendar, only show the event preview marker, not the blue sortable clone */
+body.calendar-drag-focus .sortable-drag,
+body.calendar-drag-focus .sortable-ghost:not(.calendar-day .sortable-ghost),
+body.calendar-drag-focus .sortable-fallback,
+body.calendar-drag-focus .task-drag,
+body.calendar-drag-focus .task-ghost,
+body.calendar-drag-focus [data-is-clone="true"] {
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+  transform: scale(0) !important;
+  width: 0 !important;
+  height: 0 !important;
+  overflow: hidden !important;
+}
+
+/* Also hide direct body children that are drag elements */
+body.calendar-drag-focus > .sortable-drag,
+body.calendar-drag-focus > .sortable-ghost,
+body.calendar-drag-focus > .sortable-fallback,
+body.calendar-drag-focus > .task-item {
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+  transform: scale(0) !important;
+  position: fixed !important;
+  left: -9999px !important;
+}
+
+/* Make sure task items in sidebar stay visible when calendar has focus */
+body.calendar-drag-focus .sidebar .task-item {
+  opacity: 1 !important;
+  visibility: visible !important;
+  transform: none !important;
+  position: relative !important;
+  left: auto !important;
+  width: auto !important;
+  height: auto !important;
+  overflow: visible !important;
 }

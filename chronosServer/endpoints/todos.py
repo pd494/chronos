@@ -487,7 +487,6 @@ async def convert_todo_to_event(
         
         event_data = {
             "summary": todo.get("content", "Untitled Event"),
-            "description": f"Converted from todo in Chronos: {todo.get('content', '')}",
         }
 
         extended_props = event_data.get("extendedProperties", {}) or {}
@@ -500,32 +499,26 @@ async def convert_todo_to_event(
         if category_color:
             private_props["categoryColor"] = category_color
 
-            # Map hex color to Google Calendar colorId for better display in Google Calendar
-            # Google Calendar supports colorIds 1-11
             color_mapping = {
-                "#3478F6": "9",  # Blue
-                "#FF9500": "6",  # Orange
-                "#34C759": "10", # Green
-                "#FF3B30": "11", # Red
-                "#AF52DE": "3",  # Purple/Lavender
-                "#00C7BE": "7",  # Turquoise
-                "#FFCC00": "5",  # Yellow
-                "#FF2D55": "4",  # Pink
+                "#3478F6": "9",
+                "#FF9500": "6",
+                "#34C759": "10",
+                "#FF3B30": "11",
+                "#AF52DE": "3",
+                "#00C7BE": "7",
+                "#FFCC00": "5",
+                "#FF2D55": "4",
             }
 
-            # Find closest colorId if exact match not found
             if category_color in color_mapping:
                 event_data["colorId"] = color_mapping[category_color]
             elif category_color.startswith('#'):
-                # Default to blue if no mapping found
                 event_data["colorId"] = "9"
 
         extended_props["private"] = private_props
         event_data["extendedProperties"] = extended_props
         
-        # Handle all-day vs timed events
         if is_all_day:
-            # For all-day events, use date format (not dateTime)
             from datetime import datetime
             start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
             end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
@@ -537,14 +530,11 @@ async def convert_todo_to_event(
                 "date": end_dt.strftime("%Y-%m-%d")
             }
         else:
-            # For timed events, use dateTime format
             event_data["start"] = {
-                "dateTime": start_date,
-                "timeZone": "America/Los_Angeles"  # You may want to make this configurable
+                "dateTime": start_date
             }
             event_data["end"] = {
-                "dateTime": end_date,
-                "timeZone": "America/Los_Angeles"
+                "dateTime": end_date
             }
         
         created_event = service.create_event("primary", event_data)
