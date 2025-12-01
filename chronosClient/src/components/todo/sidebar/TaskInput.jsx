@@ -30,9 +30,16 @@ const TaskInput = ({
   const emojiPickerRef = useRef(null);
   const colorPickerRef = useRef(null);
 
+  // Match category color palette used by EventModal (via eventColors.js backgrounds)
   const CATEGORY_COLORS = [
-    '#1761C7', '#FF3B30', '#34C759', '#FF9500',
-    '#AF52DE', '#FFD60A', '#00C7BE', '#FF2D55'
+    '#C5E0F9', // blue
+    '#D3D3FF', // violet
+    '#f67f9cff', // red
+    '#FFFFC5', // yellow
+    '#D4F4DD', // green
+    '#B8E6E6', // teal
+    '#FFDAB3', // orange
+    '#E8D6C0'  // brown
   ]
 
   useEffect(() => {
@@ -154,7 +161,7 @@ const TaskInput = ({
                 />
                 {showColorPicker && (
                   <div className="category-color-popover compact">
-                    {CATEGORY_COLORS.map(color => (
+                    {CATEGORY_COLORS.map((color) => (
                       <button
                         type="button"
                         key={color}
@@ -200,15 +207,6 @@ const TaskInput = ({
           </div>
           <div className="category-count-container">
             {categoryCount !== undefined && <span className="category-count">{categoryCount}</span>}
-            {showAddButton && (
-              <button 
-                className="add-task-button"
-                onClick={(e) => {
-                  e.preventDefault();
-                  inputRef.current.focus();
-                }}
-              >+</button>
-            )}
             {isEditable && !isEditingCategory && (
               <button 
                 className="edit-category-button"
@@ -220,7 +218,7 @@ const TaskInput = ({
         </div>
       )}
       {showNewTaskInput && (
-        <form className="task-input" onSubmit={handleSubmit}>
+        <form className={`task-input ${activeCategory === 'All' ? 'all-task-input' : ''}`} onSubmit={handleSubmit}>
           <input
             ref={inputRef}
             type="text"

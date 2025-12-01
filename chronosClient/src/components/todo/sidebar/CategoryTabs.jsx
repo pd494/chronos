@@ -5,14 +5,14 @@ import './CategoryTabs.css';
 import { useTaskContext } from '../../../context/TaskContext';
 
 const CATEGORY_COLORS = [
-  '#1761C7',
-  '#FF3B30',
-  '#34C759',
-  '#FF9500',
-  '#AF52DE',
-  '#FFD60A',
-  '#00C7BE',
-  '#FF2D55'
+  '#C5E0F9', // blue
+  '#D3D3FF', // violet
+  '#f67f9cff', // red
+  '#FFFFC5', // yellow
+  '#D4F4DD', // green
+  '#B8E6E6', // teal
+  '#FFDAB3', // orange
+  '#E8D6C0'  // brown
 ];
 
 const PROTECTED_CATEGORY_NAMES = new Set(['Today', 'Inbox', 'Completed']);
@@ -22,7 +22,7 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, isCollapse
   const [truncatedTabs, setTruncatedTabs] = useState(new Set());
   const [isAddingCategory, setIsAddingCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
-  const [selectedColor, setSelectedColor] = useState('#1761C7');
+  const [selectedColor, setSelectedColor] = useState('#C5E0F9');
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [contextMenu, setContextMenu] = useState(null);
   const tabRefs = useRef({});
@@ -108,7 +108,7 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, isCollapse
     createCategory(trimmed, selectedColor)
       .finally(() => {
         setNewCategoryName('');
-        setSelectedColor('#1761C7');
+        setSelectedColor('#C5E0F9');
         setIsAddingCategory(false);
       });
   };
@@ -116,7 +116,7 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, isCollapse
   const handleCancelAddCategory = () => {
     setIsAddingCategory(false);
     setNewCategoryName('');
-    setSelectedColor('#1761C7');
+    setSelectedColor('#C5E0F9');
     setShowColorPicker(false);
   };
   
@@ -141,7 +141,10 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, isCollapse
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (colorPickerRef.current && !colorPickerRef.current.contains(event.target)) {
-        setShowColorPicker(false);
+        const popover = document.querySelector('.category-color-popover');
+        if (!popover || !popover.contains(event.target)) {
+          setShowColorPicker(false);
+        }
       }
       if (contextMenuRef.current && !contextMenuRef.current.contains(event.target)) {
         setContextMenu(null);
@@ -186,7 +189,7 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, isCollapse
             <div
               key={category.id}
               data-category-id={category.id}
-              data-draggable={category.id !== 'all'}
+              data-draggable={category.id !== 'all' && category.name !== 'future'}
               className={`category-tab-horizontal ${activeCategory === category.name ? 'active' : ''}`}
               onClick={() => {
                 if (category.name) {
@@ -228,33 +231,41 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, isCollapse
             </div>
           ))}
         </div>
-        
+
         {isAddingCategory ? (
           <div className="add-category-form">
-            <div className="color-picker-wrapper">
+            <div className="color-picker-wrapper" ref={colorPickerRef}>
               <button 
                 type="button"
                 className="color-button"
                 onClick={toggleColorPicker}
                 style={{ backgroundColor: selectedColor }}
               >
+                
               </button>
               {showColorPicker && ReactDOM.createPortal(
-                <>
-                  <div className="color-picker-backdrop" onClick={() => setShowColorPicker(false)}></div>
-                  <div className="color-picker-container" ref={colorPickerRef}>
-                    <div className="color-grid">
-                      {CATEGORY_COLORS.map((color) => (
-                        <button
-                          key={color}
-                          className={`color-option ${selectedColor === color ? 'selected' : ''}`}
-                          style={{ backgroundColor: color }}
-                          onClick={() => handleColorSelect(color)}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                </>,
+                <div 
+                  className="category-color-popover compact"
+                  style={{
+                    position: 'fixed',
+                    top: colorPickerRef.current ? colorPickerRef.current.getBoundingClientRect().bottom + 4 : 0,
+                    left: colorPickerRef.current ? colorPickerRef.current.getBoundingClientRect().left - 1 : 0,
+                    zIndex: 9999
+                  }}
+                >
+                  {CATEGORY_COLORS.map((color) => (
+                    <button
+                      type="button"
+                      key={color}
+                      className={`color-swatch ${selectedColor === color ? 'active' : ''}`}
+                      style={{ backgroundColor: color }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleColorSelect(color);
+                      }}
+                    />
+                  ))}
+                </div>,
                 document.body
               )}
             </div>
@@ -266,6 +277,9 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, isCollapse
               onChange={(e) => setNewCategoryName(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="New category"
+
+
+              
             />
             <div className="add-category-actions">
               <button 

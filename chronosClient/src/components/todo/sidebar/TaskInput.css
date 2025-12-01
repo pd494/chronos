@@ -6,14 +6,25 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 18px 8px 18px;
+  padding: 0 8px 8px 7px;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  cursor: default !important;
+  background: transparent !important;
+}
+
+.category-header:hover {
+  background: transparent !important;
 }
 
 .category-title-container {
   display: flex;
   align-items: center;
   gap: 10px;
+  cursor: default !important;
+}
+
+.category-title-container *:not(.edit-category-button) {
+  cursor: default !important;
 }
 
 .category-header-icon {
@@ -51,7 +62,7 @@
 .category-color-popover {
   position: absolute;
   top: 26px;
-  left: 0;
+  left: -2px;
   padding: 6px;
   background: #fff;
   border: 1px solid #e5e5ea;
@@ -110,7 +121,7 @@
 }
 
 .add-task-button:hover {
-  background-color: #e2e8f0;
+  background-color: transparent;
 }
 
 .task-input {
@@ -124,12 +135,12 @@
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   box-shadow: 0 1.5px 6px rgba(0,0,0,0.04);
   overflow-x: hidden;
-  margin-top: 6px; /* Added slight spacing between name and textbox */
+  margin-top: 10px;
 }
 
 /* Specific styling for the All tab task input to match the screenshot */
 .all-task-input {
-  margin-top: 0;
+  margin-top: -15px;
   border-radius: 13px;
   padding: 12px 16px; /* Reduced height */
   background-color: #f5f5f7;
@@ -191,10 +202,13 @@
   font-weight: 600;
   color: #000000;
   border: none;
-  background-color: rgba(0, 0, 0, 0.05);
-  border-radius: 4px;
-  padding: 2px 6px;
+  background: transparent;
   outline: none;
+  padding: 0;
+  margin: 0;
+  width: auto;
+  min-width: 20px;
+  max-width: 200px;
 }
 
 .emoji-picker-wrapper {
@@ -246,8 +260,9 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  padding: 0;
+  padding: 8px;
   line-height: 1;
+  margin: -8px;
 }
 
 .edit-category-button:hover {
