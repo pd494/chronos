@@ -34,6 +34,13 @@
   opacity: 0.4;
 }
 
+.month-event-line {
+  width: 3px;
+  height: 14px;
+  flex: 0 0 3px;
+  border-radius: 2px; /* more rounded for all-day markers */
+}
+
 body.month-range-selecting {
   user-select: none;
   cursor: col-resize;
@@ -70,7 +77,7 @@ body.month-range-selecting {
 }
 
 .month-multiday-span.all-day {
-  border-radius: 6px;
+  border-radius: 15px;
 }
 
 .month-multiday-span:hover {
@@ -96,7 +103,7 @@ body.month-range-selecting .month-multiday-span:not(.month-range-preview) {
 .month-range-preview {
   border: 1px dashed rgba(23, 97, 199, 0.4);
   pointer-events: none;
-  border-radius: 6px;
+  border-radius: 8px;
 }
 
 .month-range-preview.hidden {

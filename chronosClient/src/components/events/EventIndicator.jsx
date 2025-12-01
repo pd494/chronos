@@ -1,11 +1,21 @@
 import { format, differenceInCalendarDays, startOfDay } from 'date-fns'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useCalendar } from '../../context/CalendarContext'
+import { normalizeToPaletteColor, getEventColors } from '../../lib/eventColors'
 
 const EventIndicator = ({ event, isMonthView }) => {
   const { openEventModal, selectedEvent, updateEvent, isEventChecked } = useCalendar()
   const isSelected = selectedEvent?.id === event.id
   const [isDragging, setIsDragging] = useState(false)
+  const [showDropAnim, setShowDropAnim] = useState(() => Boolean(event._freshDrop))
+  
+  // Clear animation after it plays
+  useEffect(() => {
+    if (showDropAnim) {
+      const timer = setTimeout(() => setShowDropAnim(false), 500)
+      return () => clearTimeout(timer)
+    }
+  }, [showDropAnim])
   const spansMultipleDays = (() => {
     if (!event?.start || !event?.end) return false
     try {
@@ -98,74 +108,12 @@ const EventIndicator = ({ event, isMonthView }) => {
   const isDeclined = responseStatus === 'declined'
   const isCheckedOff = isEventChecked(event.id)
   
-  const eventColor = event.color || 'blue';
-  const isHexColor = eventColor.startsWith('#');
-  
-  // Function to lighten a hex color for background
-  const lightenHexColor = (hex, percent = 70) => {
-    hex = hex.replace('#', '');
-    const r = parseInt(hex.substring(0, 2), 16);
-    const g = parseInt(hex.substring(2, 4), 16);
-    const b = parseInt(hex.substring(4, 6), 16);
-    const lightenedR = Math.min(255, Math.floor(r + (255 - r) * (percent / 100)));
-    const lightenedG = Math.min(255, Math.floor(g + (255 - g) * (percent / 100)));
-    const lightenedB = Math.min(255, Math.floor(b + (255 - b) * (percent / 100)));
-    return `#${lightenedR.toString(16).padStart(2, '0')}${lightenedG.toString(16).padStart(2, '0')}${lightenedB.toString(16).padStart(2, '0')}`;
-  };
-  
-  // Function to darken a hex color for text
-  const darkenHexColor = (hex, percent = 40) => {
-    hex = hex.replace('#', '');
-    const r = parseInt(hex.substring(0, 2), 16);
-    const g = parseInt(hex.substring(2, 4), 16);
-    const b = parseInt(hex.substring(4, 6), 16);
-    const darkenedR = Math.floor(r * (1 - percent / 100));
-    const darkenedG = Math.floor(g * (1 - percent / 100));
-    const darkenedB = Math.floor(b * (1 - percent / 100));
-    return `#${darkenedR.toString(16).padStart(2, '0')}${darkenedG.toString(16).padStart(2, '0')}${darkenedB.toString(16).padStart(2, '0')}`;
-  };
-  
-  const getColorClass = (color) => {
-    if (color === 'purple') return 'bg-violet-500';
-    if (color === 'red') return 'bg-rose-500';
-    if (color === 'green') return 'bg-emerald-500';
-    if (color === 'teal') return 'bg-teal-500';
-    if (color === 'cyan') return 'bg-cyan-500';
-    if (color === 'amber') return 'bg-amber-500';
-    if (color === 'lime') return 'bg-lime-500';
-    if (color === 'indigo') return 'bg-indigo-500';
-    if (color === 'yellow') return 'bg-yellow-500';
-    return `bg-${color}-500`;
-  }
-  
-  const getBgColorClass = (color) => {
-    if (color === 'purple') return 'bg-violet-200 dark:bg-violet-700';
-    if (color === 'red') return 'bg-rose-200 dark:bg-rose-700';
-    if (color === 'green') return 'bg-emerald-200 dark:bg-emerald-700';
-    if (color === 'teal') return 'bg-teal-200 dark:bg-teal-700';
-    if (color === 'cyan') return 'bg-cyan-200 dark:bg-cyan-700';
-    if (color === 'amber') return 'bg-amber-200 dark:bg-amber-700';
-    if (color === 'lime') return 'bg-lime-200 dark:bg-lime-700';
-    if (color === 'indigo') return 'bg-indigo-200 dark:bg-indigo-700';
-    if (color === 'yellow') return 'bg-yellow-200 dark:bg-yellow-700';
-    if (color === 'orange') return 'bg-orange-200 dark:bg-orange-700';
-    return `bg-${color}-200 dark:bg-${color}-700`;
-  }
-  
-  // For hex colors, use inline styles - only for all-day events
-  const bgStyle = (isHexColor && treatAsAllDay) ? {
-    backgroundColor: lightenHexColor(eventColor, 70)
-  } : {};
-  
-  const lineStyle = isHexColor ? {
-    backgroundColor: eventColor
-  } : {};
-  
-  const textStyle = isHexColor ? {
-    color: darkenHexColor(eventColor, 40)
-  } : {};
+  const paletteName = normalizeToPaletteColor(event.color || 'blue')
+  const palette = getEventColors(paletteName)
+  const lineStyle = { backgroundColor: palette.border }
+  const textStyle = { color: palette.text }
 
-  const baseTitleStyle = isHexColor ? { ...textStyle } : { color: 'rgb(55, 65, 81)' }
+  const baseTitleStyle = { color: palette.text }
   const visuallyDeclined = isDeclined || isCheckedOff
 
   const titleStyle = (() => {
@@ -194,9 +142,9 @@ const EventIndicator = ({ event, isMonthView }) => {
       draggable={!isDragging}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
-      className={`text-xs mb-1 flex items-center gap-1 px-1 py-0.5 transition-opacity calendar-event calendar-event-hover ${isMonthView ? (isHexColor ? (treatAsAllDay ? 'rounded-md' : '') : `${treatAsAllDay ? getBgColorClass(eventColor) + ' bg-opacity-70' : ''} ${treatAsAllDay ? 'rounded-md' : ''}`) : ''} ${
+      className={`text-xs mb-1 flex items-center gap-1 px-1 py-0.5 transition-opacity calendar-event calendar-event-hover ${isMonthView && treatAsAllDay ? 'rounded-md' : ''} ${
         (isPendingInvite || isTentative) && isMonthView ? 'pending-month-invite' : ''
-      } ${visuallyDeclined && isMonthView ? 'declined-month-event' : ''}`}
+      } ${visuallyDeclined && isMonthView ? 'declined-month-event' : ''} ${showDropAnim ? 'event-drop-pop' : ''}`}
       onClick={handleClick}
       data-event-id={event.id}
       data-active={isSelected ? 'true' : 'false'}
@@ -205,7 +153,7 @@ const EventIndicator = ({ event, isMonthView }) => {
         minWidth: 0,
         cursor: isDragging ? 'grabbing' : 'pointer',
         opacity: isDragging ? 0.5 : baseOpacity,
-        ...(isMonthView && isHexColor && treatAsAllDay ? bgStyle : {}),
+        ...(isMonthView && treatAsAllDay ? { backgroundColor: palette.background, borderRadius: '8px' } : {}),
         ...(isSelected ? { boxShadow: '0 0 0 2px rgba(23, 97, 199, 0.4)', borderRadius: '8px' } : {}),
         ...((isPendingInvite || isTentative) && isMonthView ? { backgroundColor: 'rgba(248, 250, 252, 0.9)', color: '#475569' } : {})
       }}
@@ -213,14 +161,9 @@ const EventIndicator = ({ event, isMonthView }) => {
       {isMonthView ? (
         <>
           <div className="flex items-center gap-1 min-w-0 flex-1">
-            <div 
-              className={`${isHexColor ? '' : getColorClass(eventColor)} rounded-sm`}
-              style={{ 
-                width: '3.2px', 
-                height: '14px',
-                flex: '0 0 3.2px',
-                ...(isHexColor ? lineStyle : {})
-              }}
+            <div
+              className="month-event-line"
+              style={lineStyle}
             ></div>
             
             <div

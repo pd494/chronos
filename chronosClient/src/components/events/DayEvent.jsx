@@ -2,7 +2,7 @@ import { format, differenceInMinutes, isSameDay } from 'date-fns'
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useCalendar } from '../../context/CalendarContext'
 import { useAuth } from '../../context/AuthContext'
-import { getEventColors } from '../../lib/eventColors'
+import { getEventColors, normalizeToPaletteColor } from '../../lib/eventColors'
 import { FiVideo, FiRepeat } from 'react-icons/fi'
 
 const isRecurringCalendarEvent = (event) => {
@@ -56,8 +56,18 @@ const DayEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) => 
   const [resizePreview, setResizePreview] = useState(null)
   const [isResizing, setIsResizing] = useState(false)
   const [dragEnabled, setDragEnabled] = useState(true)
+  const [showDropAnim, setShowDropAnim] = useState(() => Boolean(event._freshDrop))
+  const [isHovered, setIsHovered] = useState(false)
   const resizingDataRef = useRef(null)
   const resizingPreviewRef = useRef(null)
+  
+  // Clear animation after it plays
+  useEffect(() => {
+    if (showDropAnim) {
+      const timer = setTimeout(() => setShowDropAnim(false), 500)
+      return () => clearTimeout(timer)
+    }
+  }, [showDropAnim])
   
   // Ensure we're working with proper Date objects
   const startDate = event.start instanceof Date ? event.start : new Date(event.start)
@@ -242,23 +252,23 @@ const DayEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) => 
   }
   
   // Get standardized colors
-  const colors = getEventColors(event.color || 'blue')
+  const colors = getEventColors(normalizeToPaletteColor(event.color || 'blue'))
   
   const columns = position?.columns || 1
   const columnIndex = position?.column || 0
-  // Provide consistent horizontal spacing within a day column and between adjacent days
-  const baseInset = 4 // px inset from day column borders
-  const gap = position?.gap ?? 6 // px gap between overlapping events in the same day
-  const widthPercent = 100 / columns
-  const leftPercent = widthPercent * columnIndex
-  const totalGap = gap * Math.max(0, columns - 1)
-  const horizontalPadding = baseInset * 2
-  const widthCalc = columns > 1
-    ? `calc(${widthPercent}% - ${(totalGap / columns) + horizontalPadding}px)`
-    : `calc(${widthPercent}% - ${horizontalPadding}px)`
-  const leftCalc = columns > 1
-    ? `calc(${leftPercent}% + ${columnIndex * gap + baseInset}px)`
-    : `${baseInset}px`
+  const stackIndex = position?.stackIndex || 0
+  
+  // Google Calendar style: overlapping with staggered slices
+  // Each event has a fixed width; horizontal offset creates overlap but
+  // the hover/click area only covers the visible slice, not the whole row.
+  const sliceWidthPercent = 70
+  const offsetPercent = 20
+  const padding = 6
+  const maxLeft = Math.max(0, 100 - sliceWidthPercent)
+  const rawLeft = columnIndex * offsetPercent
+  const leftPos = Math.min(rawLeft, maxLeft)
+  const widthCalc = `calc(${sliceWidthPercent}% - ${padding}px)`
+  const leftCalc = `calc(${leftPos}% + ${padding / 2}px)`
 
   const responseStatus = typeof event.viewerResponseStatus === 'string'
     ? event.viewerResponseStatus.toLowerCase()
@@ -274,6 +284,7 @@ const DayEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) => 
   const showPendingStyling = (isPendingInvite || isTentative) && !isCurrentUserOrganizer
   const stripedClass = showPendingStyling ? 'pending-invite-block' : ''
   const declinedClass = isDeclined ? 'declined-event-block' : ''
+  const compactFontSize = columns >= 4 ? 10 : (columns >= 3 ? 11 : 12)
   const titleColor = isDeclined
     ? 'rgba(71, 85, 105, 0.6)'
     : visuallyChecked
@@ -282,7 +293,8 @@ const DayEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) => 
   const timeColor = 'rgba(55, 65, 81, 0.7)'
   const titleStyle = {
     color: titleColor,
-    textDecoration: (isDeclined || visuallyChecked) ? 'line-through' : undefined
+    textDecoration: (isDeclined || visuallyChecked) ? 'line-through' : undefined,
+    fontSize: `${compactFontSize}px`
   }
 
   const backgroundColor = isDeclined
@@ -313,14 +325,21 @@ const DayEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) => 
   // No longer showing day change in original event - ghost preview handles this
   const showRecurringIcon = isRecurringCalendarEvent(event)
 
+  const laneBaseZ = 20 + columnIndex * 100
+  const laneStackZ = laneBaseZ + stackIndex
+  const activeZ = laneBaseZ + 1000
+  const resolvedZIndex = (isDragging || isResizing || isHovered) ? activeZ : laneStackZ
+
   return (
     <div
       draggable={!isResizing && dragEnabled}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
-      className={`absolute rounded-lg p-1 overflow-visible text-sm z-10 group event-draggable calendar-event-hover ${stripedClass} ${declinedClass}`}
+      className={`absolute rounded-lg p-1 overflow-visible text-sm z-10 group event-draggable calendar-event-hover ${stripedClass} ${declinedClass} ${showDropAnim ? 'event-drop-pop' : ''}`}
       data-event-view="day"
       onClick={handleClick}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
       data-event-id={event.id}
       data-active={isSelected ? 'true' : 'false'}
       style={{
@@ -329,8 +348,9 @@ const DayEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) => 
         minHeight: `${height}px`,
         left: leftCalc,
         width: widthCalc,
+        minWidth: '64px',
         backgroundColor,
-        zIndex: 20 + columnIndex,
+        zIndex: resolvedZIndex,
         boxShadow: isSelected ? '0 0 0 2px rgba(23, 97, 199, 0.6)' : undefined,
         opacity: isDragging ? 0.25 : (showPendingStyling ? 0.9 : 1),
         border: showPendingStyling ? '1px dashed rgba(148, 163, 184, 0.9)' : undefined,
@@ -355,7 +375,7 @@ const DayEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) => 
           }}
         >
           <span 
-            className="break-words whitespace-normal flex-1 min-w-0" 
+            className="flex-1 min-w-0 whitespace-nowrap overflow-hidden text-ellipsis" 
             style={{...titleStyle, marginLeft: '2px'}}
           >
             {event.title}

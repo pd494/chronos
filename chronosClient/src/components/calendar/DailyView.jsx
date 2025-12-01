@@ -4,24 +4,24 @@ import { useCalendar } from '../../context/CalendarContext'
 import { useTaskContext } from '../../context/TaskContext'
 import DayEvent from '../events/DayEvent'
 import AllDayEvent from '../events/AllDayEvent'
-import Sortable from 'sortablejs'
 import { calculateTimeGridLayout } from '../../lib/eventLayout'
 import { getEventColors } from '../../lib/eventColors'
 import './DailyView.css'
 
-const HOUR_HEIGHT = 60 // Height of one hour in pixels
+const HOUR_HEIGHT = 55 // Height of one hour in pixels (zoomed out ~15% from default)
+const TIME_FOCUS_RATIO = 0.6 // Position current time ~60% down the viewport
 const DAY_START_HOUR = 0 // Start displaying from 12 AM
 const DAY_END_HOUR = 23 // End displaying at 11 PM
 const ALL_DAY_SECTION_HEIGHT = 40 // Height of the all-day events section
 const ALL_DAY_EVENT_HEIGHT = 30
 const ALL_DAY_EVENT_GAP = 4
 const TIMED_EVENT_GAP = 4
-const SNAP_INTERVAL_MINUTES = 5
+const SNAP_INTERVAL_MINUTES = 15
 const MAX_SNAP_MINUTES = (DAY_END_HOUR * 60) + SNAP_INTERVAL_MINUTES
 const clampSnapMinutes = (minutes) => Math.max(0, Math.min(minutes, MAX_SNAP_MINUTES))
 const snapMinutesToLatestHalfHour = (totalMinutes) => {
   if (!Number.isFinite(totalMinutes) || totalMinutes <= 0) return 0
-  return clampSnapMinutes(Math.floor(totalMinutes / SNAP_INTERVAL_MINUTES) * SNAP_INTERVAL_MINUTES)
+  return clampSnapMinutes(Math.round(totalMinutes / SNAP_INTERVAL_MINUTES) * SNAP_INTERVAL_MINUTES)
 }
 const snapHourValue = (hourValue) => {
   if (hourValue == null) return null
@@ -34,11 +34,18 @@ const snapHourMinutePair = (hour, minutes = 0) => {
   const snappedMinute = snappedMinutes % 60
   return { hour: snappedHour, minutes: snappedMinute }
 }
+const buildHourlyRange = (day, hour) => {
+  const start = new Date(day)
+  start.setHours(hour, 0, 0, 0)
+  const end = new Date(start.getTime() + 60 * 60 * 1000)
+  return { start, end }
+}
 const DRAG_DISTANCE_THRESHOLD = 0.08 // ~5 minutes to start the preview
 
 const DailyView = () => {
   const {
     currentDate,
+    view,
     events,
     navigateToNext,
     navigateToPrevious,
@@ -49,7 +56,7 @@ const DailyView = () => {
   
   const { convertTodoToEvent } = useTaskContext()
   
-  const containerRef = useRef(null)
+  const scrollContainerRef = useRef(null)
   const touchStartX = useRef(null)
   const [isScrolling, setIsScrolling] = useState(false)
   const scrollThreshold = 50
@@ -66,23 +73,44 @@ const DailyView = () => {
   const [isEventResizing, setIsEventResizing] = useState(false)
   const isEventResizeActiveRef = useRef(false)
   const [dragPreviewEvent, setDragPreviewEvent] = useState(null) // Ghost preview for dragged event
-  
-  useEffect(() => {
-    // Scroll to current time on initial load
-    if (containerRef.current) {
-      const now = new Date()
-      const currentHour = getHours(now)
-      const currentMinute = getMinutes(now)
-      
-      if (currentHour >= DAY_START_HOUR && currentHour <= DAY_END_HOUR) {
-        const scrollPosition = (currentHour - DAY_START_HOUR) * HOUR_HEIGHT + 
-                             (currentMinute / 60) * HOUR_HEIGHT - 100
-        containerRef.current.scrollTop = scrollPosition
-      } else {
-        containerRef.current.scrollTop = 60 // Scroll to 9 AM by default
-      }
-    }
+  const [todoDragPreview, setTodoDragPreview] = useState(null) // Preview while dragging a todo onto the calendar
+  const cleanupDragArtifacts = useCallback(() => {
+    try {
+      document.body.classList.remove('calendar-drag-focus');
+      ['.sortable-ghost', '.task-ghost', '.sortable-drag', '.task-drag', '[data-is-clone="true"]'].forEach(sel => {
+        document.querySelectorAll(sel).forEach(el => {
+          if (!el.closest('.task-list')) {
+            el.parentNode?.removeChild(el)
+          }
+        })
+      })
+    } catch (_) {}
   }, [])
+  
+  const scrollToCurrentTime = useCallback(() => {
+    const container = scrollContainerRef.current
+    if (!container) return
+    const now = new Date()
+    const currentHour = getHours(now)
+    const currentMinute = getMinutes(now)
+    const withinDay = currentHour >= DAY_START_HOUR && currentHour <= DAY_END_HOUR
+    const rawPosition = withinDay
+      ? ((currentHour - DAY_START_HOUR) * HOUR_HEIGHT) + ((currentMinute / 60) * HOUR_HEIGHT)
+      : 60
+    const centeredPosition = rawPosition - (container.clientHeight * TIME_FOCUS_RATIO) + (HOUR_HEIGHT / 2)
+    const maxScroll = Math.max(0, container.scrollHeight - container.clientHeight)
+    container.scrollTop = Math.max(0, Math.min(centeredPosition, maxScroll))
+  }, [])
+
+  useEffect(() => {
+    // run after paint so heights are settled
+    const raf = requestAnimationFrame(() => {
+      scrollToCurrentTime()
+      // second pass to catch late layout shifts
+      requestAnimationFrame(scrollToCurrentTime)
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [scrollToCurrentTime, view, currentDate])
   
   // Set up current time indicator
   useEffect(() => {
@@ -151,7 +179,7 @@ const DailyView = () => {
   }
 
   // Handle dropping an existing event onto a specific hour cell (preserve duration)
-  const handleEventDrop = (e, hour) => {
+  const handleEventDrop = (e, hour, hourCellElement = null) => {
     e.preventDefault();
     e.stopPropagation();
 
@@ -169,9 +197,10 @@ const DailyView = () => {
         : rawDurationMs;
 
       // Minute precision based on cursor position in the hour cell
-      const rect = e.currentTarget.getBoundingClientRect();
-      const relativeY = e.clientY - rect.top;
-      const minutePercentage = Math.min(1, Math.max(0, (relativeY % HOUR_HEIGHT) / HOUR_HEIGHT));
+      const cellElement = hourCellElement || e.currentTarget;
+      const rect = cellElement.getBoundingClientRect();
+      const relativeY = Math.min(rect.height, Math.max(0, e.clientY - rect.top));
+      const minutePercentage = rect.height ? relativeY / rect.height : 0;
       const minutes = Math.floor(minutePercentage * 60);
       const { hour: snappedHour, minutes: snappedMinutes } = snapHourMinutePair(hour, minutes);
 
@@ -191,6 +220,107 @@ const DailyView = () => {
     }
 
     clearEventDragPreview();
+    clearTodoDragPreview();
+  };
+
+  // Track pending todo drop to prevent duplicate conversions
+  const pendingTodoConversionRef = useRef(null);
+
+  // Handle todo drop on hour cell
+  const handleTodoDropOnHourCell = async (e, hour, _hourCellElement = null) => {
+    if (!document.body.classList.contains('task-dragging')) return;
+    
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (pendingTodoConversionRef.current) return;
+    
+    const draggedTodoMeta = getDraggedTodoMeta();
+    if (!draggedTodoMeta) return;
+    
+    const taskId = draggedTodoMeta.taskId;
+    if (!taskId) return;
+    
+    pendingTodoConversionRef.current = taskId;
+    const { start: startDate, end: endDate } = buildHourlyRange(currentDate, hour);
+    
+    try {
+      await convertTodoToEvent(taskId, startDate, endDate, false);
+      clearTodoDragPreview();
+      cleanupDragArtifacts();
+    } catch (error) {
+      console.error('Failed to convert todo to event:', error);
+    } finally {
+      setTimeout(() => {
+        pendingTodoConversionRef.current = null;
+      }, 500);
+    }
+  };
+
+  // Combined drop handler for hour cells
+  const handleCombinedDropOnHourCell = async (e, hour, hourCellElement = null) => {
+    if (document.body.classList.contains('task-dragging')) {
+      await handleTodoDropOnHourCell(e, hour, hourCellElement);
+    } else {
+      handleEventDrop(e, hour, hourCellElement);
+    }
+  };
+
+  // Handle todo drop on all-day section
+  const handleTodoDropOnAllDay = async (e) => {
+    if (!document.body.classList.contains('task-dragging')) return;
+    
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (pendingTodoConversionRef.current) return;
+    
+    const draggedTodoMeta = getDraggedTodoMeta();
+    if (!draggedTodoMeta) return;
+    
+    const taskId = draggedTodoMeta.taskId;
+    if (!taskId) return;
+    
+    pendingTodoConversionRef.current = taskId;
+    
+    const startDate = new Date(currentDate);
+    startDate.setHours(0, 0, 0, 0);
+    const endDate = addDays(startDate, 1);
+    
+    try {
+      await convertTodoToEvent(taskId, startDate, endDate, true);
+      clearTodoDragPreview();
+      cleanupDragArtifacts();
+    } catch (error) {
+      console.error('Failed to convert todo to event:', error);
+    } finally {
+      setTimeout(() => {
+        pendingTodoConversionRef.current = null;
+      }, 500);
+    }
+  };
+
+  // Handle todo drag over hour cells for preview
+  const handleHourCellTodoDragOver = (e, hour) => {
+    if (document.body.classList.contains('task-dragging')) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      const { start, end } = buildHourlyRange(currentDate, hour)
+      setTodoDropPreview(start, end, false);
+    }
+  };
+
+  // Handle todo drag over all-day section for preview
+  const handleAllDayTodoDragOver = (e) => {
+    if (document.body.classList.contains('task-dragging')) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      
+      const startDate = new Date(currentDate);
+      startDate.setHours(0, 0, 0, 0);
+      const endDate = addDays(startDate, 1);
+      setTodoDropPreview(startDate, endDate, true);
+    }
   };
 
   const setDropTarget = (cell) => {
@@ -263,7 +393,38 @@ const DailyView = () => {
   };
   const resetPreviewIfNoTarget = () => {
     clearEventDragPreview();
+    document.body.classList.remove('calendar-drag-focus');
+    // Remove any lingering drag artifacts so the cursor resets
+    queueMicrotask(() => {
+      ['.sortable-ghost', '.task-ghost', '.sortable-drag', '.task-drag'].forEach(sel => {
+        document.querySelectorAll(sel).forEach(el => {
+          if (!el.closest('.task-list')) {
+            el.parentNode?.removeChild(el)
+          }
+        })
+      })
+    })
   };
+
+  const getDraggedTodoMeta = useCallback(() => {
+    if (typeof window === 'undefined') return null
+    return window.__chronosDraggedTodoMeta || null
+  }, [])
+
+  const clearTodoDragPreview = useCallback(() => {
+    setTodoDragPreview(null)
+  }, [])
+
+  const setTodoDropPreview = useCallback((startDate, endDate, isAllDay = false) => {
+    const meta = getDraggedTodoMeta()
+    setTodoDragPreview({
+      start: startDate,
+      end: endDate,
+      isAllDay,
+      title: meta?.title || 'New task',
+      color: meta?.color || '#a78bfa'
+    })
+  }, [getDraggedTodoMeta])
 
   const cancelDragCreatePreview = useCallback(() => {
     setIsDragging(false);
@@ -299,6 +460,12 @@ const DailyView = () => {
   const handleHourCellDragOver = (e, hour) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
+    const isTodoDrag = document.body.classList.contains('task-dragging')
+    if (isTodoDrag) {
+      document.body.classList.add('calendar-drag-focus')
+      const { start, end } = buildHourlyRange(currentDate, hour)
+      setTodoDropPreview(start, end, false)
+    }
     updateEventDragPreview(e, e.currentTarget, hour);
   };
   const handleAllDayDragOver = (e) => {
@@ -306,10 +473,19 @@ const DailyView = () => {
     e.dataTransfer.dropEffect = 'move';
     clearDropTarget();
     clearEventDragPreview();
+
+    if (document.body.classList.contains('task-dragging')) {
+      document.body.classList.add('calendar-drag-focus')
+      const startDate = new Date(currentDate)
+      startDate.setHours(0, 0, 0, 0)
+      const endDate = addDays(startDate, 1)
+      setTodoDropPreview(startDate, endDate, true)
+    }
   };
 
   const handleDragLeave = () => {
     resetPreviewIfNoTarget();
+    clearTodoDragPreview();
   };
 
   const handleAllDayEventDrop = (e) => {
@@ -348,13 +524,28 @@ const DailyView = () => {
     }
 
     clearEventDragPreview();
+    document.body.classList.remove('calendar-drag-focus');
+    queueMicrotask(() => {
+      ['.sortable-ghost', '.task-ghost', '.sortable-drag', '.task-drag'].forEach(sel => {
+        document.querySelectorAll(sel).forEach(el => {
+          if (!el.closest('.task-list')) {
+            el.parentNode?.removeChild(el)
+          }
+        })
+      })
+    })
   };
 
   const handleCellMouseDown = (e, hour) => {
     if (e.button !== 0) return
     
-    // Don't start drag-to-create if an event is being resized
+    // Don't start drag-to-create if an event is being resized or if a todo drag is in progress
     if (isEventResizeActiveRef.current || (typeof window !== 'undefined' && window.__chronosEventResizing)) {
+      return
+    }
+    
+    // Don't start drag-to-create if a todo drag is in progress
+    if (document.body.classList.contains('task-dragging')) {
       return
     }
     
@@ -382,6 +573,11 @@ const DailyView = () => {
     
     // Don't continue drag-to-create if an event is being resized
     if (isEventResizeActiveRef.current || (typeof window !== 'undefined' && window.__chronosEventResizing)) {
+      return
+    }
+    
+    // Don't continue drag-to-create if a todo drag is in progress
+    if (document.body.classList.contains('task-dragging')) {
       return
     }
     
@@ -550,175 +746,28 @@ const DailyView = () => {
     />
   );
   
-  useEffect(() => {
-    const hourCells = document.querySelectorAll('.day-hour-cell');
-    const sortableInstances = [];
-    
-    hourCells.forEach(cell => {
-      const sortable = Sortable.create(cell, {
-        group: {
-          name: 'tasks',
-          pull: false,
-          put: true
-        },
-        animation: 150,
-        ghostClass: 'sortable-ghost',
-        dragClass: 'sortable-drag-active',
-        dragoverClass: 'sortable-dragover',
-        draggable: '.task-item',
-        onStart: function() {
-          document.body.classList.add('task-dragging');
-        },
-        onEnd: function() {
-          document.body.classList.remove('task-dragging');
-          document.querySelectorAll('.sortable-dragover').forEach(el => {
-            el.classList.remove('sortable-dragover');
-          });
-          queueMicrotask(() => {
-            try {
-              document.querySelectorAll('.sortable-ghost, .task-ghost').forEach(el => {
-                if (el && el.parentNode && !el.closest('.task-list')) {
-                  el.parentNode.removeChild(el)
-                }
-              })
-            } catch (_) {}
-          })
-        },
-        onAdd: async function(evt) {
-          if (evt.pullMode && evt.pullMode !== 'clone') {
-            return
-          }
-          if (evt.item?.dataset?.converted === 'true') {
-            return
-          }
-          if (evt.item) {
-            evt.item.dataset.converted = 'true'
-          }
-          const taskId = evt.item.getAttribute('data-task-id') || evt.item.getAttribute('data-id');
-          const hour = parseInt(evt.to.getAttribute('data-hour'), 10);
-          
-          // Remove the CLONE safely - defer to avoid conflicts with React
-          setTimeout(() => {
-            try {
-              if (evt.item && evt.item.parentNode) {
-                evt.item.parentNode.removeChild(evt.item);
-              }
-            } catch (e) {
-              // Ignore - React may have already removed it
-            }
-          }, 0);
-          if (evt.clone && evt.clone.parentNode) {
-            evt.clone.parentNode.removeChild(evt.clone)
-          }
-          
-          if (taskId && !isNaN(hour)) {
-            const startDate = new Date(currentDate);
-            startDate.setHours(hour, 0, 0, 0);
-            
-            const endDate = new Date(startDate);
-            endDate.setHours(hour + 1, 0, 0, 0);
-            
-            try {
-              await convertTodoToEvent(taskId, startDate, endDate, false);
-            } catch (error) {
-              console.error('Failed to convert todo to event:', error);
-            }
-          }
-        },
-        sort: false
-      });
-      
-      sortableInstances.push(sortable);
-    });
-    
-    return () => {
-      sortableInstances.forEach(sortable => {
-        if (sortable && sortable.destroy) sortable.destroy();
-      });
-    };
-  }, [currentDate, convertTodoToEvent]);
-  
-  useEffect(() => {
-    const allDaySection = document.querySelector('.day-all-day-section');
-    if (!allDaySection) return;
-    
-    const sortable = Sortable.create(allDaySection, {
-      group: {
-        name: 'tasks',
-        pull: false,
-        put: true
-      },
-      animation: 150,
-      ghostClass: 'sortable-ghost',
-      dragClass: 'sortable-drag-active',
-      draggable: '.task-item',
-      onStart: function() {
-        document.body.classList.add('task-dragging');
-      },
-      onEnd: function() {
-        document.body.classList.remove('task-dragging');
-        queueMicrotask(() => {
-          try {
-            document.querySelectorAll('.sortable-ghost, .task-ghost').forEach(el => {
-              if (el && el.parentNode && !el.closest('.task-list')) {
-                el.parentNode.removeChild(el)
-              }
-            })
-          } catch (_) {}
-        })
-      },
-      onAdd: async function(evt) {
-        if (evt.pullMode && evt.pullMode !== 'clone') {
-          return
-        }
-        if (evt.item?.dataset?.converted === 'true') {
-          return
-        }
-        if (evt.item) {
-          evt.item.dataset.converted = 'true'
-        }
-        const taskId = evt.item.getAttribute('data-task-id') || evt.item.getAttribute('data-id');
-        
-        // Remove the CLONE safely - defer to avoid conflicts with React
-        setTimeout(() => {
-          try {
-            if (evt.item && evt.item.parentNode) {
-              evt.item.parentNode.removeChild(evt.item);
-            }
-          } catch (e) {
-            // Ignore - React may have already removed it
-          }
-        }, 0);
-        if (evt.clone && evt.clone.parentNode) {
-          evt.clone.parentNode.removeChild(evt.clone)
-        }
-        
-        if (taskId) {
-          const startDate = new Date(currentDate);
-          startDate.setHours(0, 0, 0, 0);
-          
-          const endDate = addDays(startDate, 1);
-          
-          try {
-            await convertTodoToEvent(taskId, startDate, endDate, true);
-          } catch (error) {
-            console.error('Failed to convert todo to event:', error);
-          }
-        }
-      },
-      sort: false
-    });
-    
-    return () => {
-      if (sortable && sortable.destroy) sortable.destroy();
-    };
-  }, [currentDate, convertTodoToEvent]);
+
   
   return (
     <div 
-      ref={containerRef}
       className="view-container flex flex-col h-full"
       onWheel={handleWheel}
+      onDragEnter={() => {
+        if (document.body.classList.contains('task-dragging')) {
+          document.body.classList.add('calendar-drag-focus')
+        }
+      }}
+      onDragOver={() => {
+        if (document.body.classList.contains('task-dragging')) {
+          document.body.classList.add('calendar-drag-focus')
+        }
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget)) {
+          document.body.classList.remove('calendar-drag-focus')
+          clearTodoDragPreview()
+        }
+      }}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
@@ -741,11 +790,43 @@ const DailyView = () => {
                 minHeight: `${requiredHeight}px`,
                 height: `${requiredHeight}px`
               }}
-              onDrop={handleAllDayEventDrop}
-              onDragOver={handleAllDayDragOver}
+              onDrop={async (e) => {
+                if (document.body.classList.contains('task-dragging')) {
+                  await handleTodoDropOnAllDay(e);
+                } else {
+                  handleAllDayEventDrop(e);
+                }
+              }}
+              onDragOver={(e) => {
+                handleAllDayDragOver(e);
+                handleAllDayTodoDragOver(e);
+              }}
               onDragLeave={handleDragLeave}
             >
               {allDayEvents.map(event => renderAllDayEvent(event))}
+              {todoDragPreview?.isAllDay && (() => {
+                const colors = getEventColors(todoDragPreview.color || 'blue')
+                return (
+                  <div
+                    className="flex items-center gap-2 rounded-md px-2 py-1 text-xs font-medium pointer-events-none"
+                    style={{
+                      backgroundColor: colors.background,
+                      border: `1px dashed ${colors.border}`,
+                      color: colors.text,
+                      opacity: 0.9
+                    }}
+                  >
+                    <div
+                      className="h-3 w-1 rounded-full"
+                      style={{ backgroundColor: colors.border }}
+                    />
+                    <span className="truncate">{todoDragPreview.title}</span>
+                    <span className="text-[11px] text-slate-600">
+                      All day
+                    </span>
+                  </div>
+                )
+              })()}
               {allDayEvents.length === 0 && (
                 <div className="text-xs text-gray-400 italic">Drop tasks here for all-day events</div>
               )}
@@ -754,13 +835,17 @@ const DailyView = () => {
         );
       })()}
       
-      <div className="relative flex flex-1 overflow-y-auto min-h-0">
+      <div
+        ref={scrollContainerRef}
+        className="relative flex flex-1 overflow-y-auto min-h-0"
+      >
         {/* Time labels */}
         <div className="w-16 flex-shrink-0 relative z-10 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700" style={{ height: `${(DAY_END_HOUR - DAY_START_HOUR + 1) * HOUR_HEIGHT}px`, minHeight: `${(DAY_END_HOUR - DAY_START_HOUR + 1) * HOUR_HEIGHT}px` }}>
           {hours.map((hour) => (
             <div 
               key={hour} 
-              className="h-[60px] relative"
+              className="relative"
+              style={{ height: `${HOUR_HEIGHT}px` }}
             >
               <span className="absolute left-2 text-xs text-gray-500" style={{ top: hour === 0 ? '4px' : '-10px' }}>
                 {hour === 0 ? '12 AM' : hour < 12 ? `${hour} AM` : hour === 12 ? '12 PM' : `${hour - 12} PM`}
@@ -797,7 +882,7 @@ const DailyView = () => {
             style={{ height: `${(DAY_END_HOUR - DAY_START_HOUR + 1) * HOUR_HEIGHT}px`, minHeight: `${(DAY_END_HOUR - DAY_START_HOUR + 1) * HOUR_HEIGHT}px` }}
             onDragOver={(e) => {
               e.preventDefault()
-              e.dataTransfer.dropEffect = 'move'
+              e.dataTransfer.dropEffect = document.body.classList.contains('task-dragging') ? 'copy' : 'move'
               
               const elements = document.elementsFromPoint(e.clientX, e.clientY)
               const hourCell = elements.find(el => el.classList.contains('day-hour-cell'))
@@ -806,10 +891,11 @@ const DailyView = () => {
                 const hour = parseInt(hourCell.getAttribute('data-hour'), 10)
                 if (!isNaN(hour)) {
                   updateEventDragPreview(e, hourCell, hour)
+                  handleHourCellTodoDragOver(e, hour)
                 }
               }
             }}
-            onDrop={(e) => {
+            onDrop={async (e) => {
               e.preventDefault()
               e.stopPropagation()
               
@@ -819,11 +905,13 @@ const DailyView = () => {
               if (hourCell) {
                 const hour = parseInt(hourCell.getAttribute('data-hour'), 10)
                 if (!isNaN(hour)) {
-                  handleEventDrop(e, hour)
+                  await handleCombinedDropOnHourCell(e, hour)
                 }
               }
               
               clearEventDragPreview()
+              clearTodoDragPreview()
+              cleanupDragArtifacts()
             }}
           >
             {/* Hour cells for drag-to-drop and drag-to-create */}
@@ -839,9 +927,20 @@ const DailyView = () => {
                 onMouseDown={(e) => handleCellMouseDown(e, hour)}
                 onMouseMove={(e) => handleCellMouseMove(e, hour)}
                 onDoubleClick={(e) => handleCellDoubleClick(e, hour)}
-                onDrop={(e) => handleEventDrop(e, hour)}
-                onDragOver={(e) => handleHourCellDragOver(e, hour)}
-                onDragLeave={handleDragLeave}
+                onDrop={(e) => handleCombinedDropOnHourCell(e, hour, e.currentTarget)}
+                onDragOver={(e) => {
+                  handleHourCellDragOver(e, hour);
+                  handleHourCellTodoDragOver(e, hour);
+                }}
+                onDragLeave={(e) => {
+                  handleDragLeave(e);
+                  if (document.body.classList.contains('task-dragging')) {
+                    const relatedTarget = e.relatedTarget;
+                    if (!relatedTarget || !relatedTarget.closest('.day-hour-cell')) {
+                      clearTodoDragPreview();
+                    }
+                  }
+                }}
               />
             ))}
             
@@ -869,6 +968,49 @@ const DailyView = () => {
                 position={{ column, columns, gap: TIMED_EVENT_GAP }}
               />
             ))}
+
+            {/* Preview while dragging a todo onto an hour cell */}
+            {todoDragPreview && !todoDragPreview.isAllDay && (() => {
+              const previewStart = todoDragPreview.start
+              const previewEnd = todoDragPreview.end
+              const colors = getEventColors(todoDragPreview.color || 'blue')
+              const previewTop = (previewStart.getHours() - DAY_START_HOUR) * HOUR_HEIGHT + (previewStart.getMinutes() / 60) * HOUR_HEIGHT
+              const previewDuration = Math.max(5, differenceInMinutes(previewEnd, previewStart))
+              const previewHeight = (previewDuration / 60) * HOUR_HEIGHT
+              
+              return (
+                <div
+                  className="absolute rounded-lg p-1 overflow-hidden text-sm pointer-events-none shadow-sm"
+                  style={{
+                    top: `${previewTop}px`,
+                    minHeight: `${previewHeight}px`,
+                    left: '4px',
+                    right: '4px',
+                    backgroundColor: colors.background,
+                    opacity: 1,
+                    boxShadow: '0 0 0 1px rgba(148, 163, 184, 0.5)',
+                    zIndex: 9997
+                  }}
+                >
+                  <div 
+                    className="absolute top-0 bottom-0 w-1 rounded-full pointer-events-none" 
+                    style={{ 
+                      left: '2px',
+                      backgroundColor: colors.border,
+                      zIndex: 3
+                    }}
+                  />
+                  <div className="ml-3">
+                    <div className="font-medium text-xs truncate" style={{ color: colors.text }}>
+                      {todoDragPreview.title}
+                    </div>
+                    <div className="text-xs" style={{ color: 'rgba(55, 65, 81, 0.75)' }}>
+                      {format(previewStart, 'h:mm a')} - {format(previewEnd, 'h:mm a')}
+                    </div>
+                  </div>
+                </div>
+              )
+            })()}
             
             {/* Ghost preview showing where dragged event will be placed */}
             {dragPreviewEvent && (() => {
