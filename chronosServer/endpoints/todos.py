@@ -63,10 +63,19 @@ async def get_todos(
 ) -> JSONResponse:
     
     try:
-        result = (
+        # Get both todos and categories in parallel
+        todos_result = (
             supabase.table("todos")
             .select("*")
             .eq("user_id", str(user.id))
+            .order("created_at", desc=False)
+            .execute()
+        )
+        categories_result = (
+            supabase.table("categories")
+            .select("*")
+            .eq("user_id", str(user.id))
+            .order("order", desc=False)
             .execute()
         )
     except Exception as e:
@@ -79,19 +88,11 @@ async def get_todos(
             )
         raise
     
-    if not result.data:
-        return JSONResponse(
-            status_code=status.HTTP_200_OK,
-            content={
-                "message": "No todos found",
-                "data": []
-            }
-        )
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content={
-            "message": "Todos fetched successfully",
-            "data": result.data
+            "todos": todos_result.data or [],
+            "categories": categories_result.data or []
         },
     )
 
@@ -100,21 +101,21 @@ async def bootstrap_todos(
     supabase: Client = Depends(get_supabase_client),
     user: User = Depends(get_current_user)
 ) -> JSONResponse:
-    user_id = str(user.id)
+    """
+    Returns todos and categories for initial hydration.
+    """
     try:
-        # Execute queries sequentially but efficiently - Supabase client handles connection pooling
-        # The database indices will make these queries fast
         todos_result = (
             supabase.table("todos")
             .select("*")
-            .eq("user_id", user_id)
+            .eq("user_id", str(user.id))
             .order("created_at", desc=False)
             .execute()
         )
         categories_result = (
             supabase.table("categories")
             .select("*")
-            .eq("user_id", user_id)
+            .eq("user_id", str(user.id))
             .order("order", desc=False)
             .execute()
         )
@@ -131,10 +132,9 @@ async def bootstrap_todos(
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content={
-            "message": "Todos bootstrap fetched successfully",
             "todos": todos_result.data or [],
             "categories": categories_result.data or []
-        }
+        },
     )
 @router.put("/{todo_id}")
 async def edit_todo(
@@ -207,18 +207,28 @@ async def delete_todo(
     user: User = Depends(get_current_user)
 ) -> JSONResponse:
     
-    result = (
+    # First, delete any todo-event links for this todo
+    try:
+        supabase.table("todo_event_links").delete().eq("user_id", str(user.id)).eq("todo_id", todo_id).execute()
+    except Exception:
+        pass  # Ignore errors - link may not exist
+    
+    # First check if the todo exists
+    check_result = (
         supabase.table("todos")
-        .delete()
+        .select("id")
         .eq("id", todo_id)
         .eq("user_id", str(user.id))
         .execute()
     )
-    if not result.data:
+    if not check_result.data:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Todo not found or is not yours"
         )
+    
+    # Now delete it
+    supabase.table("todos").delete().eq("id", todo_id).eq("user_id", str(user.id)).execute()
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content={
@@ -477,7 +487,6 @@ async def convert_todo_to_event(
         
         event_data = {
             "summary": todo.get("content", "Untitled Event"),
-            "description": f"Converted from todo in Chronos: {todo.get('content', '')}",
         }
 
         extended_props = event_data.get("extendedProperties", {}) or {}
@@ -490,32 +499,26 @@ async def convert_todo_to_event(
         if category_color:
             private_props["categoryColor"] = category_color
 
-            # Map hex color to Google Calendar colorId for better display in Google Calendar
-            # Google Calendar supports colorIds 1-11
             color_mapping = {
-                "#3478F6": "9",  # Blue
-                "#FF9500": "6",  # Orange
-                "#34C759": "10", # Green
-                "#FF3B30": "11", # Red
-                "#AF52DE": "3",  # Purple/Lavender
-                "#00C7BE": "7",  # Turquoise
-                "#FFCC00": "5",  # Yellow
-                "#FF2D55": "4",  # Pink
+                "#3478F6": "9",
+                "#FF9500": "6",
+                "#34C759": "10",
+                "#FF3B30": "11",
+                "#AF52DE": "3",
+                "#00C7BE": "7",
+                "#FFCC00": "5",
+                "#FF2D55": "4",
             }
 
-            # Find closest colorId if exact match not found
             if category_color in color_mapping:
                 event_data["colorId"] = color_mapping[category_color]
             elif category_color.startswith('#'):
-                # Default to blue if no mapping found
                 event_data["colorId"] = "9"
 
         extended_props["private"] = private_props
         event_data["extendedProperties"] = extended_props
         
-        # Handle all-day vs timed events
         if is_all_day:
-            # For all-day events, use date format (not dateTime)
             from datetime import datetime
             start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
             end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
@@ -527,14 +530,11 @@ async def convert_todo_to_event(
                 "date": end_dt.strftime("%Y-%m-%d")
             }
         else:
-            # For timed events, use dateTime format
             event_data["start"] = {
-                "dateTime": start_date,
-                "timeZone": "America/Los_Angeles"  # You may want to make this configurable
+                "dateTime": start_date
             }
             event_data["end"] = {
-                "dateTime": end_date,
-                "timeZone": "America/Los_Angeles"
+                "dateTime": end_date
             }
         
         created_event = service.create_event("primary", event_data)
@@ -552,12 +552,46 @@ async def convert_todo_to_event(
         try:
             supabase.table("todos").update({
                 "date": start_date,
-                "google_event_id": created_event.get("id")
+                "google_event_id": created_event.get("id"),
+                "scheduled_date": start_date,
+                "scheduled_at": start_date,
+                "scheduled_end": end_date,
+                "scheduled_is_all_day": is_all_day
             }).eq("id", todo_id).eq("user_id", str(user.id)).execute()
         except Exception as update_error:
             import logging
             logging.getLogger(__name__).warning(
                 "Failed to persist scheduled date for todo %s: %s", todo_id, update_error
+            )
+        
+        # Create todo-event link in the database
+        try:
+            created_event_id = created_event.get("id")
+
+            def _is_uuid(value) -> bool:
+                try:
+                    UUID(str(value))
+                    return True
+                except Exception:
+                    return False
+
+            link_payload = {
+                "user_id": str(user.id),
+                "todo_id": str(todo_id),
+                "google_event_id": created_event_id
+            }
+
+            if created_event_id and _is_uuid(created_event_id):
+                link_payload["event_id"] = str(created_event_id)
+
+            supabase.table("todo_event_links").upsert(
+                link_payload,
+                on_conflict="user_id,todo_id"
+            ).execute()
+        except Exception as link_error:
+            import logging
+            logging.getLogger(__name__).warning(
+                "Failed to create todo-event link for todo %s: %s", todo_id, link_error
             )
         
         return JSONResponse(

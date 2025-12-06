@@ -1,17 +1,18 @@
 import { useEffect, useState, useRef } from 'react'
 import Header from './components/Header'
 import SplitView from './components/SplitView'
-import MonthlyView from './components/calendar/MonthlyView'
-import WeeklyView from './components/calendar/WeeklyView'
-import DailyView from './components/calendar/DailyView'
-import Sidebar from './components/todo/sidebar/Sidebar'
+import MonthView from './components/calendar/MonthView'
+import WeeklyView from './components/calendar/WeekView'
+import DayView from './components/calendar/DayView'
+import Sidebar from './components/todo/Sidebar'
 import FloatingChatBar from './components/FloatingChatBar'
-import { useTaskContext } from './context/TaskContext'
+import TodoDragOverlay from './components/TodoDragOverlay'
+import { useTaskContext } from './context/TaskContext/context'
 import { useAuth } from './context/AuthContext'
-import CategoryTabs from './components/todo/sidebar/CategoryTabs'
-import EventModal from './components/events/EventModal'
+import CategoryTabs from './components/todo/CategoryTabs'
+import EventModal from './components/events/EventModal/EventModal'
 
-import { useCalendar } from './context/CalendarContext'
+import { useCalendar } from './context/CalendarContext/CalendarContext'
 import './components/header.css'
 
 // Toast notification component
@@ -96,9 +97,11 @@ function AppContent() {
   // Listen for event deletion to show toast
   useEffect(() => {
     const handleEventDeleted = (e) => {
-      const message = e.detail?.message || 'Deleted event'
-      
-      if (message === 'Deleted event') {
+      const message = e.detail?.message || 'Deleted Event'
+      const normalizedMessage = String(message).toLowerCase()
+      const isDeletion = normalizedMessage === 'deleted event'
+
+      if (isDeletion) {
         // Clear previous timer if it exists
         if (deletionTimerRef.current) {
           clearTimeout(deletionTimerRef.current)
@@ -106,7 +109,7 @@ function AppContent() {
         
         // Increment counter and update toast
         deletionCountRef.current += 1
-        setToastMessage(`Deleted event (${deletionCountRef.current})`)
+        setToastMessage(`Deleted Event (${deletionCountRef.current})`)
         setToastVisible(true)
         
         // Reset counter after 5 seconds of no deletions
@@ -200,13 +203,13 @@ function AppContent() {
   const renderCalendarView = () => {
     switch (view) {
       case 'month':
-        return <MonthlyView />
+        return <MonthView />
       case 'week':
         return <WeeklyView />
       case 'day':
-        return <DailyView />
+        return <DayView />
       default:
-        return <MonthlyView />
+        return <MonthView />
     }
   }
 
@@ -276,6 +279,7 @@ function AppContent() {
         onToggleSidebar={toggleSidebar}
         onSidebarWidthChange={handleSidebarChange}
       />
+      <TodoDragOverlay />
       {showEventModal && <EventModal />}
       {!showEventModal && <FloatingChatBar />}
       <Toast 

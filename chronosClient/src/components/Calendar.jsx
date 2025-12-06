@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback, useLayoutEffe
 import CalendarHeader from './shared/CalendarHeader';
 import WeekdayHeader from './shared/WeekdayHeader';
 import CalendarWeek from './weekly/CalendarWeek';
-import { useTaskContext } from '../context/TaskContext';
+import { useTaskContext } from '../context/TaskContext/context';
 import { WeekView } from '../../ui-experiments/apps/experiment-06/components/event-calendar/week-view';
 import './Calendar.css';
 
@@ -55,21 +55,16 @@ const Calendar = () => {
     endDate: addWeeks(todayWeekStart, BUFFER_WEEKS)
   });
   
-  // Current month to display in header - initialize with today's month
   const [currentDisplayMonth, setCurrentDisplayMonth] = useState(
     today.toLocaleString('default', { month: 'long', year: 'numeric' })
   );
   
-  // Ref for the scrollable container
   const contentRef = useRef(null);
   
-  // Track scroll position to detect direction
   const lastScrollTopRef = useRef(0);
   
-  // Track if we're currently updating the DOM to prevent scroll jumps
   const isUpdatingRef = useRef(false);
   
-  // Get events from context
   const { events, addTaskToCalendar } = useTaskContext();
   
   // Initialize calendar with current date centered and scroll directly to today
@@ -310,7 +305,7 @@ const Calendar = () => {
   };
 
   return (
-    <div className="calendar-container" style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
+    <div className="flex flex-col h-screen">
       <CalendarHeader 
         currentMonth={currentDisplayMonth} 
         onPrevMonth={handlePrevMonth}

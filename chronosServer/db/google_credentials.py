@@ -1,12 +1,18 @@
 import logging
+import socket
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 from supabase import Client
 from fastapi import HTTPException, status
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from google.auth.transport.requests import Request as GoogleRequest
+import httplib2
 from config import settings
+
+# Set default socket timeout for Google API calls
+socket.setdefaulttimeout(30)
 
 logger = logging.getLogger(__name__)
 SCOPES = [
@@ -86,11 +92,13 @@ def _resolve_event_meeting_location(event: dict, fallback: str = '') -> str:
 
 
 class GoogleCalendarService:
-    def __init__(self, user_id: str, supabase: Client):
+    def __init__(self, user_id: str, supabase: Client, provider_account_id: Optional[str] = None):
         self.user_id = user_id
         self.supabase = supabase
+        self.provider_account_id = provider_account_id
         self.credentials = None
         self.service = None
+        self._resolved_account_id = None
     
     def _append_conference_data_version(self, request):
         """
@@ -110,7 +118,7 @@ class GoogleCalendarService:
             logger.debug("Unable to append conferenceDataVersion: %s", exc)
         return request
     
-    def _execute_with_retry(self, action, description: str, retries: int = 2):
+    def _execute_with_retry(self, action, description: str, retries: int = 3):
         last_error = None
         for attempt in range(1, retries + 1):
             try:
@@ -118,6 +126,20 @@ class GoogleCalendarService:
                 return action(service)
             except HttpError:
                 raise
+            except (socket.timeout, TimeoutError, OSError) as exc:
+                last_error = exc
+                logger.warning(
+                    "Timeout during %s (attempt %s/%s): %s",
+                    description,
+                    attempt,
+                    retries,
+                    exc
+                )
+                # Reset service so next attempt builds a fresh HTTP connection
+                self.service = None
+                if attempt < retries:
+                    import time
+                    time.sleep(1)  # Brief delay before retry
             except Exception as exc:
                 last_error = exc
                 logger.warning(
@@ -138,12 +160,17 @@ class GoogleCalendarService:
     def get_credentials(self) -> Credentials:
         if self.credentials is None:
             try:
-                result = (
-                    self.supabase.table("google_credentials")
+                query = (
+                    self.supabase.table("calendar_accounts")
                     .select("*")
                     .eq("user_id", self.user_id)
-                    .execute()
+                    .eq("provider", "google")
                 )
+                
+                if self.provider_account_id:
+                    query = query.eq("provider_account_id", self.provider_account_id)
+                
+                result = query.execute()
             except Exception as e:
                 error_msg = str(e)
                 if "JWT expired" in error_msg or "PGRST303" in error_msg:
@@ -161,10 +188,11 @@ class GoogleCalendarService:
                 )
             
             record = result.data[0]
+            self._resolved_account_id = record.get("provider_account_id")
             expiry_value = record.get("expires_at")
             parsed_expiry = _parse_iso_datetime(expiry_value)
 
-            scopes = record.get("scopes")
+            scopes = record.get("scopes", [])
             if isinstance(scopes, str):
                 scopes = [scope.strip() for scope in scopes.split(',') if scope.strip()]
             if not scopes:
@@ -206,10 +234,22 @@ class GoogleCalendarService:
                     detail="Google session expired. Please reconnect."
                 )
             creds.expiry = _as_naive_utc(creds.expiry)
-            self.supabase.table("google_credentials").update({
-                "access_token": creds.token,
-                "expires_at": _isoformat_utc(creds.expiry)
-            }).eq("user_id", self.user_id).execute()
+            
+            update_query = (
+                self.supabase.table("calendar_accounts")
+                .update({
+                    "access_token": creds.token,
+                    "expires_at": _isoformat_utc(creds.expiry)
+                })
+                .eq("user_id", self.user_id)
+                .eq("provider", "google")
+            )
+            
+            account_id = self.provider_account_id or self._resolved_account_id
+            if account_id:
+                update_query = update_query.eq("provider_account_id", account_id)
+            
+            update_query.execute()
     
     def get_service(self):
         self.refresh_token_if_needed()
@@ -355,11 +395,6 @@ class GoogleCalendarService:
             if event_data.get("conferenceData"):
                 params["conferenceDataVersion"] = 1
             created_event = service.events().insert(**params).execute()
-            logger.info(f"Created event with ID: {created_event.get('id')}")
-            logger.info(f"Event has hangoutLink: {created_event.get('hangoutLink')}")
-            logger.info(f"Event has conferenceData: {bool(created_event.get('conferenceData'))}")
-            if created_event.get('conferenceData'):
-                logger.info(f"conferenceData keys: {list(created_event['conferenceData'].keys())}")
             return created_event
         except HttpError as error:
             error_details = error.error_details if hasattr(error, 'error_details') else str(error)
@@ -385,6 +420,15 @@ class GoogleCalendarService:
                     event_data.pop('recurrenceRule', None)
                     event_data.pop('recurrenceMeta', None)
                     event_data.pop('recurrenceSummary', None)
+                    # Also remove any recurrence metadata tucked into extendedProperties.private
+                    try:
+                        priv = event_data.get('extendedProperties', {}).get('private', {})
+                        if isinstance(priv, dict):
+                            priv.pop('recurrenceRule', None)
+                            priv.pop('recurrenceMeta', None)
+                            priv.pop('recurrenceSummary', None)
+                    except Exception:
+                        pass
                     
                 elif recurring_edit_scope == 'future':
                     # Best-effort: update the master recurring event so all future

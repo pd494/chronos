@@ -202,7 +202,8 @@ export const todosApi = {
   },
 
   async getBootstrap(){
-    return get('/todos/bootstrap')
+    // Bootstrap via standard todos GET (returns todos + categories)
+    return get('/todos/')
   },
 
   async batchReorderCategories(updates){
@@ -279,6 +280,9 @@ function toGoogleEventBody(eventData) {
       ...privateProps
     }
   }
+  if (eventData.recurrenceEditScope || eventData.recurringEditScope) {
+    body.recurringEditScope = eventData.recurrenceEditScope || eventData.recurringEditScope
+  }
 
   // Start/end boundaries
   const tz = 'America/Los_Angeles'
@@ -333,6 +337,56 @@ export const calendarApi = {
       params.append('calendar_ids', calendarIds.join(','))
     }
     return get(`/calendar/events?${params.toString()}`)
+  }, 
+
+  async getEventUserState(){
+    return get('/calendar/event-user-state')
+  },
+
+  async updateEventUserState(eventId, isCheckedOff = false, timeOverrides = null){
+    return postJson('/calendar/event-user-state', {
+      event_id: eventId,
+      is_checked_off: isCheckedOff,
+      time_overrides: timeOverrides
+    })
+  },
+
+  async batchUpdateEventUserState(updates){
+    return postJson('/calendar/event-user-state/batch', {
+      updates: updates.map(u => ({
+        event_id: u.eventId,
+        is_checked_off: false,
+        time_overrides: u.overrides
+      }))
+    })
+  },
+
+  async getTodoEventLinks(){
+    return get('/calendar/todo-event-links')
+  },
+
+  async updateTodoEventLink(todoId, eventId = null, googleEventId = null){
+    return postJson('/calendar/todo-event-links', {
+      todo_id: todoId,
+      event_id: eventId,
+      google_event_id: googleEventId
+    })
+  },
+
+  async deleteTodoEventLink(todoId){
+    return deleteRequest(`/calendar/todo-event-links/${todoId}`)
+  }, 
+
+  async syncCalendar(){
+    return postJson('/calendar/sync', {})
+  },
+
+  async getSyncStatus(){
+    return get('/calendar/sync-status')
+  }, 
+
+  async triggerBackfill(initialBackfill = true){
+    return postJson('/calendar/sync', { initial_backfill: initialBackfill })
   }, 
   
   async createEvent(eventData, calendarId = 'primary', sendNotifications = false){

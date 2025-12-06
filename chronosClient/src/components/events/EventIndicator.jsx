@@ -1,11 +1,36 @@
 import { format, differenceInCalendarDays, startOfDay } from 'date-fns'
-import { useState } from 'react'
-import { useCalendar } from '../../context/CalendarContext'
+import { useState, useEffect } from 'react'
+import { useCalendar } from '../../context/CalendarContext/CalendarContext'
+import { normalizeToPaletteColor, getEventColors } from '../../lib/eventColors'
 
 const EventIndicator = ({ event, isMonthView }) => {
   const { openEventModal, selectedEvent, updateEvent, isEventChecked } = useCalendar()
   const isSelected = selectedEvent?.id === event.id
   const [isDragging, setIsDragging] = useState(false)
+  const resolveFreshDrop = () => {
+    if (!event?._freshDrop) return false
+    if (typeof window === 'undefined') return true
+    const key = String(event?.id || event?.clientKey || event?.todoId || '')
+    if (!key) return true
+    if (!window.__chronosPlayedDrop) window.__chronosPlayedDrop = new Set()
+    if (window.__chronosPlayedDrop.has(key)) return false
+    window.__chronosPlayedDrop.add(key)
+    return true
+  }
+  const [showDropAnim, setShowDropAnim] = useState(() => resolveFreshDrop())
+  const [previewColor, setPreviewColor] = useState(null)
+
+  useEffect(() => {
+    setShowDropAnim(resolveFreshDrop())
+  }, [event?._freshDrop, event?.id])
+  
+  // Clear animation after it plays
+  useEffect(() => {
+    if (showDropAnim) {
+      const timer = setTimeout(() => setShowDropAnim(false), 500)
+      return () => clearTimeout(timer)
+    }
+  }, [showDropAnim])
   const spansMultipleDays = (() => {
     if (!event?.start || !event?.end) return false
     try {
@@ -97,75 +122,39 @@ const EventIndicator = ({ event, isMonthView }) => {
   const isTentative = responseStatus === 'tentative'
   const isDeclined = responseStatus === 'declined'
   const isCheckedOff = isEventChecked(event.id)
+  const isTodoEvent = Boolean(event.todoId || event.todo_id)
+  const shouldShowDropAnim = showDropAnim
   
-  const eventColor = event.color || 'blue';
-  const isHexColor = eventColor.startsWith('#');
-  
-  // Function to lighten a hex color for background
-  const lightenHexColor = (hex, percent = 70) => {
-    hex = hex.replace('#', '');
-    const r = parseInt(hex.substring(0, 2), 16);
-    const g = parseInt(hex.substring(2, 4), 16);
-    const b = parseInt(hex.substring(4, 6), 16);
-    const lightenedR = Math.min(255, Math.floor(r + (255 - r) * (percent / 100)));
-    const lightenedG = Math.min(255, Math.floor(g + (255 - g) * (percent / 100)));
-    const lightenedB = Math.min(255, Math.floor(b + (255 - b) * (percent / 100)));
-    return `#${lightenedR.toString(16).padStart(2, '0')}${lightenedG.toString(16).padStart(2, '0')}${lightenedB.toString(16).padStart(2, '0')}`;
-  };
-  
-  // Function to darken a hex color for text
-  const darkenHexColor = (hex, percent = 40) => {
-    hex = hex.replace('#', '');
-    const r = parseInt(hex.substring(0, 2), 16);
-    const g = parseInt(hex.substring(2, 4), 16);
-    const b = parseInt(hex.substring(4, 6), 16);
-    const darkenedR = Math.floor(r * (1 - percent / 100));
-    const darkenedG = Math.floor(g * (1 - percent / 100));
-    const darkenedB = Math.floor(b * (1 - percent / 100));
-    return `#${darkenedR.toString(16).padStart(2, '0')}${darkenedG.toString(16).padStart(2, '0')}${darkenedB.toString(16).padStart(2, '0')}`;
-  };
-  
-  const getColorClass = (color) => {
-    if (color === 'purple') return 'bg-violet-500';
-    if (color === 'red') return 'bg-rose-500';
-    if (color === 'green') return 'bg-emerald-500';
-    if (color === 'teal') return 'bg-teal-500';
-    if (color === 'cyan') return 'bg-cyan-500';
-    if (color === 'amber') return 'bg-amber-500';
-    if (color === 'lime') return 'bg-lime-500';
-    if (color === 'indigo') return 'bg-indigo-500';
-    if (color === 'yellow') return 'bg-yellow-500';
-    return `bg-${color}-500`;
-  }
-  
-  const getBgColorClass = (color) => {
-    if (color === 'purple') return 'bg-violet-200 dark:bg-violet-700';
-    if (color === 'red') return 'bg-rose-200 dark:bg-rose-700';
-    if (color === 'green') return 'bg-emerald-200 dark:bg-emerald-700';
-    if (color === 'teal') return 'bg-teal-200 dark:bg-teal-700';
-    if (color === 'cyan') return 'bg-cyan-200 dark:bg-cyan-700';
-    if (color === 'amber') return 'bg-amber-200 dark:bg-amber-700';
-    if (color === 'lime') return 'bg-lime-200 dark:bg-lime-700';
-    if (color === 'indigo') return 'bg-indigo-200 dark:bg-indigo-700';
-    if (color === 'yellow') return 'bg-yellow-200 dark:bg-yellow-700';
-    if (color === 'orange') return 'bg-orange-200 dark:bg-orange-700';
-    return `bg-${color}-200 dark:bg-${color}-700`;
-  }
-  
-  // For hex colors, use inline styles - only for all-day events
-  const bgStyle = (isHexColor && treatAsAllDay) ? {
-    backgroundColor: lightenHexColor(eventColor, 70)
-  } : {};
-  
-  const lineStyle = isHexColor ? {
-    backgroundColor: eventColor
-  } : {};
-  
-  const textStyle = isHexColor ? {
-    color: darkenHexColor(eventColor, 40)
-  } : {};
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const handlePreview = (e) => {
+      const detail = e.detail || {}
+      if (!detail) return
+      const matches = String(detail.eventId) === String(event.id)
+      if (!matches && !detail.all) return
+      if (detail.color) setPreviewColor(detail.color)
+      else setPreviewColor(null)
+    }
+    const handleClear = (e) => {
+      const detail = e.detail || {}
+      if (detail.all || String(detail.eventId) === String(event.id)) {
+        setPreviewColor(null)
+      }
+    }
+    window.addEventListener('chronos:event-color-preview', handlePreview)
+    window.addEventListener('chronos:event-color-preview-clear', handleClear)
+    return () => {
+      window.removeEventListener('chronos:event-color-preview', handlePreview)
+      window.removeEventListener('chronos:event-color-preview-clear', handleClear)
+    }
+  }, [event.id])
 
-  const baseTitleStyle = isHexColor ? { ...textStyle } : { color: 'rgb(55, 65, 81)' }
+  const paletteName = normalizeToPaletteColor(previewColor || event.color || 'blue')
+  const palette = getEventColors(paletteName)
+  const lineStyle = { backgroundColor: palette.border }
+  const textStyle = { color: palette.text }
+
+  const baseTitleStyle = { color: palette.text }
   const visuallyDeclined = isDeclined || isCheckedOff
 
   const titleStyle = (() => {
@@ -178,25 +167,57 @@ const EventIndicator = ({ event, isMonthView }) => {
     return baseTitleStyle
   })()
 
+  const titleTextStyle = {
+    textDecoration: visuallyDeclined ? 'line-through' : undefined,
+    display: 'inline-block'
+  }
+
   const timeStyle = (isPendingInvite || isTentative || visuallyDeclined)
     ? { color: 'rgba(71, 85, 105, 0.55)' }
     : {}
+  const now = new Date()
+  const isPast = (() => {
+    try {
+      const rawEnd = event.end || event.endTime || event.start
+      if (!rawEnd) return false
+      const endDate = rawEnd instanceof Date ? rawEnd : new Date(rawEnd)
+      return endDate < now
+    } catch (_) {
+      return false
+    }
+  })()
+
   const baseOpacity = (() => {
     if (visuallyDeclined) {
       return treatAsAllDay ? 0.6 : 0.55
     }
     if ((isPendingInvite || isTentative) && isMonthView) return 0.9
+    if (isPast) return 0.7
     return 1
   })()
+
+  const pendingMonthClasses = (isPendingInvite || isTentative) && isMonthView
+    ? "relative overflow-hidden border border-dashed border-slate-300 bg-slate-50/90 text-slate-600 saturate-50 after:content-[''] after:absolute after:inset-[2px] after:border after:border-dotted after:border-slate-300 after:rounded-md after:pointer-events-none"
+    : ''
+  const declinedMonthClasses = isDeclined && isMonthView
+    ? "relative after:content-[''] after:absolute after:left-1 after:right-1 after:top-1/2 after:border-t after:border-slate-400/80 after:-translate-y-1/2"
+    : ''
+  const dropAnimationClass = shouldShowDropAnim ? 'animate-event-drop-pop' : ''
+  const hoverClasses = 'transition-opacity duration-150 hover:opacity-80 hover:brightness-95'
 
   return (
     <div
       draggable={!isDragging}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
-      className={`text-xs mb-1 flex items-center gap-1 px-1 py-0.5 transition-opacity calendar-event calendar-event-hover ${isMonthView ? (isHexColor ? (treatAsAllDay ? 'rounded-md' : '') : `${treatAsAllDay ? getBgColorClass(eventColor) + ' bg-opacity-70' : ''} ${treatAsAllDay ? 'rounded-md' : ''}`) : ''} ${
-        (isPendingInvite || isTentative) && isMonthView ? 'pending-month-invite' : ''
-      } ${visuallyDeclined && isMonthView ? 'declined-month-event' : ''}`}
+      className={[
+        'relative text-xs mb-1 flex items-center gap-1 px-1 py-0.5',
+        hoverClasses,
+        isMonthView && treatAsAllDay ? 'rounded-md' : '',
+        pendingMonthClasses,
+        declinedMonthClasses,
+        dropAnimationClass,
+      ].filter(Boolean).join(' ')}
       onClick={handleClick}
       data-event-id={event.id}
       data-active={isSelected ? 'true' : 'false'}
@@ -205,22 +226,18 @@ const EventIndicator = ({ event, isMonthView }) => {
         minWidth: 0,
         cursor: isDragging ? 'grabbing' : 'pointer',
         opacity: isDragging ? 0.5 : baseOpacity,
-        ...(isMonthView && isHexColor && treatAsAllDay ? bgStyle : {}),
-        ...(isSelected ? { boxShadow: '0 0 0 2px rgba(23, 97, 199, 0.4)', borderRadius: '8px' } : {}),
+        ...(isMonthView && treatAsAllDay ? { backgroundColor: palette.background, borderRadius: '5px', paddingLeft: '0px', paddingRight: '8px' } : {}),
+        ...(isMonthView && !treatAsAllDay ? { paddingLeft: '0px' } : {}),
+        ...(isSelected ? { boxShadow: '0 0 0 2px rgba(23, 97, 199, 0.4)', borderRadius: '7px' } : {}),
         ...((isPendingInvite || isTentative) && isMonthView ? { backgroundColor: 'rgba(248, 250, 252, 0.9)', color: '#475569' } : {})
       }}
     >
       {isMonthView ? (
         <>
-          <div className="flex items-center gap-1 min-w-0 flex-1">
-            <div 
-              className={`${isHexColor ? '' : getColorClass(eventColor)} rounded-sm`}
-              style={{ 
-                width: '3.2px', 
-                height: '14px',
-                flex: '0 0 3.2px',
-                ...(isHexColor ? lineStyle : {})
-              }}
+          <div className="flex items-center min-w-0 flex-1" style={{ gap: '5px' }}>
+            <div
+              className="w-[3px] min-h-[14px] rounded-full ml-0.5 flex-shrink-0"
+              style={{ ...lineStyle, height: 'calc(100% - 4px)' }}
             ></div>
             
             <div
@@ -229,7 +246,7 @@ const EventIndicator = ({ event, isMonthView }) => {
                 ...titleStyle
               }}
             >
-              {event.title}
+              <span style={titleTextStyle}>{event.title}</span>
             </div>
           </div>
           

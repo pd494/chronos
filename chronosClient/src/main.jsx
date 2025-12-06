@@ -2,9 +2,9 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { createBrowserRouter, RouterProvider } from 'react-router-dom'
 import App from './App.jsx'
-import './index.css'
-import { CalendarProvider } from './context/CalendarContext'
-import { TaskProvider } from './context/TaskContext.jsx'
+import './tailwind.css'
+import { CalendarProvider } from './context/CalendarContext/CalendarContext'
+import { TaskProvider } from './context/TaskContext/TaskProvider'
 import { AuthProvider } from './context/AuthContext.jsx'
 
 // Create the router
