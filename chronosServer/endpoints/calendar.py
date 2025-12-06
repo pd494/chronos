@@ -936,7 +936,6 @@ async def delete_todo_event_link(
     user: User = Depends(get_current_user),
     supabase: Client = Depends(get_supabase_client)
 ):
-    # Ignore non-UUID todo IDs (e.g. optimistic temp- ids) to avoid DB cast errors
     def _is_uuid(value: str) -> bool:
         try:
             UUID(str(value))

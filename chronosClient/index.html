@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
   <head>
+
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/calendar.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -8,6 +9,20 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <!-- React Grab for development only -->
+    <script type="module">
+      if (import.meta.env.DEV) {
+        const reactGrabScript = document.createElement("script");
+        reactGrabScript.src = "//unpkg.com/react-grab/dist/index.global.js";
+        reactGrabScript.crossOrigin = "anonymous";
+        document.head.appendChild(reactGrabScript);
+
+        const cursorScript = document.createElement("script");
+        cursorScript.src = "//unpkg.com/@react-grab/cursor/dist/client.global.js";
+        cursorScript.crossOrigin = "anonymous";
+        document.head.appendChild(cursorScript);
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

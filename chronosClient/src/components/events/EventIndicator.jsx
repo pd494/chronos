@@ -1,13 +1,28 @@
 import { format, differenceInCalendarDays, startOfDay } from 'date-fns'
 import { useState, useEffect } from 'react'
-import { useCalendar } from '../../context/CalendarContext'
+import { useCalendar } from '../../context/CalendarContext/CalendarContext'
 import { normalizeToPaletteColor, getEventColors } from '../../lib/eventColors'
 
 const EventIndicator = ({ event, isMonthView }) => {
   const { openEventModal, selectedEvent, updateEvent, isEventChecked } = useCalendar()
   const isSelected = selectedEvent?.id === event.id
   const [isDragging, setIsDragging] = useState(false)
-  const [showDropAnim, setShowDropAnim] = useState(() => Boolean(event._freshDrop))
+  const resolveFreshDrop = () => {
+    if (!event?._freshDrop) return false
+    if (typeof window === 'undefined') return true
+    const key = String(event?.id || event?.clientKey || event?.todoId || '')
+    if (!key) return true
+    if (!window.__chronosPlayedDrop) window.__chronosPlayedDrop = new Set()
+    if (window.__chronosPlayedDrop.has(key)) return false
+    window.__chronosPlayedDrop.add(key)
+    return true
+  }
+  const [showDropAnim, setShowDropAnim] = useState(() => resolveFreshDrop())
+  const [previewColor, setPreviewColor] = useState(null)
+
+  useEffect(() => {
+    setShowDropAnim(resolveFreshDrop())
+  }, [event?._freshDrop, event?.id])
   
   // Clear animation after it plays
   useEffect(() => {
@@ -107,8 +122,34 @@ const EventIndicator = ({ event, isMonthView }) => {
   const isTentative = responseStatus === 'tentative'
   const isDeclined = responseStatus === 'declined'
   const isCheckedOff = isEventChecked(event.id)
+  const isTodoEvent = Boolean(event.todoId || event.todo_id)
+  const shouldShowDropAnim = showDropAnim
   
-  const paletteName = normalizeToPaletteColor(event.color || 'blue')
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const handlePreview = (e) => {
+      const detail = e.detail || {}
+      if (!detail) return
+      const matches = String(detail.eventId) === String(event.id)
+      if (!matches && !detail.all) return
+      if (detail.color) setPreviewColor(detail.color)
+      else setPreviewColor(null)
+    }
+    const handleClear = (e) => {
+      const detail = e.detail || {}
+      if (detail.all || String(detail.eventId) === String(event.id)) {
+        setPreviewColor(null)
+      }
+    }
+    window.addEventListener('chronos:event-color-preview', handlePreview)
+    window.addEventListener('chronos:event-color-preview-clear', handleClear)
+    return () => {
+      window.removeEventListener('chronos:event-color-preview', handlePreview)
+      window.removeEventListener('chronos:event-color-preview-clear', handleClear)
+    }
+  }, [event.id])
+
+  const paletteName = normalizeToPaletteColor(previewColor || event.color || 'blue')
   const palette = getEventColors(paletteName)
   const lineStyle = { backgroundColor: palette.border }
   const textStyle = { color: palette.text }
@@ -155,14 +196,28 @@ const EventIndicator = ({ event, isMonthView }) => {
     return 1
   })()
 
+  const pendingMonthClasses = (isPendingInvite || isTentative) && isMonthView
+    ? "relative overflow-hidden border border-dashed border-slate-300 bg-slate-50/90 text-slate-600 saturate-50 after:content-[''] after:absolute after:inset-[2px] after:border after:border-dotted after:border-slate-300 after:rounded-md after:pointer-events-none"
+    : ''
+  const declinedMonthClasses = isDeclined && isMonthView
+    ? "relative after:content-[''] after:absolute after:left-1 after:right-1 after:top-1/2 after:border-t after:border-slate-400/80 after:-translate-y-1/2"
+    : ''
+  const dropAnimationClass = shouldShowDropAnim ? 'animate-event-drop-pop' : ''
+  const hoverClasses = 'transition-opacity duration-150 hover:opacity-80 hover:brightness-95'
+
   return (
     <div
       draggable={!isDragging}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
-      className={`text-xs mb-1 flex items-center gap-1 px-1 py-0.5 transition-opacity calendar-event calendar-event-hover ${isMonthView && treatAsAllDay ? 'rounded-md' : ''} ${
-        (isPendingInvite || isTentative) && isMonthView ? 'pending-month-invite' : ''
-      } ${isDeclined && isMonthView ? 'declined-month-event' : ''} ${showDropAnim ? 'event-drop-pop' : ''}`}
+      className={[
+        'relative text-xs mb-1 flex items-center gap-1 px-1 py-0.5',
+        hoverClasses,
+        isMonthView && treatAsAllDay ? 'rounded-md' : '',
+        pendingMonthClasses,
+        declinedMonthClasses,
+        dropAnimationClass,
+      ].filter(Boolean).join(' ')}
       onClick={handleClick}
       data-event-id={event.id}
       data-active={isSelected ? 'true' : 'false'}
@@ -171,17 +226,18 @@ const EventIndicator = ({ event, isMonthView }) => {
         minWidth: 0,
         cursor: isDragging ? 'grabbing' : 'pointer',
         opacity: isDragging ? 0.5 : baseOpacity,
-        ...(isMonthView && treatAsAllDay ? { backgroundColor: palette.background, borderRadius: '8px' } : {}),
-        ...(isSelected ? { boxShadow: '0 0 0 2px rgba(23, 97, 199, 0.4)', borderRadius: '8px' } : {}),
+        ...(isMonthView && treatAsAllDay ? { backgroundColor: palette.background, borderRadius: '5px', paddingLeft: '0px', paddingRight: '8px' } : {}),
+        ...(isMonthView && !treatAsAllDay ? { paddingLeft: '0px' } : {}),
+        ...(isSelected ? { boxShadow: '0 0 0 2px rgba(23, 97, 199, 0.4)', borderRadius: '7px' } : {}),
         ...((isPendingInvite || isTentative) && isMonthView ? { backgroundColor: 'rgba(248, 250, 252, 0.9)', color: '#475569' } : {})
       }}
     >
       {isMonthView ? (
         <>
-          <div className="flex items-center gap-1 min-w-0 flex-1">
+          <div className="flex items-center min-w-0 flex-1" style={{ gap: '5px' }}>
             <div
-              className="month-event-line"
-              style={lineStyle}
+              className="w-[3px] min-h-[14px] rounded-full ml-0.5 flex-shrink-0"
+              style={{ ...lineStyle, height: 'calc(100% - 4px)' }}
             ></div>
             
             <div

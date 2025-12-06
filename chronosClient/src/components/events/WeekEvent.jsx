@@ -74,8 +74,19 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
   const [resizePreview, setResizePreview] = useState(null)
   const [isResizing, setIsResizing] = useState(false)
   const [dragEnabled, setDragEnabled] = useState(true)
-  const [showDropAnim, setShowDropAnim] = useState(() => Boolean(event._freshDrop))
+  const resolveFreshDrop = () => {
+    if (!event?._freshDrop) return false
+    if (typeof window === 'undefined') return true
+    const key = String(event?.id || event?.clientKey || event?.todoId || '')
+    if (!key) return true
+    if (!window.__chronosPlayedDrop) window.__chronosPlayedDrop = new Set()
+    if (window.__chronosPlayedDrop.has(key)) return false
+    window.__chronosPlayedDrop.add(key)
+    return true
+  }
+  const [showDropAnim, setShowDropAnim] = useState(() => resolveFreshDrop())
   const [isHovered, setIsHovered] = useState(false)
+  const [previewColor, setPreviewColor] = useState(null)
   const resizingDataRef = useRef(null)
   const resizingPreviewRef = useRef(null)
   
@@ -86,12 +97,18 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
       return () => clearTimeout(timer)
     }
   }, [showDropAnim])
+
+  useEffect(() => {
+    setShowDropAnim(resolveFreshDrop())
+  }, [event?._freshDrop, event?.id])
   
   // Ensure we're working with proper Date objects
   const startDate = event.start instanceof Date ? event.start : new Date(event.start)
   const endDate = event.end instanceof Date ? event.end : new Date(event.end)
-  const displayStart = previewTimes?.start ?? startDate
-  const displayEnd = resizePreview?.end ?? previewTimes?.end ?? endDate
+  const previewStart = previewTimes?.start ?? startDate
+  const previewEnd = resizePreview?.end ?? previewTimes?.end ?? endDate
+  const positionStart = startDate
+  const positionEnd = resizePreview?.end ?? endDate
   
   const startHour = startDate.getHours()
   const startMinute = startDate.getMinutes()
@@ -99,8 +116,8 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
   const endMinute = endDate.getMinutes()
   
   // Calculate position and height
-  const top = (displayStart.getHours() - dayStartHour) * hourHeight + (displayStart.getMinutes() / 60) * hourHeight
-  const duration = Math.max(5, differenceInMinutes(displayEnd, displayStart))
+  const top = (positionStart.getHours() - dayStartHour) * hourHeight + (positionStart.getMinutes() / 60) * hourHeight
+  const duration = Math.max(5, differenceInMinutes(positionEnd, positionStart))
   const height = (duration / 60) * hourHeight
   const isSelected = selectedEvent?.id === event.id
   const responseStatus = typeof event.viewerResponseStatus === 'string'
@@ -148,10 +165,10 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
     e.stopPropagation()
     setIsDragging(true)
     e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.dropEffect = 'move'
+    try { e.dataTransfer.setData('text/plain', '') } catch (_) {}
     e.dataTransfer.setData('event', JSON.stringify(event))
     e.dataTransfer.setData('eventId', event.id)
-    // Some browsers require a plain text payload to initiate drag
-    try { e.dataTransfer.setData('text/plain', ' '); } catch (_) {}
     
     const rect = e.currentTarget.getBoundingClientRect()
     const rawDurationMs = Math.max(5 * 60 * 1000, endDate.getTime() - startDate.getTime())
@@ -176,33 +193,24 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
     // Mark this specific element as being dragged
     e.currentTarget.setAttribute('data-dragging', 'true')
     
-    // Create custom drag preview that keeps calendar dimensions
-    const dragPreview = e.currentTarget.cloneNode(true)
-    dragPreview.style.opacity = '0.85'
+    const dragPreview = document.createElement('div')
     dragPreview.style.position = 'absolute'
-    dragPreview.style.top = '-1000px'
-    dragPreview.style.left = '-1000px'
-    dragPreview.style.width = `${rect.width}px`
-    dragPreview.style.height = `${Math.max(rect.height, 24)}px`
-    dragPreview.style.boxSizing = 'border-box'
-    dragPreview.style.pointerEvents = 'none'
+    dragPreview.style.top = '-9999px'
+    dragPreview.style.width = '1px'
+    dragPreview.style.height = '1px'
+    dragPreview.style.opacity = '0'
     document.body.appendChild(dragPreview)
-    const rawOffsetX = (e.clientX ?? rect.left) - rect.left
-    const rawOffsetY = (e.clientY ?? rect.top) - rect.top
-    const offsetX = Math.max(1, Math.min(rect.width - 1, rawOffsetX))
-    const offsetY = Math.max(1, Math.min(rect.height - 1, rawOffsetY))
-    try { e.dataTransfer.setDragImage(dragPreview, offsetX, offsetY) } catch (_) {}
+    try {
+      e.dataTransfer.setDragImage(dragPreview, 0, 0)
+    } catch (_) {}
+    setTimeout(() => {
+      if (dragPreview.parentNode) dragPreview.parentNode.removeChild(dragPreview)
+    }, 0)
     
     // Disable pointer events on the original element after drag image is set
     requestAnimationFrame(() => {
       e.currentTarget.style.pointerEvents = 'none'
     })
-    
-    setTimeout(() => {
-      if (dragPreview.parentNode) {
-        dragPreview.parentNode.removeChild(dragPreview)
-      }
-    }, 0)
   }
 
   const handleDragEnd = (e) => {
@@ -232,7 +240,31 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
   }
   
   // Get standardized colors
-  const colors = getEventColors(normalizeToPaletteColor(event.color || 'blue'))
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const handlePreview = (e) => {
+      const detail = e.detail || {}
+      if (!detail) return
+      const matches = String(detail.eventId) === String(event.id)
+      if (!matches && !detail.all) return
+      if (detail.color) setPreviewColor(detail.color)
+      else setPreviewColor(null)
+    }
+    const handleClear = (e) => {
+      const detail = e.detail || {}
+      if (detail.all || String(detail.eventId) === String(event.id)) {
+        setPreviewColor(null)
+      }
+    }
+    window.addEventListener('chronos:event-color-preview', handlePreview)
+    window.addEventListener('chronos:event-color-preview-clear', handleClear)
+    return () => {
+      window.removeEventListener('chronos:event-color-preview', handlePreview)
+      window.removeEventListener('chronos:event-color-preview-clear', handleClear)
+    }
+  }, [event.id])
+
+  const colors = getEventColors(normalizeToPaletteColor(previewColor || event.color || 'blue'))
   
   const columns = position?.columns || 1
   const columnIndex = position?.column || 0
@@ -287,10 +319,11 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
       : colors.background
   
   const now = new Date()
-  const isPast = displayEnd < now
+  const isPast = previewEnd < now
   const pastOpacity = 0.7
+  // Keep the original card fully visible while dragging; only ghosts should move
   const eventOpacity = isDragging
-    ? 0.25
+    ? 1
     : (showPendingStyling
         ? 0.9
         : (visuallyChecked
@@ -316,7 +349,7 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
   }, [event.id])
 
   const isPreviewing = Boolean(previewTimes)
-  const dayChanged = previewTimes ? !isSameDay(displayStart, startDate) : false
+  const dayChanged = previewTimes ? !isSameDay(previewStart, startDate) : false
   const showRecurringIcon = isRecurringCalendarEvent(event)
   const truncatedDescription = truncateDescription(event.description)
   const showDescription = Boolean(truncatedDescription && height >= DESCRIPTION_MIN_HEIGHT)
@@ -378,13 +411,24 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
     }
   }, [event.id, handleResizeMouseMove, handleResizeMouseUp])
 
+  const pendingInviteClasses = showPendingStyling
+    ? "relative overflow-hidden border border-dashed border-slate-300 bg-slate-50/90 text-slate-600 saturate-75 after:content-[''] after:absolute after:inset-0 after:bg-[repeating-linear-gradient(135deg,rgba(255,255,255,0.3)_0px,rgba(255,255,255,0.3)_8px,transparent_8px,transparent_16px)] after:pointer-events-none after:opacity-85"
+    : ''
+  const dropAnimationClass = showDropAnim ? 'animate-event-drop-pop' : ''
+  const hoverClasses = 'transition-opacity duration-150 hover:opacity-80 hover:brightness-95'
+
   return (
     <div
       draggable={!isResizing && dragEnabled}
       
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
-      className={`absolute rounded-lg p-1 overflow-visible text-sm z-10 group event-draggable calendar-event-hover ${showPendingStyling ? 'pending-invite-block' : ''} ${isDeclined ? 'declined-event-block' : ''} ${showDropAnim ? 'event-drop-pop' : ''}`}
+      className={[
+        'absolute rounded-lg p-1 overflow-visible text-sm z-10 group event-draggable',
+        hoverClasses,
+        pendingInviteClasses,
+        dropAnimationClass,
+      ].filter(Boolean).join(' ')}
       data-event-view="week"
       onClick={handleClick}
       onMouseEnter={() => setIsHovered(true)}
@@ -405,7 +449,8 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
         opacity: eventOpacity,
         border: showPendingStyling ? '1px dashed rgba(148, 163, 184, 0.9)' : undefined,
         filter: showPendingStyling ? 'saturate(0.9)' : undefined,
-        overflow: 'hidden'
+        overflow: 'hidden',
+        userSelect: 'none'
       }}
     >
       {/* Vertical line - rounded and floating */}
@@ -442,10 +487,17 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
           data-event-time="true"
           style={{ 
             color: timeColor,
-            fontWeight: isPreviewing ? 600 : 500
+            fontWeight: isPreviewing ? 600 : 500,
+            fontSize: 'clamp(8px, 0.85vw, 10.5px)',
+            lineHeight: '1.05',
+            whiteSpace: 'normal',
+            wordBreak: 'break-word',
+            maxWidth: '100%',
+            overflow: 'visible',
+            textOverflow: 'unset'
           }}
         >
-          {`${formatTime(displayStart)} – ${formatTime(displayEnd)}`}
+          {`${formatTime(previewStart)} – ${formatTime(previewEnd)}`}
           {isPreviewing && (
             <>
               <span className="block text-[10px] uppercase tracking-wide text-slate-500">
@@ -453,7 +505,7 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
               </span>
               {dayChanged && (
                 <span className="block text-[10px] uppercase tracking-wide text-slate-500">
-                  {format(displayStart, 'EEE')}
+                  {format(previewStart, 'EEE')}
                 </span>
               )}
             </>
@@ -537,7 +589,7 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
         })()}
       </div>
       <div
-        className="absolute left-0 right-0 bottom-0 h-3 cursor-ns-resize"
+        className="absolute left-0 right-0 bottom-0 h-2 cursor-ns-resize"
         onDragStart={(e) => {
           e.preventDefault()
           e.stopPropagation()

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { FiChevronLeft, FiChevronRight, FiChevronDown, FiPlus, FiUser, FiLogOut, FiRefreshCcw, FiCloud } from 'react-icons/fi'
-import { useCalendar } from '../context/CalendarContext'
-import { useTaskContext } from '../context/TaskContext'
+import { useCalendar } from '../context/CalendarContext/CalendarContext'
+import { useTaskContext } from '../context/TaskContext/context'
 import { useAuth } from '../context/AuthContext'
 import { calendarApi } from '../lib/api'
 import './header.css'
@@ -188,7 +188,7 @@ const Header = () => {
           </button>
           
           {showViewDropdown && (
-            <div className="view-dropdown-menu">
+            <div className="view-dropdown-menu modal-fade-in">
               <button
                 onClick={() => handleViewChange('day')}
                 className={view === 'day' ? 'active' : ''}
@@ -255,7 +255,7 @@ const Header = () => {
             </button>
             
             {showUserMenu && (
-              <div className="user-menu-dropdown" style={{
+              <div className="user-menu-dropdown modal-fade-in" style={{
                 position: 'absolute',
                 top: '100%',
                 right: 0,
