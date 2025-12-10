@@ -32,7 +32,18 @@ const EventModal = () => {
     updateColorPickerDropdownPosition, updateNotificationDropdownPosition, handleSubmit, toggleEventChecked
   } = modal
 
-  useEffect(() => { if (titleInputRef.current) titleInputRef.current.focus() }, [selectedEvent, titleInputRef])
+  useEffect(() => {
+    if (!internalVisible) return
+    // Small delay to ensure modal is rendered before focusing
+    const timer = setTimeout(() => {
+      if (titleInputRef.current) {
+        titleInputRef.current.focus()
+        // Select all text for new events to allow immediate typing
+        if (!selectedEvent) titleInputRef.current.select()
+      }
+    }, 50)
+    return () => clearTimeout(timer)
+  }, [internalVisible, selectedEvent, titleInputRef])
   useEffect(() => { setIsDescriptionExpanded(false) }, [selectedEvent?.id, setIsDescriptionExpanded])
 
   useLayoutEffect(() => {
@@ -112,8 +123,10 @@ const EventModal = () => {
   return createPortal(
     <>
       <div key={enterAnimationKey} ref={modalRef} className={`fixed bg-white shadow-xl transition-[opacity,transform] duration-[300ms] ease-[cubic-bezier(.215,.61,.355,1)] ${internalVisible ? 'opacity-100 scale-100 modal-fade-in' : 'opacity-0 scale-95 pointer-events-none'}`}
-        style={{ top: `${modalPosition.top ?? 0}px`, left: `${modalPosition.left ?? 0}px`, width: `${modalPosition.width ?? DEFAULT_MODAL_DIMENSIONS.width}px`,
-          border: '1px solid #e5e7eb', borderRadius: '22px', display: 'flex', flexDirection: 'column', maxHeight: 'calc(100vh - 24px)', overflowY: 'auto', zIndex: 4000 }}>
+        style={{
+          top: `${modalPosition.top ?? 0}px`, left: `${modalPosition.left ?? 0}px`, width: `${modalPosition.width ?? DEFAULT_MODAL_DIMENSIONS.width}px`,
+          border: '1px solid #e5e7eb', borderRadius: '22px', display: 'flex', flexDirection: 'column', maxHeight: 'calc(100vh - 24px)', overflowY: 'auto', zIndex: 4000
+        }}>
         <form onSubmit={handleSubmit} onKeyDown={(e) => { if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA' && !(e.target instanceof HTMLInputElement && e.target.type === 'email')) { e.preventDefault(); handleSubmit() } }} className="flex flex-col">
           <div className="space-y-0">
             {selectedEvent?.viewerIsAttendee && !selectedEvent?.viewerIsOrganizer && (

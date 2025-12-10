@@ -130,7 +130,7 @@ export const useTodoIntegration = ({
         const next = arr.filter(ev => String(ev.todoId) !== todoKey && String(ev.id) !== resolvedEventId)
         eventsByDayRef.current.set(key, next)
       }
-      if (resolvedEventId) removeEventFromCache(resolvedEventId).catch(() => {})
+      if (resolvedEventId) removeEventFromCache(resolvedEventId).catch(() => { })
       if (resolvedEventId) {
         try { const calId = linkedEvent?.calendar_id || 'primary'; await calendarApi.deleteEvent(resolvedEventId, calId) }
         catch (error) { console.error('Failed to delete linked calendar event:', error) }
@@ -212,7 +212,7 @@ export const useTodoIntegration = ({
         if (!isOptimistic) {
           const cacheEvent = { ...newEvent }
           delete cacheEvent._freshDrop
-          addEventToCache(user?.id, cacheEvent).catch(() => {})
+          addEventToCache(user?.id, cacheEvent).catch(() => { })
         }
         setEvents(prev => {
           const next = []

@@ -59,7 +59,7 @@ export const NOTIFICATION_OPTIONS = [
 
 export const DEFAULT_TIMED_START = '10:30'
 export const DEFAULT_TIMED_END = '11:45'
-export const DEFAULT_MODAL_DIMENSIONS = { width: 520, height: 'auto' }
+export const DEFAULT_MODAL_DIMENSIONS = { width: 560, height: 'auto' }
 export const MIN_MODAL_WIDTH = 320
 export const MIN_MODAL_HEIGHT = 320
 export const VIEWPORT_MARGIN = 16
@@ -102,7 +102,7 @@ export const clearCalendarSnapshots = () => {
     keys.forEach((key) => {
       if (key.startsWith('chronos:snap:')) window.sessionStorage.removeItem(key)
     })
-  } catch (_) {}
+  } catch (_) { }
 }
 
 export const deriveVisibleRange = (date, activeView) => {

@@ -1,3 +1,4 @@
+import { useRef, useEffect } from 'react'
 import { format, isToday, isSameDay, startOfDay, addDays, differenceInCalendarDays } from 'date-fns'
 import EventIndicator from '../../events/EventIndicator'
 import { normalizeToPaletteColor } from '../../../lib/eventColors'
@@ -43,8 +44,49 @@ const DayCell = ({
     isAllDay: true,
     color: previewColor
   } : null
-  const visibleEvents = events.slice(0, isTodoPreviewActive ? 2 : 3)
-  const remainingCount = events.length - visibleEvents.length
+
+  // Ghost logic: keep optimistic events visible until reconciled, clear on deletion
+  const ghostsRef = useRef([])
+  const prevEventsRef = useRef(events)
+
+  useEffect(() => {
+    const handleEventDeleted = () => { ghostsRef.current = [] }
+    window.addEventListener('eventDeleted', handleEventDeleted)
+    return () => window.removeEventListener('eventDeleted', handleEventDeleted)
+  }, [])
+
+  // Build map of current events by clientKey
+  const currentByKey = new Map()
+  for (const e of events) {
+    const key = e.clientKey || e.id
+    if (key) currentByKey.set(key, e)
+  }
+
+  // Find events that were in prev but are missing from current
+  const dropped = prevEventsRef.current.filter(e => {
+    const key = e.clientKey || e.id
+    return key && !currentByKey.has(key)
+  })
+
+  const updatedGhosts = []
+  for (const g of ghostsRef.current) {
+    const key = g.clientKey || g.id
+    if (!currentByKey.has(key) && g.isOptimistic) updatedGhosts.push(g)
+  }
+
+  const existingGhostKeys = new Set(updatedGhosts.map(g => g.clientKey || g.id))
+  for (const d of dropped) {
+    const key = d.clientKey || d.id
+    if (key && !existingGhostKeys.has(key) && d.isOptimistic) updatedGhosts.push(d)
+  }
+
+  ghostsRef.current = updatedGhosts
+  prevEventsRef.current = events
+
+  const effectiveEvents = [...events, ...updatedGhosts]
+
+  const visibleEvents = effectiveEvents.slice(0, isTodoPreviewActive ? 2 : 3)
+  const remainingCount = effectiveEvents.length - visibleEvents.length
 
   return (
     <div

@@ -11,7 +11,8 @@ export const useBootstrap = ({
   snapshotHelpers,
   overrideHelpers,
   todoLinkHelpers,
-  fetchGoogleEventsRef
+  fetchGoogleEventsRef,
+  selectedCalendars
 }) => {
   const {
     events,
@@ -24,7 +25,8 @@ export const useBootstrap = ({
     hasLoadedInitialRef,
     hasBootstrappedRef,
     loadedMonthsRef,
-    skipNextDayIndexRebuildRef
+    skipNextDayIndexRebuildRef,
+    optimisticEventCacheRef
   } = eventState
 
   const {
@@ -50,6 +52,16 @@ export const useBootstrap = ({
 
   const snapshotSaveTimerRef = useRef(null)
 
+  const filterBySelectedCalendars = useCallback((list) => {
+    if (!Array.isArray(list)) return []
+    if (!selectedCalendars || selectedCalendars.length === 0) return list
+    return list.filter(ev => {
+      if (!ev) return false
+      if (!ev.calendar_id) return true
+      return selectedCalendars.includes(ev.calendar_id)
+    })
+  }, [selectedCalendars])
+
   const hydrateFromSnapshot = useCallback((options = {}) => {
     const skipLoadedFlag = Boolean(options?.skipLoadedFlag)
     try {
@@ -66,7 +78,7 @@ export const useBootstrap = ({
       }
       if (!Array.isArray(parsed?.events)) return false
 
-      const toAdd = []
+      let toAdd = []
       for (const ev of parsed.events) {
         if (!eventIdsRef.current.has(ev.id)) {
           const todoId = ev.todoId || ev.todo_id
@@ -100,6 +112,7 @@ export const useBootstrap = ({
           if (isPendingSync) pendingSyncEventIdsRef.current.set(ev.id, Date.now())
         }
       }
+      toAdd = filterBySelectedCalendars(toAdd)
       if (toAdd.length) {
         setEvents(prev => [...prev, ...toAdd], { skipDayIndexRebuild: true })
         setTimeout(() => {
@@ -115,7 +128,7 @@ export const useBootstrap = ({
         }
         return true
       }
-    } catch (_) {}
+    } catch (_) { }
     return false
   }, [getVisibleRange, extendLoadedRange, linkTodoEvent, snapshotKey, user?.id])
 
@@ -150,6 +163,15 @@ export const useBootstrap = ({
       skipNextDayIndexRebuildRef.current = false
       return
     }
+    // Skip rebuild when there are pending sync events or optimistic events.
+    // This prevents a race condition where rebuilding from state would overwrite
+    // atomic updates made directly to eventsByDayRef (e.g., when replacing an
+    // optimistic event with the real event from the server), causing flicker.
+    const hasPendingSync = pendingSyncEventIdsRef.current.size > 0
+    const hasOptimistic = optimisticEventCacheRef.current.size > 0
+    if (hasPendingSync || hasOptimistic) {
+      return
+    }
     rebuildEventsByDayIndex(deduped)
   }, [events, rebuildEventsByDayIndex, setEvents])
 
@@ -177,7 +199,8 @@ export const useBootstrap = ({
         localStorage.setItem(cacheVersionKey, String(SNAPSHOT_VERSION))
       }
 
-      const cachedEvents = await loadEventsFromCache(user.id)
+      let cachedEvents = await loadEventsFromCache(user.id)
+      cachedEvents = filterBySelectedCalendars(cachedEvents)
       if (cachedEvents && cachedEvents.length > 0) {
         setEvents(cachedEvents)
         for (const e of cachedEvents) {
@@ -210,11 +233,11 @@ export const useBootstrap = ({
       if (shouldSync) {
         lastSyncTimestampRef.current = nowTs
         if (typeof window !== 'undefined') {
-          try { window.sessionStorage.setItem(syncKey, String(nowTs)) } catch (_) {}
+          try { window.sessionStorage.setItem(syncKey, String(nowTs)) } catch (_) { }
         }
         calendarApi.syncCalendar()
-          .then(() => fetchGoogleEventsRef.current(true, false, true).catch(() => {}))
-          .catch(() => {})
+          .then(() => fetchGoogleEventsRef.current(true, false, true).catch(() => { }))
+          .catch(() => { })
       }
     }
     bootstrap()

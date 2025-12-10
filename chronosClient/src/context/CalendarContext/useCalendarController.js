@@ -21,7 +21,7 @@ export const useCalendarController = () => {
     loading, isRevalidating, setIsRevalidating, initialLoading, setInitialLoading,
     selectedCalendars, setSelectedCalendars, checkedOffEventIds, setCheckedOffEventIds,
     eventsByDayRef, eventIdsRef, pendingSyncEventIdsRef, suppressedEventIdsRef, suppressedTodoIdsRef,
-    optimisticRecurrenceMapRef, hasLoadedInitialRef, todoToEventRef, eventToTodoRef
+    optimisticRecurrenceMapRef, hasLoadedInitialRef, todoToEventRef, eventToTodoRef, bumpEventsByDayVersion
   } = eventState
 
   const { openEventModal, closeEventModal, formatDateHeader } = useModalControls({
@@ -62,7 +62,7 @@ export const useCalendarController = () => {
   const { getEventsForDate, createEvent, updateEvent, deleteEvent, respondToInvite } = crudHelpers
 
   const { snapshotSaveTimerRef } = useBootstrap({
-    user, authLoading, eventState, snapshotHelpers, overrideHelpers, todoLinkHelpers, fetchGoogleEventsRef
+    user, authLoading, eventState, snapshotHelpers, overrideHelpers, todoLinkHelpers, fetchGoogleEventsRef, selectedCalendars
   })
 
   const toggleEventChecked = useCallback(async (eventId) => {
@@ -123,7 +123,7 @@ export const useCalendarController = () => {
       try {
         const key = snapshotKey(start, end)
         window.sessionStorage.setItem(key, JSON.stringify({ events: list }))
-      } catch (_) {}
+      } catch (_) { }
     }, 200)
   }, [currentDate, view, initialLoading, events, getVisibleRange, dateKey, snapshotKey])
 
@@ -139,6 +139,56 @@ export const useCalendarController = () => {
     lastFetchParamsRef.current = { date: currentDateKey, view }
     fetchGoogleEventsRef.current(false)
   }, [user?.id, currentDate, view])
+
+  useEffect(() => {
+    if (!user || !user.has_google_credentials) return
+    if (!hasLoadedInitialRef.current) return
+    if (!selectedCalendars || selectedCalendars.length === 0) return
+
+    let idMap = {}
+    if (typeof window !== 'undefined') {
+      idMap = window.chronosCalendarIdMap || {}
+      if (!Object.keys(idMap).length) {
+        try {
+          const raw = window.localStorage.getItem('chronos:calendar-id-map')
+          if (raw) idMap = JSON.parse(raw) || {}
+        } catch (_) { }
+      }
+    }
+
+    const allowed = new Set()
+    selectedCalendars.forEach(id => {
+      if (!id) return
+      allowed.add(id)
+      if (idMap[id]) allowed.add(idMap[id])
+    })
+
+    const rebuildDayIndex = () => {
+      eventsByDayRef.current.clear()
+      events.forEach(ev => {
+        if (!ev.calendar_id || allowed.has(ev.calendar_id)) {
+          const start = new Date(ev.start)
+          const end = new Date(ev.end)
+          let cursor = new Date(start)
+          cursor.setHours(0, 0, 0, 0)
+          const endDay = new Date(end)
+          endDay.setHours(0, 0, 0, 0)
+          if (ev.isAllDay && endDay > cursor) endDay.setDate(endDay.getDate() - 1)
+          while (cursor <= endDay) {
+            const key = dateKey(cursor)
+            const arr = eventsByDayRef.current.get(key) || []
+            arr.push(ev)
+            eventsByDayRef.current.set(key, arr)
+            cursor.setDate(cursor.getDate() + 1)
+          }
+        }
+      })
+    }
+    rebuildDayIndex()
+
+    // Force UI re-render after calendar toggle
+    bumpEventsByDayVersion()
+  }, [selectedCalendars, events, user?.id, hasLoadedInitialRef.current, dateKey, bumpEventsByDayVersion])
 
   // Fallback loading timeout
   useEffect(() => {

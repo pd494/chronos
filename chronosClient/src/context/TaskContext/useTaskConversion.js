@@ -39,8 +39,8 @@ export const useTaskConversion = ({
     const payloadStart = isAllDay ? startDateOnly : isoStart;
     const payloadEnd = isAllDay
       ? (endDateOnly && endDateOnly !== startDateOnly
-          ? endDateOnly
-          : toLocalDateOnlyString(new Date(startDate.getTime() + 24 * 60 * 60 * 1000)))
+        ? endDateOnly
+        : toLocalDateOnlyString(new Date(startDate.getTime() + 24 * 60 * 60 * 1000)))
       : isoEnd;
 
     const optimisticId = `temp-todo-${todoKey}-${Date.now()}`;
@@ -62,7 +62,7 @@ export const useTaskConversion = ({
       window.dispatchEvent(new CustomEvent('chronos-todo-overlay-hide'));
 
       window.dispatchEvent(new CustomEvent('todoConvertedToEvent', {
-        detail: { 
+        detail: {
           eventData: optimisticEvent,
           isOptimistic: true,
           todoId
@@ -97,19 +97,19 @@ export const useTaskConversion = ({
         prev.map(t =>
           t.id === todoId
             ? {
-                ...t,
-                scheduled_date: scheduledDateValue,
-                scheduled_at: scheduledDateValue,
-                scheduled_end: isAllDay ? null : payloadEnd,
-                scheduled_is_all_day: isAllDay
-              }
+              ...t,
+              scheduled_date: scheduledDateValue,
+              scheduled_at: scheduledDateValue,
+              scheduled_end: isAllDay ? null : payloadEnd,
+              scheduled_is_all_day: isAllDay
+            }
             : t
         )
       );
 
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('todoConvertedToEvent', {
-          detail: { 
+          detail: {
             eventData: resolvedEvent,
             isOptimistic: false,
             todoId

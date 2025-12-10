@@ -21,6 +21,8 @@ export const useCalendar = () => {
     view: 'month',
     changeView: noop,
     currentDate: new Date(),
+    headerDisplayDate: new Date(),
+    setHeaderDisplayDate: noop,
     selectDate: noop,
     openEventModal: noop,
     updateEvent: noop,
@@ -28,6 +30,13 @@ export const useCalendar = () => {
     getEventsForDate: () => [],
     initialLoading: true,
     showEventModal: false,
-    selectedEvent: null
+    selectedEvent: null,
+    formatDateHeader: () => '',
+    navigateToToday: noop,
+    navigateToPrevious: noop,
+    navigateToNext: noop,
+    refreshEvents: noop,
+    setSelectedCalendars: noop,
+    selectedCalendars: []
   }
 }

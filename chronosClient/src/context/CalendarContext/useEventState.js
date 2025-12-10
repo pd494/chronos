@@ -11,6 +11,10 @@ export const useEventState = () => {
   const [initialLoading, setInitialLoading] = useState(true)
   const [selectedCalendars, setSelectedCalendars] = useState(null)
 
+  // Version counter to force UI re-renders when eventsByDayRef is modified
+  const [eventsByDayVersion, setEventsByDayVersion] = useState(0)
+  const bumpEventsByDayVersion = useCallback(() => setEventsByDayVersion(v => v + 1), [])
+
   const loadedRangeRef = useRef(null)
   const prefetchedRangesRef = useRef(new Set())
   const eventsByDayRef = useRef(new Map())
@@ -21,8 +25,25 @@ export const useEventState = () => {
   const hasLoadedInitialRef = useRef(false)
   const todoToEventRef = useRef(new Map())
   const eventToTodoRef = useRef(new Map())
-  const suppressedEventIdsRef = useRef(new Set())
-  const suppressedTodoIdsRef = useRef(new Set())
+
+  // Initialize suppressed IDs from sessionStorage (survives refresh until server confirms)
+  const getInitialSuppressedEventIds = () => {
+    if (typeof window === 'undefined') return new Set()
+    try {
+      const raw = window.sessionStorage.getItem('chronos:suppressed-event-ids')
+      return raw ? new Set(JSON.parse(raw)) : new Set()
+    } catch (_) { return new Set() }
+  }
+  const getInitialSuppressedTodoIds = () => {
+    if (typeof window === 'undefined') return new Set()
+    try {
+      const raw = window.sessionStorage.getItem('chronos:suppressed-todo-ids')
+      return raw ? new Set(JSON.parse(raw)) : new Set()
+    } catch (_) { return new Set() }
+  }
+  const suppressedEventIdsRef = useRef(getInitialSuppressedEventIds())
+  const suppressedTodoIdsRef = useRef(getInitialSuppressedTodoIds())
+
   const pendingSyncEventIdsRef = useRef(new Map())
   const optimisticRecurrenceMapRef = useRef(new Map())
   const optimisticEventCacheRef = useRef(new Map())
@@ -38,7 +59,7 @@ export const useEventState = () => {
       if (Array.isArray(parsed)) {
         return new Set(parsed.filter(id => typeof id === 'string' || typeof id === 'number'))
       }
-    } catch (_) {}
+    } catch (_) { }
     return new Set()
   })
 
@@ -57,7 +78,7 @@ export const useEventState = () => {
     if (typeof window === 'undefined') return
     try {
       window.localStorage.setItem(CHECKED_EVENTS_STORAGE_KEY, JSON.stringify(Array.from(checkedOffEventIds)))
-    } catch (_) {}
+    } catch (_) { }
   }, [checkedOffEventIds])
 
   useEffect(() => {
@@ -69,6 +90,22 @@ export const useEventState = () => {
     }
     eventIdsRef.current = ids
   }, [events])
+
+  // Persist suppressed IDs to sessionStorage when they change
+  const persistSuppressedIds = useCallback(() => {
+    if (typeof window === 'undefined') return
+    try {
+      window.sessionStorage.setItem('chronos:suppressed-event-ids', JSON.stringify([...suppressedEventIdsRef.current]))
+      window.sessionStorage.setItem('chronos:suppressed-todo-ids', JSON.stringify([...suppressedTodoIdsRef.current]))
+    } catch (_) { }
+  }, [])
+
+  // Listen for eventDeleted to persist suppressed IDs
+  useEffect(() => {
+    const handleDeleted = () => persistSuppressedIds()
+    window.addEventListener('eventDeleted', handleDeleted)
+    return () => window.removeEventListener('eventDeleted', handleDeleted)
+  }, [persistSuppressedIds])
 
   const resetState = useCallback(() => {
     hasBootstrappedRef.current = false
@@ -128,6 +165,8 @@ export const useEventState = () => {
     loadedRangeRef,
     prefetchedRangesRef,
     eventsByDayRef,
+    eventsByDayVersion,
+    bumpEventsByDayVersion,
     skipNextDayIndexRebuildRef,
     eventIdsRef,
     activeForegroundRequestsRef,

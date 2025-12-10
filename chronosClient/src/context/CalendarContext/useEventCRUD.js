@@ -23,7 +23,7 @@ export const useEventCRUD = ({
   const {
     events, setEvents, eventsRefValue, setSelectedEvent, eventsByDayRef, eventIdsRef,
     pendingSyncEventIdsRef, suppressedEventIdsRef, suppressedTodoIdsRef,
-    optimisticEventCacheRef, todoToEventRef, eventToTodoRef
+    optimisticEventCacheRef, todoToEventRef, eventToTodoRef, bumpEventsByDayVersion
   } = eventState
 
   const {
@@ -115,7 +115,7 @@ export const useEventCRUD = ({
     eventIdsRef.current.add(newEvent.id)
     indexEventByDays(newEvent)
     setEvents(prev => [...prev, newEvent], { skipDayIndexRebuild: true })
-    addEventToCache(user?.id, { ...newEvent, isGoogleEvent: true }).catch(() => {})
+    addEventToCache(user?.id, { ...newEvent, isGoogleEvent: true }).catch(() => { })
     saveSnapshotsForAllViews(newEvent)
 
     if (processedData.recurrenceMeta?.enabled) {
@@ -158,11 +158,10 @@ export const useEventCRUD = ({
       optimisticEventCacheRef.current.delete(newEvent.id)
       migrateOptimisticRecurrenceParentId(newEvent.id, normalizedEvent.id)
 
+      // If optimistic ID is missing from refs (due to race condition), log warning but DO NOT suppress the real event.
+      // Suppression causes the "disappearing event" bug.
       if (!eventIdsRef.current.has(newEvent.id)) {
-        suppressedEventIdsRef.current.add(normalizedEvent.id)
-        if (normalizedEvent.todoId) suppressedTodoIdsRef.current.add(String(normalizedEvent.todoId))
-        calendarApi.deleteEvent(normalizedEvent.id, normalizedEvent.calendar_id || 'primary').catch(() => {})
-        return normalizedEvent
+        console.warn('[Calendar] Optimistic ID missing during creation completion - proceeding to avoid zombie state', newEvent.id)
       }
 
       pendingSyncEventIdsRef.current.set(normalizedEvent.id, Date.now())
@@ -170,10 +169,16 @@ export const useEventCRUD = ({
       eventIdsRef.current.delete(newEvent.id)
       eventIdsRef.current.add(normalizedEvent.id)
 
+      // Atomically replace optimistic event with normalized event in eventsByDayRef
+      // to prevent flicker caused by a gap between removal and re-addition.
+      // We iterate all keys because the event might exist in multiple days.
       for (const [key, arr] of eventsByDayRef.current.entries()) {
-        const newArr = arr.filter(event => event.id !== newEvent.id)
-        if (newArr.length !== arr.length) eventsByDayRef.current.set(key, newArr)
+        const updated = arr.map(event => event.id === newEvent.id ? normalizedWithPending : event)
+        const hasOldEvent = arr.some(event => event.id === newEvent.id)
+        if (hasOldEvent) eventsByDayRef.current.set(key, updated)
       }
+
+      // Also index in case the event spans additional days not covered by the optimistic version
       indexEventByDays(normalizedWithPending)
 
       setEvents(prev => {
@@ -189,21 +194,24 @@ export const useEventCRUD = ({
 
       removeEventFromAllSnapshots(newEvent.id)
       saveSnapshotsForAllViews(normalizedWithPending)
-      removeEventFromCache(newEvent.id).catch(() => {})
-      addEventToCache(user?.id, { ...normalizedWithPending, isGoogleEvent: true }).catch(() => {})
+      removeEventFromCache(newEvent.id).catch(() => { })
+      addEventToCache(user?.id, { ...normalizedWithPending, isGoogleEvent: true }).catch(() => { })
 
       const resolvedServerStart = parseCalendarBoundary(created?.start) || coerceDate(created?.start) || start
       const resolvedServerEnd = parseCalendarBoundary(created?.end) || coerceDate(created?.end) || end
       clearOverrideIfSynced(normalizedEvent.id, resolvedServerStart, resolvedServerEnd)
 
-      if (processedData.recurrence || processedData.recurrenceRule || processedData.recurrenceSummary) {
+      const hasRecurrence = processedData.recurrenceMeta?.enabled ||
+        (Array.isArray(processedData.recurrence) && processedData.recurrence.length > 0) ||
+        (processedData.recurrenceRule && processedData.recurrenceRule.trim().length > 0)
+      if (hasRecurrence) {
         try {
           const { start: visibleStart, end: visibleEnd } = getVisibleRange(currentDate, view)
           if (visibleStart && visibleEnd) {
             fetchEventsForRange(visibleStart, visibleEnd, true, true)
-              .then(() => clearOptimisticRecurrenceInstances(normalizedEvent.id)).catch(() => {})
+              .then(() => clearOptimisticRecurrenceInstances(normalizedEvent.id)).catch(() => { })
           }
-        } catch (_) {}
+        } catch (_) { }
       } else clearOptimisticRecurrenceInstances(normalizedEvent.id)
 
       return normalizedWithPending
@@ -325,14 +333,17 @@ export const useEventCRUD = ({
         setSelectedEvent(prev => (!prev || prev.id !== id) ? prev
           : { ...prev, location: resolvedLocation, transparency: resolvedTransparency, visibility: resolvedVisibility, description: resolvedDescription, color: resolvedColor, reminders: resolvedReminders })
       }
-      if (processedData.recurrence || processedData.recurrenceRule || processedData.recurrenceSummary) {
+      const hasRecurrenceUpdate = processedData.recurrenceMeta?.enabled ||
+        (Array.isArray(processedData.recurrence) && processedData.recurrence.length > 0) ||
+        (processedData.recurrenceRule && processedData.recurrenceRule.trim().length > 0)
+      if (hasRecurrenceUpdate) {
         try {
           const { start: visibleStart, end: visibleEnd } = getVisibleRange(currentDate, view)
           if (visibleStart && visibleEnd) {
             fetchEventsForRange(visibleStart, visibleEnd, true, true)
-              .then(() => clearOptimisticRecurrenceInstances(id)).catch(() => {})
+              .then(() => clearOptimisticRecurrenceInstances(id)).catch(() => { })
           }
-        } catch (_) {}
+        } catch (_) { }
       } else clearOptimisticRecurrenceInstances(id)
       if (linkedTodoId) emitTodoScheduleUpdate(linkedTodoId, start, end, processedData.isAllDay ?? existingEvent?.isAllDay)
     } catch (error) {
@@ -361,7 +372,7 @@ export const useEventCRUD = ({
     const linkedTodoId = eventToTodoRef.current.get(String(rawId)) || (directTodoId ? String(directTodoId) : null)
     const linkedEventIdForTodo = linkedTodoId ? todoToEventRef.current.get(String(linkedTodoId)) : null
 
-    clearEventsCache().catch(() => {})
+    clearEventsCache().catch(() => { })
     clearAllSnapshots()
 
     const idsToRemove = new Set()
@@ -399,11 +410,14 @@ export const useEventCRUD = ({
         if (todoKey) {
           removalIds.forEach(id => eventToTodoRef.current.delete(String(id)))
           todoToEventRef.current.delete(todoKey)
-          calendarApi.deleteTodoEventLink(todoKey).catch(() => {})
+          calendarApi.deleteTodoEventLink(todoKey).catch(() => { })
           window.dispatchEvent(new CustomEvent('todoScheduleUpdated', { detail: { todoId: todoKey, start: null, end: null, isAllDay: false } }))
         }
         return prev.filter(ev => !removalIds.has(ev.id))
       }, { skipDayIndexRebuild: true })
+
+      // Force UI re-render after series deletion
+      bumpEventsByDayVersion()
 
       if (!eventsToDelete.length) {
         if (!isOptimistic && seriesId) {
@@ -416,7 +430,7 @@ export const useEventCRUD = ({
       if (!isOptimistic && seriesId) {
         try {
           await calendarApi.deleteEvent(seriesId, calendarId)
-          try { const { start: visibleStart, end: visibleEnd } = getVisibleRange(currentDate, view); if (visibleStart && visibleEnd) fetchEventsForRange(visibleStart, visibleEnd, true, true).catch(() => {}) } catch (_) {}
+          try { const { start: visibleStart, end: visibleEnd } = getVisibleRange(currentDate, view); if (visibleStart && visibleEnd) fetchEventsForRange(visibleStart, visibleEnd, true, true).catch(() => { }) } catch (_) { }
         } catch (error) {
           const message = typeof error?.message === 'string' ? error.message : ''
           if (!/not found/i.test(message) && !/deleted/i.test(message) && !/Resource has been deleted/i.test(message)) {
@@ -437,16 +451,16 @@ export const useEventCRUD = ({
     if (linkedEventIdForTodo && linkedEventIdForTodo !== String(rawId)) idsToRemove.add(linkedEventIdForTodo)
     setEvents(prev => prev.filter(e => !idsToRemove.has(String(e.id)) && !(todoKey && String(e.todoId) === String(todoKey))), { skipDayIndexRebuild: true })
 
-    idsToRemove.forEach(id => { eventIdsRef.current.delete(id); pendingSyncEventIdsRef.current.delete(id); unlinkEvent(id); removeEventFromAllSnapshots(id); removeEventFromCache(id).catch(() => {}) })
+    idsToRemove.forEach(id => { eventIdsRef.current.delete(id); pendingSyncEventIdsRef.current.delete(id); unlinkEvent(id); removeEventFromAllSnapshots(id); removeEventFromCache(id).catch(() => { }) })
     if (todoKey) {
       idsToRemove.forEach(id => eventToTodoRef.current.delete(String(id)))
       todoToEventRef.current.delete(todoKey)
-      calendarApi.deleteTodoEventLink(todoKey).catch(() => {})
+      calendarApi.deleteTodoEventLink(todoKey).catch(() => { })
       emitTodoScheduleUpdate(todoKey, null, null, false)
       suppressedTodoIdsRef.current.add(todoKey)
       removeTodoFromAllSnapshots(todoKey)
       const isTempId = typeof todoKey === 'string' && todoKey.startsWith('temp-')
-      if (!isTempId) todosApi.updateTodo(todoKey, { scheduled_date: null, scheduled_at: null, scheduled_end: null, scheduled_is_all_day: false, google_event_id: null, date: null }).catch(() => {})
+      if (!isTempId) todosApi.updateTodo(todoKey, { scheduled_date: null, scheduled_at: null, scheduled_end: null, scheduled_is_all_day: false, google_event_id: null, date: null }).catch(() => { })
     }
 
     for (const [key, arr] of eventsByDayRef.current.entries()) {
@@ -454,6 +468,9 @@ export const useEventCRUD = ({
       if (next.length !== arr.length) eventsByDayRef.current.set(key, next)
     }
     idsToRemove.forEach(id => suppressedEventIdsRef.current.add(id))
+
+    // Force UI re-render after single event deletion
+    bumpEventsByDayVersion()
 
     try { if (!isOptimistic) await calendarApi.deleteEvent(rawId, calendarId) }
     catch (error) {
@@ -468,7 +485,7 @@ export const useEventCRUD = ({
         emitTodoScheduleUpdate(linkedTodoId, rollback.start ? new Date(rollback.start) : null, rollback.end ? new Date(rollback.end) : null, rollback.isAllDay || false)
       }
     }
-  }, [unlinkEvent, indexEventByDays, removeEventFromAllSnapshots, saveSnapshotsForAllViews, clearOptimisticRecurrenceInstances, getVisibleRange, currentDate, view, fetchEventsForRange, clearAllSnapshots, removeTodoFromAllSnapshots])
+  }, [unlinkEvent, indexEventByDays, removeEventFromAllSnapshots, saveSnapshotsForAllViews, clearOptimisticRecurrenceInstances, getVisibleRange, currentDate, view, fetchEventsForRange, clearAllSnapshots, removeTodoFromAllSnapshots, bumpEventsByDayVersion])
 
   const respondToInvite = useCallback(async (eventId, responseStatus) => {
     if (!eventId || !responseStatus) return

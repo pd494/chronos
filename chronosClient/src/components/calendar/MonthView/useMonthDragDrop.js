@@ -18,14 +18,14 @@ export const useMonthDragDrop = ({ updateEvent, convertTodoToEvent }) => {
     if (typeof window === 'undefined') return
     try {
       window.dispatchEvent(new CustomEvent('chronos-todo-overlay-hide'))
-    } catch (_) {}
+    } catch (_) { }
   }, [])
 
   const stripDragVisuals = useCallback(() => {
     if (typeof document === 'undefined') return
     try {
       cleanupDragArtifacts()
-    } catch (_) {}
+    } catch (_) { }
     document.querySelectorAll('.event-dragover').forEach(el => el.classList.remove('event-dragover'))
   }, [])
 
@@ -41,7 +41,7 @@ export const useMonthDragDrop = ({ updateEvent, convertTodoToEvent }) => {
             el.style.setProperty('display', 'none', 'important')
             el.style.setProperty('opacity', '0', 'important')
             el.remove()
-          } catch (_) {}
+          } catch (_) { }
         })
       }
       nuke()
@@ -105,7 +105,7 @@ export const useMonthDragDrop = ({ updateEvent, convertTodoToEvent }) => {
   const handleDragOver = useCallback((e) => {
     e.preventDefault()
     if (document.body.classList.contains('task-dragging')) {
-      try { window.dispatchEvent(new CustomEvent('chronos-todo-overlay-suppress')) } catch (_) {}
+      try { window.dispatchEvent(new CustomEvent('chronos-todo-overlay-suppress')) } catch (_) { }
       e.dataTransfer.dropEffect = 'copy'
       const dayCell = e.currentTarget
       const dateStr = dayCell.getAttribute('data-date')

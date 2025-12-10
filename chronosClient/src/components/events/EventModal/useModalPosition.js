@@ -70,13 +70,17 @@ export const getModalPosition = (view, dimensions = DEFAULT_MODAL_DIMENSIONS) =>
   const anchorRect = resolveAnchorRect()
 
   const fallbackCentered = () => {
-    const centeredTop = viewportHeight
-      ? clamp((viewportHeight - modalHeight) / 2, VIEWPORT_MARGIN, viewportHeight - modalHeight - VIEWPORT_MARGIN)
+    // Position at bottom-right for new events (double-tap to create)
+    const bottomMargin = Math.max(VIEWPORT_MARGIN, 40)
+    const bottomTop = viewportHeight
+      ? clamp(viewportHeight - modalHeight - bottomMargin, VIEWPORT_MARGIN, viewportHeight - modalHeight - VIEWPORT_MARGIN)
       : VIEWPORT_MARGIN
+    // Position more to the right - offset from center by 150px
+    const rightOffset = 150
     const centeredLeft = viewportWidth
-      ? clamp((viewportWidth - modalWidth) / 2, VIEWPORT_MARGIN, viewportWidth - modalWidth - VIEWPORT_MARGIN)
+      ? clamp((viewportWidth - modalWidth) / 2 + rightOffset, VIEWPORT_MARGIN, viewportWidth - modalWidth - VIEWPORT_MARGIN)
       : VIEWPORT_MARGIN
-    return { top: centeredTop, left: centeredLeft, pointerSide: null, pointerOffset: modalHeight / 2, width: modalWidth, maxHeight: modalHeight }
+    return { top: bottomTop, left: centeredLeft, pointerSide: null, pointerOffset: modalHeight / 2, width: modalWidth, maxHeight: modalHeight }
   }
 
   if (!anchorRect) return fallbackCentered()

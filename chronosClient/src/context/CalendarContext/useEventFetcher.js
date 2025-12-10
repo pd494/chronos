@@ -23,7 +23,7 @@ export const useEventFetcher = ({
   } = eventState
 
   const { extendLoadedRange, indexEventByDays } = snapshotHelpers
-  const { linkTodoEvent, unlinkEvent } = todoLinkHelpers
+  const { unlinkEvent } = todoLinkHelpers
 
   const lastEnsureRangeRef = useRef({ start: null, end: null })
   const ensureRangeCooldownRef = useRef(0)
@@ -48,7 +48,32 @@ export const useEventFetcher = ({
     const segEnd = endOfDay(toDateFromMonth(mEnd, true))
     const viewerEmail = typeof user?.email === 'string' ? user.email.toLowerCase() : null
 
-    const response = await calendarApi.getEvents(segStart.toISOString(), segEnd.toISOString(), selectedCalendars)
+    const response = await calendarApi.getEvents(segStart.toISOString(), segEnd.toISOString())
+
+    const providerToInternal = new Map()
+    const calendarColorMap = new Map()
+    const idMapGlobal = {}
+      ; (response.calendars || []).forEach(cal => {
+        if (cal.provider_calendar_id && cal.id) providerToInternal.set(cal.provider_calendar_id, cal.id)
+        if (cal.id && cal.color) calendarColorMap.set(cal.id, cal.color)
+        if (cal.provider_calendar_id && cal.color) calendarColorMap.set(cal.provider_calendar_id, cal.color)
+        if (cal.provider_calendar_id && cal.id) {
+          idMapGlobal[cal.provider_calendar_id] = cal.id
+          idMapGlobal[cal.id] = cal.id
+        }
+      })
+    const globalColors = typeof window !== 'undefined' && window.chronosCalendarColors ? window.chronosCalendarColors : {}
+    if (typeof window !== 'undefined') {
+      window.chronosCalendarIdMap = { ...(window.chronosCalendarIdMap || {}), ...idMapGlobal }
+      try { window.localStorage.setItem('chronos:calendar-id-map', JSON.stringify(window.chronosCalendarIdMap)) } catch (_) { }
+    }
+    const allowedCalendarIds = (() => {
+      if (!selectedCalendars || selectedCalendars.length === 0) return null
+      const translated = selectedCalendars
+        .flatMap(id => [id, providerToInternal.get(id) || null])
+        .filter(Boolean)
+      return translated.length ? new Set(translated) : null
+    })()
 
     const seriesInfo = new Map()
     for (const event of response.events) {
@@ -62,11 +87,19 @@ export const useEventFetcher = ({
 
     const googleEvents = response.events
       .map(event => transformApiEventToInternal(event, { seriesInfo, viewerEmail, applyOverrides: applyEventTimeOverrides }))
+      .map(ev => {
+        if (!ev) return ev
+        const calColor = calendarColorMap.get(ev.calendar_id) || globalColors[ev.calendar_id]
+        if (calColor && (!ev.color || ev.color === 'blue')) return { ...ev, color: calColor }
+        return ev
+      })
       .filter(ev => {
         if (!ev) return false
         if (suppressedEventIdsRef.current.has(ev.id)) return false
         if (ev.todoId && suppressedTodoIdsRef.current.has(ev.todoId)) return false
-        return true
+        if (!allowedCalendarIds || !allowedCalendarIds.size) return true
+        if (!ev.calendar_id) return true
+        return allowedCalendarIds.has(ev.calendar_id)
       })
 
     const segmentStartMs = segStart.getTime()
@@ -149,11 +182,14 @@ export const useEventFetcher = ({
       for (const ev of toReindex) {
         eventIdsRef.current.add(ev.id)
         pendingSyncEventIdsRef.current.delete(ev.id)
+        // Atomically replace events in eventsByDayRef instead of remove-then-add
+        // to prevent flicker caused by a gap between removal and re-addition
         for (const [key, arr] of eventsByDayRef.current.entries()) {
-          const filtered = arr.filter(item => item.id !== ev.id)
-          if (filtered.length !== arr.length) eventsByDayRef.current.set(key, filtered)
+          const updatedArr = arr.map(item => item.id === ev.id ? ev : item)
+          const hadEvent = arr.some(item => item.id === ev.id)
+          if (hadEvent) eventsByDayRef.current.set(key, updatedArr)
         }
-        if (ev.todoId) linkTodoEvent(ev.todoId, ev.id)
+        // Index the event in case it spans days not already indexed
         indexEventByDays(ev)
       }
     }
@@ -161,7 +197,7 @@ export const useEventFetcher = ({
     const segMonths = enumerateMonths(segStart, segEnd)
     for (const m of segMonths) loadedMonthsRef.current.add(m)
     extendLoadedRange(segStart, segEnd)
-  }, [user, selectedCalendars, extendLoadedRange, linkTodoEvent, applyEventTimeOverrides, unlinkEvent])
+  }, [user, selectedCalendars, extendLoadedRange, applyEventTimeOverrides, unlinkEvent])
 
   const fetchEventsForRange = useCallback(async (startDate, endDate, background = false, forceReload = false) => {
     if (!user) return
@@ -209,7 +245,7 @@ export const useEventFetcher = ({
       const runners = Array.from({ length: Math.min(concurrency, segments.length) }, async () => {
         while (index < segments.length) {
           const myIndex = index++
-          try { await processSegment(segments[myIndex][0], segments[myIndex][1], background) } catch (_) {}
+          try { await processSegment(segments[myIndex][0], segments[myIndex][1], background) } catch (_) { }
         }
       })
       await Promise.all(runners)
@@ -298,7 +334,7 @@ export const useEventFetcher = ({
 
     if (reset) {
       eventState.resetForRefresh()
-      try { const snapshotKey = `chronos:snap:${user?.id || ''}:${start.getTime()}_${end.getTime()}`; window.sessionStorage.removeItem(snapshotKey) } catch (_) {}
+      try { const snapshotKey = `chronos:snap:${user?.id || ''}:${start.getTime()}_${end.getTime()}`; window.sessionStorage.removeItem(snapshotKey) } catch (_) { }
     }
 
     const isInitialLoad = !hasLoadedInitialRef.current
