@@ -145,13 +145,43 @@ export const useBootstrap = ({
       skipNextDayIndexRebuildRef.current = false
       return
     }
-    const seen = new Set()
+    const seenIds = new Set()
+    const seenTodoIds = new Map() // todoId -> event (prefer non-optimistic)
     const deduped = []
     let hadDuplicates = false
+
     for (const ev of events) {
       if (!ev || !ev.id) continue
-      if (seen.has(ev.id)) { hadDuplicates = true; continue }
-      seen.add(ev.id)
+
+      // Check for duplicate event IDs
+      if (seenIds.has(ev.id)) { hadDuplicates = true; continue }
+
+      // Check for duplicate todoIds (optimistic vs resolved)
+      const todoId = ev.todoId || ev.todo_id
+      if (todoId) {
+        const existing = seenTodoIds.get(String(todoId))
+        if (existing) {
+          hadDuplicates = true
+          // Keep the non-optimistic (resolved) version
+          if (ev.isOptimistic && !existing.isOptimistic) {
+            // Current is optimistic, existing is resolved - skip current
+            continue
+          } else if (!ev.isOptimistic && existing.isOptimistic) {
+            // Current is resolved, existing is optimistic - replace existing
+            const idx = deduped.findIndex(e => e.id === existing.id)
+            if (idx >= 0) {
+              seenIds.delete(existing.id)
+              deduped.splice(idx, 1)
+            }
+          } else {
+            // Both same type, skip current as duplicate
+            continue
+          }
+        }
+        seenTodoIds.set(String(todoId), ev)
+      }
+
+      seenIds.add(ev.id)
       deduped.push(ev)
     }
     if (hadDuplicates) {

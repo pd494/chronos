@@ -89,7 +89,7 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
   const [previewColor, setPreviewColor] = useState(null)
   const resizingDataRef = useRef(null)
   const resizingPreviewRef = useRef(null)
-  
+
   // Clear animation after it plays
   useEffect(() => {
     if (showDropAnim) {
@@ -101,7 +101,7 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
   useEffect(() => {
     setShowDropAnim(resolveFreshDrop())
   }, [event?._freshDrop, event?.id])
-  
+
   // Ensure we're working with proper Date objects
   const startDate = event.start instanceof Date ? event.start : new Date(event.start)
   const endDate = event.end instanceof Date ? event.end : new Date(event.end)
@@ -109,12 +109,12 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
   const previewEnd = resizePreview?.end ?? previewTimes?.end ?? endDate
   const positionStart = startDate
   const positionEnd = resizePreview?.end ?? endDate
-  
+
   const startHour = startDate.getHours()
   const startMinute = startDate.getMinutes()
   const endHour = endDate.getHours()
   const endMinute = endDate.getMinutes()
-  
+
   // Calculate position and height
   const top = (positionStart.getHours() - dayStartHour) * hourHeight + (positionStart.getMinutes() / 60) * hourHeight
   const duration = Math.max(5, differenceInMinutes(positionEnd, positionStart))
@@ -128,7 +128,7 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
   const isDeclined = responseStatus === 'declined'
   const isCheckedOff = isEventChecked(event.id)
   const visuallyChecked = isCheckedOff && !isDeclined
-  
+
   // Don't show pending invite styling if current user is the organizer
   const isCurrentUserOrganizer = event.organizerEmail === user?.email
   const showPendingStyling = (isPendingInvite || isTentative) && !isCurrentUserOrganizer
@@ -166,10 +166,10 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
     setIsDragging(true)
     e.dataTransfer.effectAllowed = 'move'
     e.dataTransfer.dropEffect = 'move'
-    try { e.dataTransfer.setData('text/plain', '') } catch (_) {}
+    try { e.dataTransfer.setData('text/plain', '') } catch (_) { }
     e.dataTransfer.setData('event', JSON.stringify(event))
     e.dataTransfer.setData('eventId', event.id)
-    
+
     const rect = e.currentTarget.getBoundingClientRect()
     const rawDurationMs = Math.max(5 * 60 * 1000, endDate.getTime() - startDate.getTime())
     const ONE_HOUR = 60 * 60 * 1000
@@ -189,10 +189,10 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
       window.__chronosDragAxis = null
       window.__chronosDragStartPoint = { x: startPointX, y: startPointY }
     }
-    
+
     // Mark this specific element as being dragged
     e.currentTarget.setAttribute('data-dragging', 'true')
-    
+
     const dragPreview = document.createElement('div')
     dragPreview.style.position = 'absolute'
     dragPreview.style.top = '-9999px'
@@ -202,11 +202,11 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
     document.body.appendChild(dragPreview)
     try {
       e.dataTransfer.setDragImage(dragPreview, 0, 0)
-    } catch (_) {}
+    } catch (_) { }
     setTimeout(() => {
       if (dragPreview.parentNode) dragPreview.parentNode.removeChild(dragPreview)
     }, 0)
-    
+
     // Disable pointer events on the original element after drag image is set
     requestAnimationFrame(() => {
       e.currentTarget.style.pointerEvents = 'none'
@@ -233,12 +233,12 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
       el.classList.remove('event-dragover')
     })
   }
-  
+
   // Format time for display - restore 12-hour format
   const formatTime = (date) => {
     return format(date, 'h:mm a')
   }
-  
+
   // Get standardized colors
   useEffect(() => {
     if (typeof window === 'undefined') return undefined
@@ -265,11 +265,11 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
   }, [event.id])
 
   const colors = getEventColors(normalizeToPaletteColor(previewColor || event.color || 'blue'))
-  
+
   const columns = position?.columns || 1
   const columnIndex = position?.column || 0
   const stackIndex = position?.stackIndex || 0
-  
+
   // When only one column is present, let the slice take the full width.
   const isSingleColumn = columns <= 1
   const sliceWidthPercent = isSingleColumn ? 100 : 70
@@ -317,7 +317,7 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
     : visuallyChecked
       ? lightenHexColor(colors.background, 25)
       : colors.background
-  
+
   const now = new Date()
   const isPast = previewEnd < now
   const pastOpacity = 0.7
@@ -325,10 +325,10 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
   const eventOpacity = isDragging
     ? 1
     : (showPendingStyling
-        ? 0.9
-        : (visuallyChecked
-            ? 0.7
-            : (isPast ? pastOpacity : 1)))
+      ? 0.9
+      : (visuallyChecked
+        ? 0.7
+        : (isPast ? pastOpacity : 1)))
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -420,7 +420,7 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
   return (
     <div
       draggable={!isResizing && dragEnabled}
-      
+
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
       className={[
@@ -450,29 +450,30 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
         border: showPendingStyling ? '1px dashed rgba(148, 163, 184, 0.9)' : undefined,
         filter: showPendingStyling ? 'saturate(0.9)' : undefined,
         overflow: 'hidden',
-        userSelect: 'none'
+        userSelect: 'none',
+        animation: showDropAnim ? 'eventDropPop 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)' : undefined,
       }}
     >
       {/* Vertical line - rounded and floating */}
-      <div 
-        className="absolute left-0.5 top-0.5 bottom-0.5 w-1 rounded-full pointer-events-none" 
-        style={{ 
+      <div
+        className="absolute left-0.5 top-0.5 bottom-0.5 w-1 rounded-full pointer-events-none"
+        style={{
           backgroundColor: colors.border,
           zIndex: 3
         }}
       ></div>
-      
-      <div 
-        className="ml-3.5" 
+
+      <div
+        className="ml-3.5"
         style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}
       >
-      <div 
-        className="font-medium mb-0.5 flex items-start gap-1.5" 
-        style={{ 
-          color: titleColor
-        }}
+        <div
+          className="font-medium mb-0.5 flex items-start gap-1.5"
+          style={{
+            color: titleColor
+          }}
         >
-          <span 
+          <span
             className="flex-1 min-w-0 whitespace-nowrap overflow-hidden text-ellipsis"
             style={titleStyle}
           >
@@ -482,10 +483,10 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
             <FiRepeat className="flex-shrink-0 mt-0.5" size={14} />
           )}
         </div>
-        <div 
+        <div
           className="text-xs leading-tight"
           data-event-time="true"
-          style={{ 
+          style={{
             color: timeColor,
             fontWeight: isPreviewing ? 600 : 500,
             fontSize: 'clamp(8px, 0.85vw, 10.5px)',
@@ -514,7 +515,7 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
         {(() => {
           // Check for meeting links in various fields (hangoutLink, conferenceData, location)
           let meetingLink = '';
-          
+
           // Check hangoutLink first (Google Meet)
           if (event.hangoutLink) {
             meetingLink = event.hangoutLink;
@@ -539,11 +540,11 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
               meetingLink = location;
             }
           }
-          
+
           // If we found a meeting link, display it with icon and shortened format
           if (meetingLink) {
             let displayLink = meetingLink;
-            
+
             // Shorten Zoom links
             if (meetingLink.includes('zoom.us') || meetingLink.includes('zoom.com')) {
               displayLink = 'zoom.us';
@@ -552,11 +553,11 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
             else if (meetingLink.includes('meet.google.com')) {
               displayLink = 'meet.google.com';
             }
-            
+
             return (
-              <div 
+              <div
                 className="text-xs mt-1 opacity-80 flex items-start gap-1"
-                style={{ 
+                style={{
                   color: timeColor
                 }}
               >
@@ -565,13 +566,13 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
               </div>
             );
           }
-          
+
           // Otherwise, show description if it exists
           if (showDescription) {
             return (
-              <div 
+              <div
                 className="text-xs mt-1 break-words whitespace-normal opacity-80"
-                style={{ 
+                style={{
                   color: timeColor,
                   display: '-webkit-box',
                   WebkitLineClamp: 2,
@@ -584,7 +585,7 @@ const WeekEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) =>
               </div>
             );
           }
-          
+
           return null;
         })()}
       </div>

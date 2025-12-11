@@ -21,7 +21,7 @@ export const useCalendarState = () => {
 
   const persistView = (next) => {
     if (typeof window !== 'undefined') {
-      try { window.localStorage.setItem(VIEW_STORAGE_KEY, next) } catch (_) {}
+      try { window.localStorage.setItem(VIEW_STORAGE_KEY, next) } catch (_) { }
     }
   }
 

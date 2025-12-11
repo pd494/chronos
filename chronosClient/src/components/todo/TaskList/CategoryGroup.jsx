@@ -1,85 +1,25 @@
-import React, { useEffect, useRef, useState } from 'react';
-import Sortable from 'sortablejs';
-import TaskItem from './TaskItem';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
 import {
-  globalDragState,
-  DRAG_CLICK_SUPPRESSION_MS,
-  cleanupDragArtifacts,
-  stopCalendarDragMonitor,
-  createSortableConfig
-} from './dragUtils';
+  SortableContext,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import TaskItem from './TaskItem';
 
 const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory }) => {
   const [isCollapsed, setIsCollapsed] = useState(category.name === 'Completed');
   const [isEditingNewTask, setIsEditingNewTask] = useState(false);
   const [newTaskText, setNewTaskText] = useState('');
-  const [renderKey, setRenderKey] = useState(0);
   const newTaskInputRef = useRef(null);
-  const tasksContainerRef = useRef(null);
-  const sortableRef = useRef(null);
-  
+
+  // Get task IDs for SortableContext
+  const taskIds = useMemo(() => tasks.map(task => task.id), [tasks]);
+
   useEffect(() => {
     if (isEditingNewTask && newTaskInputRef.current) {
       newTaskInputRef.current.focus();
     }
   }, [isEditingNewTask]);
 
-  useEffect(() => {
-    const handleGlobalDragEnd = () => {
-      setTimeout(() => {
-        if (!globalDragState.dragging) return;
-        globalDragState.dragging = false;
-        cleanupDragArtifacts();
-        stopCalendarDragMonitor();
-        if (typeof window !== 'undefined') {
-          window.__chronosDraggedTodoMeta = null;
-        }
-        setRenderKey(prev => prev + 1);
-      }, 50);
-    };
-
-    document.addEventListener('dragend', handleGlobalDragEnd);
-    return () => {
-      document.removeEventListener('dragend', handleGlobalDragEnd);
-    };
-  }, []);
-  
-  useEffect(() => {
-    const container = tasksContainerRef.current;
-    if (!container) return;
-    
-    const handleDragStart = (e) => {
-      if (!e.target.closest('.task-drag-handle')) return;
-    };
-    
-    container.addEventListener('dragstart', handleDragStart, true);
-    return () => container.removeEventListener('dragstart', handleDragStart, true);
-  }, [isCollapsed]);
-  
-  useEffect(() => {
-    if (!tasksContainerRef.current || isCollapsed) {
-      if (sortableRef.current) {
-        sortableRef.current.destroy();
-        sortableRef.current = null;
-      }
-      return;
-    }
-
-    if (sortableRef.current) {
-      return;
-    }
-
-    const sortable = Sortable.create(tasksContainerRef.current, createSortableConfig(setRenderKey));
-    sortableRef.current = sortable;
-
-    return () => {
-      if (sortableRef.current) {
-        sortableRef.current.destroy();
-        sortableRef.current = null;
-      }
-    };
-  }, [isCollapsed, category?.name, tasks, renderKey]);
-  
   const handleAddTask = () => {
     if (newTaskText.trim()) {
       onAddTaskToCategory(newTaskText, category.name);
@@ -87,7 +27,7 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
       setIsEditingNewTask(false);
     }
   };
-  
+
   const handleKeyDown = (e) => {
     if (e.key === 'Enter') {
       handleAddTask();
@@ -96,7 +36,7 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
       setNewTaskText('');
     }
   };
-  
+
   const getCategoryIcon = () => {
     if (!category.icon) return '⬤';
     if (category.icon.startsWith('#')) {
@@ -106,20 +46,14 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
   };
 
   const handleHeaderActivate = (event) => {
-    const now = Date.now();
-    if (globalDragState.dragging || now - globalDragState.lastEnd < DRAG_CLICK_SUPPRESSION_MS) {
-      event.preventDefault();
-      event.stopPropagation();
-      return;
-    }
     setIsCollapsed(prev => !prev);
   };
 
   return (
     <div className="category-group mb-3 rounded-lg overflow-hidden">
       <div className="flex items-center justify-between relative">
-        <div 
-          className="category-header flex items-center py-2.5 px-4 bg-transparent cursor-grab rounded-2xl transition-colors duration-200 relative flex-grow hover:bg-black/5"
+        <div
+          className="category-header flex items-center py-2.5 px-4 bg-transparent cursor-pointer rounded-2xl transition-colors duration-200 relative flex-grow hover:bg-black/5"
           role="button"
           tabIndex={0}
           onClick={handleHeaderActivate}
@@ -138,7 +72,7 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
           </span>
         </div>
         {category.name !== 'Completed' ? (
-          <button 
+          <button
             className="w-6 h-6 rounded-full bg-transparent border-none text-[#666] text-base flex items-center justify-center cursor-pointer p-0 mr-4 z-[2] hover:bg-black/5"
             onClick={(e) => {
               e.stopPropagation();
@@ -153,18 +87,20 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
           <span className="w-6 h-6 mr-4" aria-hidden="true" />
         )}
       </div>
-      
+
       {!isCollapsed && (
-        <div className="pl-2" ref={tasksContainerRef} key={renderKey}>
-          {tasks.map(task => (
-            <TaskItem
-              key={task.id}
-              task={task}
-              categoryColor={typeof category.icon === 'string' && category.icon.startsWith('#') ? category.icon : ''}
-              onToggleComplete={onToggleComplete}
-            />
-          ))}
-          
+        <div className="pl-2">
+          <SortableContext items={taskIds} strategy={verticalListSortingStrategy}>
+            {tasks.map(task => (
+              <TaskItem
+                key={task.id}
+                task={task}
+                categoryColor={typeof category.icon === 'string' && category.icon.startsWith('#') ? category.icon : ''}
+                onToggleComplete={onToggleComplete}
+              />
+            ))}
+          </SortableContext>
+
           {isEditingNewTask && (
             <div className="task-item flex items-center py-2.5 pr-4 mb-1.5 rounded-[20px] relative bg-black/[0.02]">
               <div className="w-[18px] h-[18px] border-2 border-[#8e8e93] rounded-md mr-3 flex justify-center items-center">
@@ -188,7 +124,7 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
               </div>
             </div>
           )}
-          
+
           {tasks.length === 0 && !isEditingNewTask && (
             <div className="flex justify-center items-center py-6 px-4 text-[#8e8e93] text-[15px] italic">
               <p>No tasks in this category</p>

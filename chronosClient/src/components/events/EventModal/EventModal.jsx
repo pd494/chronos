@@ -34,11 +34,9 @@ const EventModal = () => {
 
   useEffect(() => {
     if (!internalVisible) return
-    // Small delay to ensure modal is rendered before focusing
     const timer = setTimeout(() => {
       if (titleInputRef.current) {
         titleInputRef.current.focus()
-        // Select all text for new events to allow immediate typing
         if (!selectedEvent) titleInputRef.current.select()
       }
     }, 50)

@@ -1,10 +1,89 @@
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect, useMemo } from 'react'
 import ReactDOM from 'react-dom'
-import Sortable from 'sortablejs'
+import {
+  SortableContext,
+  horizontalListSortingStrategy,
+  useSortable,
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import { useTaskContext } from '../../context/TaskContext/context'
 
 const CATEGORY_COLORS = ['#C5E0F9', '#D3D3FF', '#f67f9cff', '#FFFFC5', '#D4F4DD', '#B8E6E6', '#FFDAB3', '#E8D6C0']
 const PROTECTED_CATEGORY_NAMES = new Set(['Today', 'Inbox', 'Completed'])
+
+// Sortable category tab component
+const SortableCategoryTab = ({
+  category,
+  isActive,
+  onCategoryChange,
+  onContextMenu,
+  isCollapsed,
+  inHeader,
+  truncatedTabs,
+  tabRefs,
+  labelRefs,
+  getCategoryColor,
+  headerTabShell,
+  headerTabSizing,
+  nameTextSize,
+  iconCircleSize,
+  iconTextSize,
+  countSize,
+}) => {
+  const isDraggable = category.id !== 'all' && category.name !== 'future'
+
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
+    id: category.id,
+    disabled: !isDraggable,
+    data: {
+      type: 'category-tab',
+      id: category.id,
+      category,
+    },
+  })
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+    zIndex: isDragging ? 1000 : undefined,
+  }
+
+  const tabClass = `${headerTabShell} ${headerTabSizing} ${isActive ? 'text-gray-900 font-semibold' : 'text-gray-500 hover:bg-black/5'
+    } ${inHeader && isActive ? 'bg-gray-100' : ''}`
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      data-category-id={category.id}
+      data-draggable={isDraggable}
+      className={tabClass}
+      onClick={() => category.name && onCategoryChange(category.name)}
+      onContextMenu={(e) => onContextMenu(e, category)}
+      {...(isDraggable ? { ...attributes, ...listeners } : {})}
+    >
+      {category.icon && typeof category.icon === 'string' && category.icon.startsWith('#') ? (
+        <span className={`rounded-full flex-shrink-0 ${iconCircleSize}`} style={{ backgroundColor: getCategoryColor(category) }} />
+      ) : (
+        <span className={`flex-shrink-0 ${iconTextSize}`}>{category.icon}</span>
+      )}
+      {(inHeader || !isCollapsed) && (
+        <span className={`${nameTextSize} font-normal text-black whitespace-nowrap overflow-hidden text-ellipsis ${isActive ? 'font-semibold' : ''}`}
+          ref={(el) => { if (el) labelRefs.current[category.id] = el; else delete labelRefs.current[category.id] }}
+          title={truncatedTabs.has(category.id) ? category.name : ''}>{category.name}</span>
+      )}
+      {category.count !== undefined && <span className={`${countSize} text-gray-500 ml-1 ${isActive ? 'text-black' : ''}`}>{category.count}</span>}
+    </div>
+  )
+}
 
 const CategoryTabs = ({ categories, activeCategory, onCategoryChange, isCollapsed = false, isCompact = false, inHeader = false }) => {
   const { createCategory, reorderCategories, deleteCategory } = useTaskContext()
@@ -22,6 +101,14 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, isCollapse
   const colorPickerRef = useRef(null)
   const contextMenuRef = useRef(null)
 
+  // Get category IDs for SortableContext
+  const categoryIds = useMemo(() =>
+    categories
+      .filter(cat => cat.id !== 'add-category')
+      .map(cat => cat.id),
+    [categories]
+  )
+
   useEffect(() => {
     const checkTruncation = () => {
       const newTruncated = new Set()
@@ -34,27 +121,6 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, isCollapse
     window.addEventListener('resize', checkTruncation)
     return () => window.removeEventListener('resize', checkTruncation)
   }, [categories])
-
-  useEffect(() => {
-    if (!listRef.current || isAddingCategory) return
-    const sortable = Sortable.create(listRef.current, {
-      animation: 200,
-      draggable: '[data-draggable="true"]',
-      ghostClass: 'opacity-100',
-      chosenClass: 'opacity-30',
-      dragClass: 'opacity-30',
-      direction: 'horizontal',
-      onEnd: (evt) => {
-        if (evt.oldIndex === evt.newIndex) return
-        const orderedIds = Array.from(listRef.current.querySelectorAll('[data-category-id]'))
-          .map(el => el.getAttribute('data-category-id'))
-          .filter(Boolean)
-          .filter(id => id !== 'add-category' && id !== 'all')
-        reorderCategories(orderedIds)
-      }
-    })
-    return () => sortable.destroy()
-  }, [reorderCategories, categories, isAddingCategory])
 
   const getCategoryColor = (category) => {
     if (category.icon && category.icon.startsWith('#')) return category.icon
@@ -116,29 +182,29 @@ const CategoryTabs = ({ categories, activeCategory, onCategoryChange, isCollapse
     <div className={containerClass} ref={tabsContainerRef}>
       <div className={tabsRowClass}>
         <div className={scrollClass} ref={listRef} style={{ scrollbarWidth: 'none' }}>
-          {categories.map(category => {
-            const isActive = activeCategory === category.name
-            const tabClass = `${headerTabShell} ${headerTabSizing} ${
-              isActive ? 'text-gray-900 font-semibold' : 'text-gray-500 hover:bg-black/5'
-            } ${inHeader && isActive ? 'bg-gray-100' : ''}`
-            return (
-              <div key={category.id} data-category-id={category.id} data-draggable={category.id !== 'all' && category.name !== 'future'}
-                className={tabClass} onClick={() => category.name && onCategoryChange(category.name)} onContextMenu={(e) => handleContextMenu(e, category)}
-                ref={(el) => { if (el) tabRefs.current[category.id] = el; else delete tabRefs.current[category.id] }}>
-                {category.icon && typeof category.icon === 'string' && category.icon.startsWith('#') ? (
-                  <span className={`rounded-full flex-shrink-0 ${iconCircleSize}`} style={{ backgroundColor: getCategoryColor(category) }} />
-                ) : (
-                  <span className={`flex-shrink-0 ${iconTextSize}`}>{category.icon}</span>
-                )}
-                {(inHeader || !isCollapsed) && (
-                  <span className={`${nameTextSize} font-normal text-black whitespace-nowrap overflow-hidden text-ellipsis ${isActive ? 'font-semibold' : ''}`}
-                    ref={(el) => { if (el) labelRefs.current[category.id] = el; else delete labelRefs.current[category.id] }}
-                    title={truncatedTabs.has(category.id) ? category.name : ''}>{category.name}</span>
-                )}
-                {category.count !== undefined && <span className={`${countSize} text-gray-500 ml-1 ${isActive ? 'text-black' : ''}`}>{category.count}</span>}
-              </div>
-            )
-          })}
+          <SortableContext items={categoryIds} strategy={horizontalListSortingStrategy}>
+            {categories.map(category => (
+              <SortableCategoryTab
+                key={category.id}
+                category={category}
+                isActive={activeCategory === category.name}
+                onCategoryChange={onCategoryChange}
+                onContextMenu={handleContextMenu}
+                isCollapsed={isCollapsed}
+                inHeader={inHeader}
+                truncatedTabs={truncatedTabs}
+                tabRefs={tabRefs}
+                labelRefs={labelRefs}
+                getCategoryColor={getCategoryColor}
+                headerTabShell={headerTabShell}
+                headerTabSizing={headerTabSizing}
+                nameTextSize={nameTextSize}
+                iconCircleSize={iconCircleSize}
+                iconTextSize={iconTextSize}
+                countSize={countSize}
+              />
+            ))}
+          </SortableContext>
         </div>
         {isAddingCategory ? (
           <div className={`flex items-center gap-2 px-2 h-8 min-w-[200px] rounded-md z-[15] animate-[slideIn_0.2s_ease-out] ${inHeader ? 'bg-white' : 'bg-[#f5f5f7]'}`}>

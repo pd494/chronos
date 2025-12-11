@@ -59,13 +59,16 @@ export const useTaskConversion = ({
     };
 
     if (typeof window !== 'undefined') {
+      // Track conversion time to prevent premature day index rebuilds
+      window.__chronosLastTodoConversion = Date.now();
+
       window.dispatchEvent(new CustomEvent('chronos-todo-overlay-hide'));
 
       window.dispatchEvent(new CustomEvent('todoConvertedToEvent', {
         detail: {
           eventData: optimisticEvent,
           isOptimistic: true,
-          todoId
+          todoId: todoKey
         }
       }));
     }
@@ -88,8 +91,8 @@ export const useTaskConversion = ({
         isGoogleEvent: true,
         isAllDay,
         color: uiCategoryColor,
-        todoId,
-        todo_id: todoId,
+        todoId: todoKey,
+        todo_id: todoKey,
         _freshDrop: false
       };
 
@@ -112,7 +115,7 @@ export const useTaskConversion = ({
           detail: {
             eventData: resolvedEvent,
             isOptimistic: false,
-            todoId
+            todoId: todoKey
           }
         }));
       }

@@ -6,6 +6,7 @@ import { cleanupDragArtifacts } from '../WeekView/constants'
 export const useMonthDragDrop = ({ updateEvent, convertTodoToEvent }) => {
   const [todoPreviewDate, setTodoPreviewDate] = useState(null)
   const pendingTodoConversionRef = useRef(null)
+  const pendingTodoPreviewDateRef = useRef(null)
 
   const getDraggedTodoMeta = useCallback(() => {
     if (typeof window === 'undefined') return null
@@ -131,6 +132,13 @@ export const useMonthDragDrop = ({ updateEvent, convertTodoToEvent }) => {
   }, [clearTodoPreview])
 
   const handleTodoDrop = useCallback(async (e, targetDate) => {
+    // Skip if dnd-kit is handling this drag - it will call convertTodoToEvent in its own handleDragEnd
+    if (document.body.classList.contains('dnd-kit-dragging')) {
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
+
     const meta = getDraggedTodoMeta()
     const isTodoDrag = document.body.classList.contains('task-dragging') || !!meta
     if (!isTodoDrag) return
@@ -148,9 +156,16 @@ export const useMonthDragDrop = ({ updateEvent, convertTodoToEvent }) => {
     }
     if (!taskId) return
 
-    endTodoDragSession()
-
+    // Set the pending ref IMMEDIATELY after validation to prevent race condition
+    // with handleGlobalTodoDragEnd which also fires on todo drop
     pendingTodoConversionRef.current = taskId
+    pendingTodoPreviewDateRef.current = taskId
+
+    // Clean up drag UI but DON'T clear the preview - keep it visible until event appears
+    document.body.classList.remove('task-dragging')
+    hideTodoOverlay()
+    stripDragVisuals()
+    obliterateFloatingTodo()
     const dateStr = formatDateKey(targetDate)
     const [year, month, day] = dateStr.split('-').map(Number)
     const startDate = new Date(year, month - 1, day, 0, 0, 0, 0)
@@ -160,13 +175,13 @@ export const useMonthDragDrop = ({ updateEvent, convertTodoToEvent }) => {
       await convertTodoToEvent(taskId, startDate, endDate, true)
     } catch (error) {
       console.error('Failed to convert todo to event:', error)
+      // Only clear preview on error
+      clearTodoPreview()
     } finally {
-      stripDragVisuals()
-      obliterateFloatingTodo()
       document.body.classList.remove('calendar-drag-focus')
       pendingTodoConversionRef.current = null
     }
-  }, [convertTodoToEvent, clearTodoPreview, getDraggedTodoMeta, hideTodoOverlay, stripDragVisuals, obliterateFloatingTodo, endTodoDragSession])
+  }, [convertTodoToEvent, clearTodoPreview, getDraggedTodoMeta, hideTodoOverlay, stripDragVisuals, obliterateFloatingTodo])
 
   const handleCombinedDrop = useCallback(async (e, targetDate) => {
     const isTodoDrag = document.body.classList.contains('task-dragging') || !!getDraggedTodoMeta()
@@ -174,15 +189,48 @@ export const useMonthDragDrop = ({ updateEvent, convertTodoToEvent }) => {
     else await handleEventDrop(e, targetDate)
   }, [handleTodoDrop, handleEventDrop, getDraggedTodoMeta])
 
+  // Listen for todoConvertedToEvent to clear preview after event appears
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+
+    const handleTodoConverted = (evt) => {
+      const todoId = evt?.detail?.todoId || evt?.detail?.eventData?.todoId || evt?.detail?.eventData?.todo_id
+      if (todoId && pendingTodoPreviewDateRef.current && String(todoId) === String(pendingTodoPreviewDateRef.current)) {
+        pendingTodoPreviewDateRef.current = null
+        clearTodoPreview()
+      }
+    }
+
+    const handleTodoConversionFailed = () => {
+      pendingTodoPreviewDateRef.current = null
+      clearTodoPreview()
+    }
+
+    window.addEventListener('todoConvertedToEvent', handleTodoConverted)
+    window.addEventListener('todoConversionFailed', handleTodoConversionFailed)
+    return () => {
+      window.removeEventListener('todoConvertedToEvent', handleTodoConverted)
+      window.removeEventListener('todoConversionFailed', handleTodoConversionFailed)
+    }
+  }, [clearTodoPreview])
+
   useEffect(() => {
     if (typeof window === 'undefined' || typeof document === 'undefined') return undefined
 
     const handleGlobalTodoDragEnd = async (event) => {
+      // Skip if dnd-kit is handling this drag - it has its own handleDragEnd
+      if (document.body.classList.contains('dnd-kit-dragging')) return
+
       const meta = getDraggedTodoMeta()
       const isTodoDrag = document.body.classList.contains('task-dragging') || !!meta
       if (!isTodoDrag) return
       if (pendingTodoConversionRef.current) return
-      endTodoDragSession()
+
+      // Clean up drag UI but DON'T clear preview - keep it visible until event appears
+      document.body.classList.remove('task-dragging')
+      hideTodoOverlay()
+      stripDragVisuals()
+      obliterateFloatingTodo()
 
       const taskId = meta?.taskId
       if (!taskId) return
@@ -192,12 +240,20 @@ export const useMonthDragDrop = ({ updateEvent, convertTodoToEvent }) => {
 
       const el = document.elementFromPoint(clientX, clientY)
       const dayCell = el?.closest?.('.month-day-cell')
-      if (!dayCell) return
+      if (!dayCell) {
+        // Dropped outside a valid cell, clear preview
+        clearTodoPreview()
+        return
+      }
 
       const dateStr = dayCell.getAttribute('data-date')
-      if (!dateStr) return
+      if (!dateStr) {
+        clearTodoPreview()
+        return
+      }
 
       pendingTodoConversionRef.current = taskId
+      pendingTodoPreviewDateRef.current = taskId
       const [year, month, day] = dateStr.split('-').map(Number)
       const startDate = new Date(year, month - 1, day, 0, 0, 0, 0)
       const endDate = addDays(startDate, 1)
@@ -206,9 +262,8 @@ export const useMonthDragDrop = ({ updateEvent, convertTodoToEvent }) => {
         await convertTodoToEvent(taskId, startDate, endDate, true)
       } catch (error) {
         console.error('Failed to convert todo to event from month dragend fallback:', error)
+        clearTodoPreview()
       } finally {
-        stripDragVisuals()
-        obliterateFloatingTodo()
         document.body.classList.remove('calendar-drag-focus')
         pendingTodoConversionRef.current = null
       }
@@ -216,7 +271,7 @@ export const useMonthDragDrop = ({ updateEvent, convertTodoToEvent }) => {
 
     window.addEventListener('dragend', handleGlobalTodoDragEnd, true)
     return () => window.removeEventListener('dragend', handleGlobalTodoDragEnd, true)
-  }, [convertTodoToEvent, clearTodoPreview, getDraggedTodoMeta, hideTodoOverlay, stripDragVisuals, obliterateFloatingTodo, endTodoDragSession])
+  }, [convertTodoToEvent, clearTodoPreview, getDraggedTodoMeta, hideTodoOverlay, stripDragVisuals, obliterateFloatingTodo])
 
   return {
     todoPreviewDate,

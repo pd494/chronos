@@ -5,6 +5,7 @@ import { getEventColors } from '../../../lib/eventColors'
 import {
   HOUR_HEIGHT, DAY_START_HOUR, DAY_END_HOUR, TIMED_EVENT_GAP, DAY_OFFSET, cleanupDragArtifacts
 } from './constants'
+import DroppableWeekHourCell from './DroppableWeekHourCell'
 
 const WeekTimeGrid = ({
   scrollContainerRef,
@@ -107,33 +108,21 @@ const WeekTimeGrid = ({
             >
               {/* Hour cells */}
               {hours.map((hour) => (
-                <div
+                <DroppableWeekHourCell
                   key={hour}
-                  className="hour-cell absolute left-0 right-0 z-[1] cursor-default transition-colors duration-200
-                    [&.event-dragover]:bg-transparent [&.event-dragover]:shadow-[inset_0_0_0_1px_rgba(139,92,246,0.6)]
-                    [&.event-dragover]:after:content-[''] [&.event-dragover]:after:absolute [&.event-dragover]:after:inset-[6px_8px]
-                    [&.event-dragover]:after:rounded-md [&.event-dragover]:after:border [&.event-dragover]:after:border-dashed
-                    [&.event-dragover]:after:border-violet-500/65 [&.event-dragover]:after:pointer-events-none
-                    [&.sortable-dragover]:bg-blue-500/25 [&.sortable-dragover]:outline [&.sortable-dragover]:outline-2 [&.sortable-dragover]:outline-dashed [&.sortable-dragover]:outline-blue-400/50 [&.sortable-dragover]:animate-day-cell-pulse"
-                  data-hour={hour}
-                  data-day={format(day, 'yyyy-MM-dd')}
-                  data-date={format(day, 'yyyy-MM-dd')}
-                  style={{ height: `${HOUR_HEIGHT}px`, top: `${(hour - DAY_START_HOUR) * HOUR_HEIGHT}px` }}
-                  onMouseDown={(e) => handleCellMouseDown(e, day, hour)}
-                  onMouseMove={(e) => handleCellMouseMove(e, day, hour)}
-                  onDoubleClick={(e) => handleCellDoubleClick(e, day, hour)}
-                  onDrop={(e) => handleCombinedDropOnHourCell(e, day, hour, e.currentTarget)}
-                  onDragOver={(e) => {
-                    handleHourCellDragOver(e, day, hour)
-                    handleHourCellTodoDragOver(e, day, hour)
-                  }}
-                  onDragLeave={(e) => {
-                    handleDragLeave(e)
-                    if (document.body.classList.contains('task-dragging')) {
-                      const relatedTarget = e.relatedTarget
-                      if (!relatedTarget || !relatedTarget.closest('.hour-cell')) clearTodoDragPreview()
-                    }
-                  }}
+                  day={day}
+                  hour={hour}
+                  hourHeight={HOUR_HEIGHT}
+                  dayStartHour={DAY_START_HOUR}
+                  regularEvents={regularEvents}
+                  handleCellMouseDown={handleCellMouseDown}
+                  handleCellMouseMove={handleCellMouseMove}
+                  handleCellDoubleClick={handleCellDoubleClick}
+                  handleCombinedDropOnHourCell={handleCombinedDropOnHourCell}
+                  handleHourCellDragOver={handleHourCellDragOver}
+                  handleHourCellTodoDragOver={handleHourCellTodoDragOver}
+                  handleDragLeave={handleDragLeave}
+                  clearTodoDragPreview={clearTodoDragPreview}
                 />
               ))}
 

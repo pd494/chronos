@@ -23,7 +23,7 @@ const EventIndicator = ({ event, isMonthView }) => {
   useEffect(() => {
     setShowDropAnim(resolveFreshDrop())
   }, [event?._freshDrop, event?.id])
-  
+
   // Clear animation after it plays
   useEffect(() => {
     if (showDropAnim) {
@@ -47,7 +47,7 @@ const EventIndicator = ({ event, isMonthView }) => {
   const handleClick = (e) => {
     if (isDragging) return
     e.stopPropagation()
-    
+
     // Store the clicked event element for modal placement
     const rect = e.currentTarget.getBoundingClientRect();
     const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
@@ -65,7 +65,7 @@ const EventIndicator = ({ event, isMonthView }) => {
       height: rect.height,
       eventId: event.id
     };
-    
+
     openEventModal(event)
   }
 
@@ -75,11 +75,11 @@ const EventIndicator = ({ event, isMonthView }) => {
     e.dataTransfer.effectAllowed = 'move'
     e.dataTransfer.setData('event', JSON.stringify(event))
     e.dataTransfer.setData('eventId', event.id)
-    try { e.dataTransfer.setData('text/plain', ' ') } catch (_) {}
-    
+    try { e.dataTransfer.setData('text/plain', ' ') } catch (_) { }
+
     // Mark this specific element as being dragged
     e.currentTarget.setAttribute('data-dragging', 'true')
-    
+
     // Create custom drag preview so the ghost doesn't stretch across the viewport
     const rect = e.currentTarget.getBoundingClientRect()
     const dragPreview = e.currentTarget.cloneNode(true)
@@ -96,7 +96,7 @@ const EventIndicator = ({ event, isMonthView }) => {
     const rawOffsetY = (e.clientY ?? rect.top) - rect.top
     const offsetX = Math.max(1, Math.min(rect.width - 1, rawOffsetX))
     const offsetY = Math.max(1, Math.min(rect.height - 1, rawOffsetY))
-    try { e.dataTransfer.setDragImage(dragPreview, offsetX, offsetY) } catch (_) {}
+    try { e.dataTransfer.setDragImage(dragPreview, offsetX, offsetY) } catch (_) { }
     setTimeout(() => {
       if (dragPreview.parentNode) {
         dragPreview.parentNode.removeChild(dragPreview)
@@ -113,7 +113,7 @@ const EventIndicator = ({ event, isMonthView }) => {
       el.classList.remove('event-dragover')
     })
   }
-  
+
   const formattedTime = format(new Date(event.start), 'h:mma').toLowerCase();
   const responseStatus = typeof event.viewerResponseStatus === 'string'
     ? event.viewerResponseStatus.toLowerCase()
@@ -124,7 +124,7 @@ const EventIndicator = ({ event, isMonthView }) => {
   const isCheckedOff = isEventChecked(event.id)
   const isTodoEvent = Boolean(event.todoId || event.todo_id)
   const shouldShowDropAnim = showDropAnim
-  
+
   useEffect(() => {
     if (typeof window === 'undefined') return undefined
     const handlePreview = (e) => {
@@ -221,11 +221,12 @@ const EventIndicator = ({ event, isMonthView }) => {
       onClick={handleClick}
       data-event-id={event.id}
       data-active={isSelected ? 'true' : 'false'}
-      style={{ 
-        maxWidth: '100%', 
+      style={{
+        maxWidth: '100%',
         minWidth: 0,
         cursor: isDragging ? 'grabbing' : 'pointer',
         opacity: isDragging ? 0.5 : baseOpacity,
+        animation: shouldShowDropAnim ? 'eventDropPop 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275)' : undefined,
         ...(isMonthView && treatAsAllDay ? { backgroundColor: palette.background, borderRadius: '5px', paddingLeft: '0px', paddingRight: '8px' } : {}),
         ...(isMonthView && !treatAsAllDay ? { paddingLeft: '0px' } : {}),
         ...(isSelected ? { boxShadow: '0 0 0 2px rgba(23, 97, 199, 0.4)', borderRadius: '7px' } : {}),
@@ -239,7 +240,7 @@ const EventIndicator = ({ event, isMonthView }) => {
               className="w-[3px] min-h-[14px] rounded-full ml-0.5 flex-shrink-0"
               style={{ ...lineStyle, height: 'calc(100% - 4px)' }}
             ></div>
-            
+
             <div
               className="flex-1 truncate overflow-hidden text-ellipsis font-medium min-w-0"
               style={{
@@ -249,7 +250,7 @@ const EventIndicator = ({ event, isMonthView }) => {
               <span style={titleTextStyle}>{event.title}</span>
             </div>
           </div>
-          
+
           {!treatAsAllDay && (
             <div
               className="text-gray-600 dark:text-gray-700 flex-shrink-0 whitespace-nowrap text-right font-medium pl-1"

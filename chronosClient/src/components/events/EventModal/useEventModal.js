@@ -162,11 +162,11 @@ export const useEventModal = () => {
         if (typeof refreshEvents === 'function') refreshEvents()
         else if (typeof fetchEventsForRange === 'function') {
           const range = deriveVisibleRange(currentDate, view)
-          if (range?.start && range?.end) fetchEventsForRange(range.start, range.end, true, true).catch(() => {})
+          if (range?.start && range?.end) fetchEventsForRange(range.start, range.end, true, true).catch(() => { })
         }
       }
     }).catch((error) => console.error('Failed to save recurring event:', error))
-    .finally(() => form.setConferenceRequestId(null))
+      .finally(() => form.setConferenceRequestId(null))
   }, [pendingEventData, selectedEvent, updateEvent, closeAndAnimateOut, fetchEventsForRange, currentDate, view, refreshEvents, form])
 
   const handleDelete = useCallback(() => {

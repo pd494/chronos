@@ -100,7 +100,13 @@ export const useCalendarController = () => {
       const key = dateKey(cursor)
       const dayEvents = eventsByDayRef.current.get(key) || []
       for (const ev of dayEvents) {
+        // Skip optimistic events - they shouldn't be persisted to snapshot
+        if (ev.isOptimistic) continue
         if (!list.some(x => x.id === ev.id)) {
+          // Also check for duplicate todoId - skip if we already have an event for this todo
+          const evTodoId = ev.todoId || ev.todo_id
+          if (evTodoId && list.some(x => (x.todoId || x.todo_id) === evTodoId)) continue
+
           const startIso = safeToISOString(ev.start)
           const endIso = safeToISOString(ev.end)
           if (!startIso || !endIso) continue
@@ -109,7 +115,7 @@ export const useCalendarController = () => {
             start: startIso, end: endIso, color: ev.color, calendar_id: ev.calendar_id,
             todoId: ev.todoId, isAllDay: Boolean(ev.isAllDay), location: ev.location || '',
             participants: ev.participants || [], attendees: ev.attendees || [],
-            isOptimistic: Boolean(ev.isOptimistic), isPendingSync: Boolean(ev.isPendingSync),
+            isOptimistic: false, isPendingSync: Boolean(ev.isPendingSync),
             organizerEmail: ev.organizerEmail || null, viewerIsOrganizer: Boolean(ev.viewerIsOrganizer),
             viewerIsAttendee: Boolean(ev.viewerIsAttendee), viewerResponseStatus: ev.viewerResponseStatus || null
           })
@@ -145,6 +151,25 @@ export const useCalendarController = () => {
     if (!hasLoadedInitialRef.current) return
     if (!selectedCalendars || selectedCalendars.length === 0) return
 
+    // Skip rebuild if the skip flag is set (e.g., during optimistic updates)
+    if (eventState.skipNextDayIndexRebuildRef.current) {
+      eventState.skipNextDayIndexRebuildRef.current = false
+      return
+    }
+
+    // Skip rebuild while a todo is being dragged - prevents events from disappearing
+    if (typeof document !== 'undefined' && document.body.classList.contains('task-dragging')) {
+      return
+    }
+
+    // Skip rebuild if we recently had a todo conversion (prevents flicker on view switch)
+    if (typeof window !== 'undefined' && window.__chronosLastTodoConversion) {
+      const timeSinceConversion = Date.now() - window.__chronosLastTodoConversion
+      if (timeSinceConversion < 2000) {
+        return
+      }
+    }
+
     let idMap = {}
     if (typeof window !== 'undefined') {
       idMap = window.chronosCalendarIdMap || {}
@@ -157,6 +182,8 @@ export const useCalendarController = () => {
     }
 
     const allowed = new Set()
+    // Always include 'primary' since todo-created events use this as their calendar_id
+    allowed.add('primary')
     selectedCalendars.forEach(id => {
       if (!id) return
       allowed.add(id)

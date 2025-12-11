@@ -72,7 +72,11 @@ export const useEventFetcher = ({
       const translated = selectedCalendars
         .flatMap(id => [id, providerToInternal.get(id) || null])
         .filter(Boolean)
-      return translated.length ? new Set(translated) : null
+      if (!translated.length) return null
+      // Always include 'primary' since todo-created events use this as their calendar_id
+      const set = new Set(translated)
+      set.add('primary')
+      return set
     })()
 
     const seriesInfo = new Map()
@@ -166,8 +170,13 @@ export const useEventFetcher = ({
       })
 
       const existingIds = new Set(next.map(event => event.id))
+      const existingTodoIds = new Set(next.map(event => event.todoId || event.todo_id).filter(Boolean).map(String))
+
       optimisticEventCacheRef.current.forEach(optEvent => {
-        if (!existingIds.has(optEvent.id)) {
+        const optTodoId = optEvent.todoId || optEvent.todo_id
+        // Only add if ID is new AND todoId is not already present (meaning not resolved yet)
+        if (!existingIds.has(optEvent.id) &&
+          (!optTodoId || !existingTodoIds.has(String(optTodoId)))) {
           existingIds.add(optEvent.id)
           next.unshift(optEvent)
           reinsertedOptimisticEvents.push(optEvent)

@@ -13,7 +13,8 @@ export const useTodoIntegration = ({
 }) => {
   const {
     events, setEvents, eventsRefValue, eventsByDayRef, eventIdsRef,
-    todoToEventRef, eventToTodoRef, suppressedEventIdsRef, suppressedTodoIdsRef
+    todoToEventRef, eventToTodoRef, suppressedEventIdsRef, suppressedTodoIdsRef,
+    optimisticEventCacheRef
   } = eventState
 
   const { indexEventByDays, removeTodoFromAllSnapshots, rebuildEventsByDayIndex } = snapshotHelpers
@@ -208,8 +209,24 @@ export const useTodoIntegration = ({
           cursor = addDays(cursor, 1)
         }
         eventIdsRef.current.add(newEvent.id)
+
+        // Track optimistic events in the cache so they persist across view switches
+        if (isOptimistic && newEvent.id) {
+          optimisticEventCacheRef.current.set(newEvent.id, newEvent)
+        }
+
         if (!isOptimistic && todoKey && newEvent.id) linkTodoEvent(todoKey, newEvent.id)
         if (!isOptimistic) {
+          // Remove any optimistic events for this todo from the cache
+          // The optimistic event has a temp ID like "temp-todo-123-...", not the resolved Google ID
+          // So we need to find it by todoId
+          for (const [cachedId, cachedEvent] of optimisticEventCacheRef.current.entries()) {
+            const cachedTodoId = cachedEvent.todoId || cachedEvent.todo_id
+            if (todoKey && String(cachedTodoId) === todoKey) {
+              optimisticEventCacheRef.current.delete(cachedId)
+              eventIdsRef.current.delete(cachedId)
+            }
+          }
           const cacheEvent = { ...newEvent }
           delete cacheEvent._freshDrop
           addEventToCache(user?.id, cacheEvent).catch(() => { })

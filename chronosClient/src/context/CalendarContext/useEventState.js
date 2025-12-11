@@ -26,7 +26,6 @@ export const useEventState = () => {
   const todoToEventRef = useRef(new Map())
   const eventToTodoRef = useRef(new Map())
 
-  // Initialize suppressed IDs from sessionStorage (survives refresh until server confirms)
   const getInitialSuppressedEventIds = () => {
     if (typeof window === 'undefined') return new Set()
     try {
@@ -91,7 +90,6 @@ export const useEventState = () => {
     eventIdsRef.current = ids
   }, [events])
 
-  // Persist suppressed IDs to sessionStorage when they change
   const persistSuppressedIds = useCallback(() => {
     if (typeof window === 'undefined') return
     try {
@@ -100,7 +98,6 @@ export const useEventState = () => {
     } catch (_) { }
   }, [])
 
-  // Listen for eventDeleted to persist suppressed IDs
   useEffect(() => {
     const handleDeleted = () => persistSuppressedIds()
     window.addEventListener('eventDeleted', handleDeleted)

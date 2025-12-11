@@ -1,4 +1,5 @@
 import { useRef, useMemo, useCallback, useEffect } from 'react'
+import { useDroppable } from '@dnd-kit/core'
 import { useCalendar } from '../../../context/CalendarContext/CalendarContext'
 import { useTaskContext } from '../../../context/TaskContext/context'
 import { generateHours, isAllDayEvent } from './constants'
@@ -8,6 +9,7 @@ import { useTodoDragDrop } from './useTodoDragDrop'
 import { useDragToCreate } from './useDragToCreate'
 import AllDaySection from './AllDaySection'
 import TimeGrid from './TimeGrid'
+import { format } from 'date-fns'
 
 const DayView = () => {
   const {
@@ -39,11 +41,11 @@ const DayView = () => {
 
   const eventDrag = useEventDragDrop({ currentDate, updateEvent })
   const todoDrag = useTodoDragDrop({ currentDate, convertTodoToEvent })
-  const dragToCreate = useDragToCreate({ 
-    currentDate, 
-    openEventModal, 
+  const dragToCreate = useDragToCreate({
+    currentDate,
+    openEventModal,
     showEventModal,
-    clearEventDragPreview: eventDrag.clearEventDragPreview 
+    clearEventDragPreview: eventDrag.clearEventDragPreview
   })
 
   const handleCombinedDropOnHourCell = useCallback(async (e, hour, hourCellElement = null) => {
@@ -82,8 +84,21 @@ const DayView = () => {
   const allDayEvents = useMemo(() => dayEvents.filter(isAllDayEvent), [dayEvents])
   const regularEvents = useMemo(() => dayEvents.filter(ev => !isAllDayEvent(ev)), [dayEvents])
 
+  // Wrapper droppable to catch edge drags near sidebar
+  const dateStr = format(currentDate, 'yyyy-MM-dd')
+  const { setNodeRef: setWrapperRef } = useDroppable({
+    id: `day-view-wrapper-${dateStr}`,
+    data: {
+      type: 'hour-cell',
+      date: currentDate,
+      hour: 9, // Default to 9am if dropped on wrapper
+      isAllDay: false,
+    },
+  })
+
   return (
-    <div 
+    <div
+      ref={setWrapperRef}
       className="flex flex-col h-full min-h-0 flex-1 relative overflow-hidden"
       onWheel={handleWheel}
       onDragEnter={() => {

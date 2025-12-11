@@ -1,8 +1,10 @@
 import { useRef, useEffect } from 'react'
 import { format, isToday, isSameDay, startOfDay, addDays, differenceInCalendarDays } from 'date-fns'
+import { useDroppable } from '@dnd-kit/core'
 import EventIndicator from '../../events/EventIndicator'
 import { normalizeToPaletteColor } from '../../../lib/eventColors'
 import { formatDateKey, MULTI_DAY_EVENT_GAP } from './constants'
+import { useDndKit } from '../../DndKitProvider'
 
 const DayCell = ({
   day,
@@ -33,19 +35,57 @@ const DayCell = ({
     (previewSpan && dayIndex >= previewSpan.startIndex && dayIndex <= previewSpan.endIndex)
   const eventListOffset = dayHasMultiDayEvents ? stackedMultiDayHeight + MULTI_DAY_EVENT_GAP : 0
   const dateKey = formatDateKey(day)
-  const isTodoPreviewActive = todoPreviewDate === dateKey
-  const draggedTodoMeta = getDraggedTodoMeta()
-  const previewColor = normalizeToPaletteColor(draggedTodoMeta?.color || 'blue')
-  const previewEvent = isTodoPreviewActive ? {
+
+  // Get dnd-kit context for detecting when dragging over this cell
+  const { activeTodo, isOverCalendar, lockedCellId } = useDndKit()
+
+  // Make this cell a droppable target using dnd-kit
+  const droppableId = `month-cell-${dateKey}`
+  const { setNodeRef, isOver, active } = useDroppable({
+    id: droppableId,
+    data: {
+      type: 'calendar-cell',
+      date: day,
+      dateKey,
+      isAllDay: true,
+    },
+  })
+
+  // Check if THIS cell is being hovered by dnd-kit
+  const isDndKitHovering = isOver && active?.data?.current?.type === 'task'
+
+  // Only show the event marker when user has "locked in" on this specific cell
+  const isLockedOnThisCell = lockedCellId === droppableId
+
+  // Don't show preview if there's already an event for this todo (prevents flicker)
+  const todoIdBeingDragged = activeTodo?.id
+  const alreadyHasEventForTodo = todoIdBeingDragged && events.some(
+    ev => String(ev.todoId) === String(todoIdBeingDragged) || ev._freshDrop
+  )
+  const showDndKitEventMarker = isLockedOnThisCell && activeTodo && !alreadyHasEventForTodo
+
+  // Native drag preview (fallback for non-dnd-kit)
+  const isNativeTodoPreview = todoPreviewDate === dateKey && !isOverCalendar
+
+  // Get the todo meta for preview
+  const nativeDraggedTodoMeta = getDraggedTodoMeta()
+
+  // Create the preview event for the event marker
+  const previewColor = normalizeToPaletteColor(
+    (showDndKitEventMarker ? activeTodo?.color : nativeDraggedTodoMeta?.color) || 'blue'
+  )
+  const previewTitle = showDndKitEventMarker ? activeTodo?.title : nativeDraggedTodoMeta?.title
+
+  const previewEvent = (showDndKitEventMarker || isNativeTodoPreview) ? {
     id: `todo-preview-${dateKey}`,
-    title: (draggedTodoMeta?.title || 'New task'),
+    title: previewTitle || 'New task',
     start: startOfDay(day),
     end: addDays(startOfDay(day), 1),
     isAllDay: true,
-    color: previewColor
+    color: previewColor,
+    _isPreview: true  // Mark as preview for potential styling
   } : null
 
-  // Ghost logic: keep optimistic events visible until reconciled, clear on deletion
   const ghostsRef = useRef([])
   const prevEventsRef = useRef(events)
 
@@ -57,9 +97,13 @@ const DayCell = ({
 
   // Build map of current events by clientKey
   const currentByKey = new Map()
+  // Also track todoIds in current events to detect resolved events
+  const currentTodoIds = new Set()
   for (const e of events) {
     const key = e.clientKey || e.id
     if (key) currentByKey.set(key, e)
+    const eTodoId = e.todoId || e.todo_id
+    if (eTodoId) currentTodoIds.add(String(eTodoId))
   }
 
   // Find events that were in prev but are missing from current
@@ -71,13 +115,22 @@ const DayCell = ({
   const updatedGhosts = []
   for (const g of ghostsRef.current) {
     const key = g.clientKey || g.id
-    if (!currentByKey.has(key) && g.isOptimistic) updatedGhosts.push(g)
+    const gTodoId = g.todoId || g.todo_id
+    // Don't keep ghost if current events already have this event OR an event with the same todoId
+    // (meaning the optimistic event has been resolved)
+    if (!currentByKey.has(key) && g.isOptimistic && (!gTodoId || !currentTodoIds.has(String(gTodoId)))) {
+      updatedGhosts.push(g)
+    }
   }
 
   const existingGhostKeys = new Set(updatedGhosts.map(g => g.clientKey || g.id))
   for (const d of dropped) {
     const key = d.clientKey || d.id
-    if (key && !existingGhostKeys.has(key) && d.isOptimistic) updatedGhosts.push(d)
+    const dTodoId = d.todoId || d.todo_id
+    // Don't add ghost if an event with the same todoId exists (it has been resolved)
+    if (key && !existingGhostKeys.has(key) && d.isOptimistic && (!dTodoId || !currentTodoIds.has(String(dTodoId)))) {
+      updatedGhosts.push(d)
+    }
   }
 
   ghostsRef.current = updatedGhosts
@@ -85,11 +138,17 @@ const DayCell = ({
 
   const effectiveEvents = [...events, ...updatedGhosts]
 
-  const visibleEvents = effectiveEvents.slice(0, isTodoPreviewActive ? 2 : 3)
+  // Show fewer events when preview is active to make room
+  const hasPreview = showDndKitEventMarker || isNativeTodoPreview
+  const visibleEvents = effectiveEvents.slice(0, hasPreview ? 2 : 3)
   const remainingCount = effectiveEvents.length - visibleEvents.length
+
+  // Show highlight when dnd-kit is hovering
+  const showDragoverStyle = isDndKitHovering
 
   return (
     <div
+      ref={setNodeRef}
       key={dateKey}
       onDoubleClick={() => {
         const startDate = new Date(day)
@@ -102,6 +161,7 @@ const DayCell = ({
       }}
       style={{ height: `${rowHeight}px`, boxSizing: 'border-box' }}
       className={`month-day-cell bg-white dark:bg-gray-800 border-r border-b border-gray-100 dark:border-gray-800 relative p-1 flex flex-col transition-colors duration-200
+        ${showDragoverStyle ? 'bg-violet-500/15 shadow-[inset_0_0_0_2px_rgba(139,92,246,0.4)]' : ''}
         [&.event-dragover]:bg-violet-500/15 [&.event-dragover]:shadow-[inset_0_0_0_2px_rgba(139,92,246,0.4)]
         [&.sortable-dragover]:bg-blue-500/15 [&.sortable-dragover]:outline [&.sortable-dragover]:outline-2 [&.sortable-dragover]:outline-dashed [&.sortable-dragover]:outline-blue-400/50 [&.sortable-dragover]:animate-month-cell-pulse`}
       data-date={dateKey}
@@ -133,7 +193,8 @@ const DayCell = ({
       </div>
 
       <div className="mt-1 overflow-hidden flex-1 space-y-0.5" style={eventListOffset ? { marginTop: `${eventListOffset}px` } : undefined}>
-        {isTodoPreviewActive && previewEvent && (
+        {/* Show event marker preview when dragging over this cell */}
+        {previewEvent && (
           <EventIndicator key={previewEvent.id} event={previewEvent} isMonthView />
         )}
         {visibleEvents.map((ev) => (

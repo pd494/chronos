@@ -50,6 +50,11 @@ export const useTodoDragDrop = ({ currentDate, convertTodoToEvent }) => {
   }, [])
 
   const handleTodoDropOnHourCell = useCallback(async (e, hour) => {
+    if (document.body.classList.contains('dnd-kit-dragging')) {
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
     const isTodoDrag = document.body.classList.contains('task-dragging') || !!getDraggedTodoMeta()
     if (!isTodoDrag) return
 
@@ -82,6 +87,11 @@ export const useTodoDragDrop = ({ currentDate, convertTodoToEvent }) => {
   }, [currentDate, convertTodoToEvent, getDraggedTodoMeta, hideTodoOverlay])
 
   const handleTodoDropOnAllDay = useCallback(async (e) => {
+    if (document.body.classList.contains('dnd-kit-dragging')) {
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
     const isTodoDrag = document.body.classList.contains('task-dragging') || !!getDraggedTodoMeta()
     if (!isTodoDrag) return
 
@@ -146,6 +156,7 @@ export const useTodoDragDrop = ({ currentDate, convertTodoToEvent }) => {
     }
 
     const handleGlobalTodoDragEnd = async (event) => {
+      if (document.body.classList.contains('dnd-kit-dragging')) return
       const meta = getDraggedTodoMeta()
       const isTodoDrag = document.body.classList.contains('task-dragging') || !!meta
       if (!isTodoDrag) return

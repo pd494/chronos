@@ -6,7 +6,7 @@ import WeeklyView from './components/calendar/WeekView'
 import DayView from './components/calendar/DayView'
 import Sidebar from './components/todo/Sidebar'
 import FloatingChatBar from './components/FloatingChatBar'
-import TodoDragOverlay from './components/TodoDragOverlay'
+import DndKitProvider from './components/DndKitProvider'
 import { useTaskContext } from './context/TaskContext/context'
 import { useAuth } from './context/AuthContext'
 import CategoryTabs from './components/todo/CategoryTabs'
@@ -106,12 +106,12 @@ function AppContent() {
         if (deletionTimerRef.current) {
           clearTimeout(deletionTimerRef.current)
         }
-        
+
         // Increment counter and update toast
         deletionCountRef.current += 1
         setToastMessage(`Deleted Event (${deletionCountRef.current})`)
         setToastVisible(true)
-        
+
         // Reset counter after 5 seconds of no deletions
         deletionTimerRef.current = setTimeout(() => {
           deletionCountRef.current = 0
@@ -161,7 +161,7 @@ function AppContent() {
       if (showEventModal) {
         return;
       }
-      
+
       switch (e.key.toLowerCase()) {
         case 'm':
           changeView('month');
@@ -185,7 +185,7 @@ function AppContent() {
     };
 
     document.addEventListener('keydown', handleKeyDown);
-    
+
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
     };
@@ -199,7 +199,7 @@ function AppContent() {
     return <SignedOutState onLogin={login} loading={authLoading} />
   }
 
-  
+
   const renderCalendarView = () => {
     switch (view) {
       case 'month':
@@ -217,7 +217,7 @@ function AppContent() {
     setSidebarWidth(width);
     setSidebarVisible(visible);
   };
-  
+
   // Toggle sidebar collapse
   const toggleSidebar = () => {
     setIsSidebarCollapsed(!isSidebarCollapsed);
@@ -237,7 +237,7 @@ function AppContent() {
     <div className="h-full flex flex-col">
       <div className="header-container">
         <div className="flex w-full items-center bg-white dark:bg-gray-800">
-          <div 
+          <div
             id="header-tabs-wrapper"
             className="flex-shrink-0 flex items-center bg-white overflow-hidden border-r border-gray-200"
             style={{ width: sidebarVisible ? sidebarWidth + 'px' : '0' }}
@@ -250,14 +250,14 @@ function AppContent() {
               inHeader={true}
             />
           </div>
-          
+
           <div className="flex-1">
             <Header />
           </div>
         </div>
       </div>
       <SplitView
-        sidebar={<Sidebar 
+        sidebar={<Sidebar
           activeCategory={activeCategory}
           isSidebarCollapsed={isSidebarCollapsed}
           sidebarWidth={sidebarWidth}
@@ -279,12 +279,11 @@ function AppContent() {
         onToggleSidebar={toggleSidebar}
         onSidebarWidthChange={handleSidebarChange}
       />
-      <TodoDragOverlay />
       {showEventModal && <EventModal />}
       {!showEventModal && <FloatingChatBar />}
-      <Toast 
-        message={toastMessage} 
-        visible={toastVisible} 
+      <Toast
+        message={toastMessage}
+        visible={toastVisible}
         onClose={() => setToastVisible(false)}
       />
     </div>
@@ -292,7 +291,11 @@ function AppContent() {
 }
 
 function App() {
-  return <AppContent />
+  return (
+    <DndKitProvider>
+      <AppContent />
+    </DndKitProvider>
+  )
 }
 
 export default App
