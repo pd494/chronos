@@ -22,7 +22,7 @@ const DroppableAllDayCell = ({
   handleDragLeave,
   renderAllDayEvent
 }) => {
-  const { activeTodo, lockedCellId } = useDndKit()
+  const { activeTodo, lockedCellId, isOverCalendar } = useDndKit()
 
   const droppableId = `week-all-day-${format(day, 'yyyy-MM-dd')}`
   const { setNodeRef, isOver, active } = useDroppable({
@@ -39,7 +39,7 @@ const DroppableAllDayCell = ({
   // Only show preview when "locked in" on this cell
   const isLockedOnThisCell = lockedCellId === droppableId
   const showNativePreview = todoDragPreview?.isAllDay && isSameDay(todoDragPreview.start, day)
-  const showDndKitPreview = isLockedOnThisCell && activeTodo
+  const showDndKitPreview = isOverCalendar && isLockedOnThisCell && activeTodo
   const shouldShowPreview = showDndKitPreview || showNativePreview
 
   // Show highlight on hover (before lock-in)
@@ -55,7 +55,11 @@ const DroppableAllDayCell = ({
         ${showDragoverStyle ? 'bg-blue-500/15 outline outline-2 outline-dashed outline-blue-400/50' : ''}`}
       data-date={format(day, 'yyyy-MM-dd')}
       data-all-day="true"
-      style={{ minHeight: `${maxRequiredHeight}px`, height: `${maxRequiredHeight}px` }}
+      style={{
+        minHeight: `${maxRequiredHeight}px`,
+        height: `${maxRequiredHeight}px`,
+        paddingLeft: '7px'
+      }}
       onClick={(e) => handleAllDayCellClick(e, day)}
       onDrop={(e) => handleCombinedDropOnAllDay(e, day)}
       onDragOver={(e) => {
@@ -67,14 +71,33 @@ const DroppableAllDayCell = ({
       {eventsForDay.map((event, idx) => renderAllDayEvent(event, idx))}
       {shouldShowPreview && previewSource && (() => {
         const colors = getEventColors(previewSource.color || 'blue')
+        
         return (
           <div
-            className="flex items-center gap-2 rounded-md px-2 py-1 text-xs font-medium pointer-events-none"
-            style={{ backgroundColor: colors.background, border: `1px dashed ${colors.border}`, color: colors.text, opacity: 0.9 }}
+            className="relative flex items-center gap-2 rounded-lg pr-2 py-1 text-xs font-medium pointer-events-none"
+            style={{
+              backgroundColor: colors.background,
+              color: colors.text,
+              opacity: 0.9,
+              paddingLeft: '18px',
+              borderRadius: '8px'
+            }}
           >
-            <div className="h-3 w-1 rounded-full" style={{ backgroundColor: colors.border }} />
-            <span className="truncate">{previewSource.title}</span>
-            <span className="text-[11px] text-slate-600">All day</span>
+            <div
+              className="absolute"
+              style={{
+                left: '8px',
+                top: '2px',
+                bottom: '2px',
+                width: '4px',
+                borderRadius: '9999px',
+                backgroundColor: colors.border
+              }}
+            />
+            <span className="font-medium flex items-center gap-1.5 flex-1 min-w-0">
+              <span className="truncate flex-1 min-w-0">{previewSource.title}</span>
+              <span className="text-[11px] text-slate-600 whitespace-nowrap flex-shrink-0">All day</span>
+            </span>
           </div>
         )
       })()}
@@ -94,6 +117,9 @@ const AllDayRow = ({
   handleAllDayTodoDragOver,
   handleDragLeave
 }) => {
+  // Get dnd-kit context to check if a preview should be included in height calc
+  const { activeTodo, lockedCellId, isOverCalendar } = useDndKit()
+
   const maxRequiredHeight =
     Math.max(
       ALL_DAY_SECTION_HEIGHT,
@@ -106,7 +132,15 @@ const AllDayRow = ({
           }
           return isSameDay(event.start, day)
         })
-        return Math.max(1, eventsForDay.length) * (ALL_DAY_EVENT_HEIGHT + ALL_DAY_EVENT_GAP) - ALL_DAY_EVENT_GAP
+
+        // Check if this day has a preview (either dnd-kit or native)
+        const droppableId = `week-all-day-${format(day, 'yyyy-MM-dd')}`
+        const showDndKitPreview = isOverCalendar && lockedCellId === droppableId && activeTodo
+        const showNativePreview = todoDragPreview?.isAllDay && isSameDay(todoDragPreview.start, day)
+        const hasPreview = showDndKitPreview || showNativePreview
+
+        const eventCount = eventsForDay.length + (hasPreview ? 1 : 0)
+        return Math.max(1, eventCount) * (ALL_DAY_EVENT_HEIGHT + ALL_DAY_EVENT_GAP) - ALL_DAY_EVENT_GAP
       })
     ) + EXTRA_ALL_DAY_BOTTOM_SPACE
 

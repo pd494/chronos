@@ -12,6 +12,7 @@ import {
 } from '@dnd-kit/core';
 import {
     sortableKeyboardCoordinates,
+    arrayMove,
 } from '@dnd-kit/sortable';
 import { addDays } from 'date-fns';
 import { getEventColors, normalizeToPaletteColor } from '../lib/eventColors';
@@ -74,12 +75,15 @@ const calendarPriorityCollision = (args) => {
 };
 
 const DndKitProvider = ({ children }) => {
-    const { convertTodoToEvent } = useTaskContext();
+    const { convertTodoToEvent, reorderTasks, reorderCategories, tasks, categories } = useTaskContext();
     const [activeId, setActiveId] = useState(null);
     const [activeTodo, setActiveTodo] = useState(null);
     const [isOverCalendar, setIsOverCalendar] = useState(false);
     const [currentOverId, setCurrentOverId] = useState(null);
     const [lockedCellId, setLockedCellId] = useState(null);
+    const [currentOverType, setCurrentOverType] = useState(null);
+    const pointerXRef = useRef(null);
+    const dragStartXRef = useRef(null);
 
     const lockInTimerRef = useRef(null);
     const lastOverIdRef = useRef(null);
@@ -89,6 +93,14 @@ const DndKitProvider = ({ children }) => {
         styleEl.textContent = DRAG_STYLES;
         document.head.appendChild(styleEl);
         return () => styleEl.remove();
+    }, []);
+
+    useEffect(() => {
+        const handlePointerMove = (e) => {
+            pointerXRef.current = e.clientX;
+        };
+        window.addEventListener('pointermove', handlePointerMove, { passive: true });
+        return () => window.removeEventListener('pointermove', handlePointerMove);
     }, []);
 
     const sensors = useSensors(
@@ -113,6 +125,7 @@ const DndKitProvider = ({ children }) => {
         const { active } = event;
         setActiveId(active.id);
         setLockedCellId(null);
+        dragStartXRef.current = event?.activatorEvent?.clientX ?? null;
 
         const todoData = active.data?.current;
         if (todoData?.type === 'task') {
@@ -136,16 +149,27 @@ const DndKitProvider = ({ children }) => {
     }, []);
 
     const handleDragOver = useCallback((event) => {
-        const { over } = event;
+        const { over, active } = event;
 
         const isCalendarZone = over?.data?.current?.type === 'calendar-cell' ||
             over?.data?.current?.type === 'hour-cell' ||
             over?.data?.current?.type === 'all-day-cell';
 
-        setIsOverCalendar(isCalendarZone);
-        setCurrentOverId(isCalendarZone ? over?.id : null);
+        // Sidebar boundary + buffer to allow vertical reordering without calendar pill
+        const sidebar = document.querySelector('.sidebar');
+        const sidebarRight = sidebar?.getBoundingClientRect()?.right || 0;
+        const CONVERT_BUFFER = 80;
+        // Pointer position from pointer tracker, fallback to active rect (center)
+        const activeRect = active?.rect?.current?.translated;
+        const fallbackX = activeRect ? activeRect.left + (activeRect.width / 2) : 0;
+        const pointerX = pointerXRef.current ?? fallbackX;
+        const allowCalendar = isCalendarZone && pointerX >= (sidebarRight + CONVERT_BUFFER);
 
-        if (isCalendarZone) {
+        setIsOverCalendar(allowCalendar);
+        setCurrentOverType(over?.data?.current?.type || null);
+        setCurrentOverId(allowCalendar ? over?.id : null);
+
+        if (allowCalendar) {
             document.body.classList.add('calendar-drag-focus');
 
             const currentCell = over?.id;
@@ -173,6 +197,7 @@ const DndKitProvider = ({ children }) => {
             document.body.classList.remove('calendar-drag-focus');
             lastOverIdRef.current = null;
             setLockedCellId(null);
+            setCurrentOverType(null);
             if (lockInTimerRef.current) {
                 clearTimeout(lockInTimerRef.current);
                 lockInTimerRef.current = null;
@@ -182,6 +207,10 @@ const DndKitProvider = ({ children }) => {
 
     const handleDragEnd = useCallback(async (event) => {
         const { active, over } = event;
+        const activeType = active?.data?.current?.type;
+        const activeId = active?.id;
+        const overId = over?.id;
+        const overData = over?.data?.current;
 
         if (lockInTimerRef.current) {
             clearTimeout(lockInTimerRef.current);
@@ -189,15 +218,23 @@ const DndKitProvider = ({ children }) => {
         }
 
         const taskId = active.data?.current?.id;
-        const taskType = active.data?.current?.type;
-        const overData = over?.data?.current;
         const wasOverCalendar = overData?.type === 'calendar-cell' ||
             overData?.type === 'hour-cell' ||
             overData?.type === 'all-day-cell';
 
+        // Check pointer X position relative to sidebar to determine if this was a reorder or calendar drop
+        const sidebar = document.querySelector('.sidebar');
+        const sidebarRight = sidebar?.getBoundingClientRect()?.right || 0;
+        const CONVERT_BUFFER = 80;
+        const activeRect = active?.rect?.current?.translated;
+        const fallbackX = activeRect ? activeRect.left + (activeRect.width / 2) : 0;
+        const pointerX = pointerXRef.current ?? fallbackX;
+        const allowCalendarDrop = wasOverCalendar && pointerX >= (sidebarRight + CONVERT_BUFFER);
+
         setActiveId(null);
         setActiveTodo(null);
         setIsOverCalendar(false);
+        setCurrentOverType(null);
         setCurrentOverId(null);
         setLockedCellId(null);
         lastOverIdRef.current = null;
@@ -213,7 +250,8 @@ const DndKitProvider = ({ children }) => {
             }
         }
 
-        if (over && taskType === 'task' && taskId && wasOverCalendar) {
+        // Task -> calendar conversion (only if not in reorder zone)
+        if (over && activeType === 'task' && taskId && allowCalendarDrop) {
             try {
                 const targetDate = overData.date;
                 const targetHour = overData.hour;
@@ -242,8 +280,31 @@ const DndKitProvider = ({ children }) => {
             } catch (error) {
                 console.error('Failed to convert todo to event:', error);
             }
+            return;
         }
-    }, [convertTodoToEvent]);
+
+        // Task reorder (including scheduled tasks)
+        if (activeType === 'task' && overId && activeId !== overId) {
+            const isValidTarget = tasks?.some?.(t => String(t.id) === String(overId));
+            if (reorderTasks && isValidTarget) {
+                await reorderTasks(activeId, overId);
+            }
+            return;
+        }
+
+        // Category reorder (tabs or grouped view)
+        if ((activeType === 'category-tab' || activeType === 'category') && overId && activeId !== overId && reorderCategories) {
+            const orderedIds = categories
+                ?.filter(cat => cat.id && cat.id !== 'add-category')
+                ?.map(cat => cat.id) || [];
+            const oldIndex = orderedIds.findIndex(id => String(id) === String(activeId));
+            const newIndex = orderedIds.findIndex(id => String(id) === String(overId));
+            if (oldIndex >= 0 && newIndex >= 0) {
+                const nextOrder = arrayMove(orderedIds, oldIndex, newIndex);
+                await reorderCategories(nextOrder);
+            }
+        }
+    }, [convertTodoToEvent, reorderCategories, reorderTasks, tasks, categories]);
 
     const handleDragCancel = useCallback(() => {
         if (lockInTimerRef.current) {
@@ -254,6 +315,7 @@ const DndKitProvider = ({ children }) => {
         setActiveId(null);
         setActiveTodo(null);
         setIsOverCalendar(false);
+        setCurrentOverType(null);
         setCurrentOverId(null);
         setLockedCellId(null);
         lastOverIdRef.current = null;
@@ -273,11 +335,15 @@ const DndKitProvider = ({ children }) => {
         isOverCalendar,
         currentOverId,
         lockedCellId,
+        pointerX: pointerXRef.current,
     }), [activeId, activeTodo, isOverCalendar, currentOverId, lockedCellId]);
 
     const renderDragOverlay = () => {
         if (!activeTodo) return null;
         if (lockedCellId) return null;
+        // Only show the floating pill once we are over the calendar (buffer handled in isOverCalendar)
+        if (!isOverCalendar) return null;
+        if (currentOverType === 'task') return null;
 
         const rawColor = typeof activeTodo.color === 'string'
             ? activeTodo.color.toLowerCase()

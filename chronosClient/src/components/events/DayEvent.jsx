@@ -118,7 +118,9 @@ const DayEvent = ({ event, hourHeight, dayStartHour, dayEndHour, position }) => 
   // Calculate position and height - use original position, not preview
   const top = (positionStart.getHours() - dayStartHour) * hourHeight + (positionStart.getMinutes() / 60) * hourHeight
   const duration = Math.max(5, differenceInMinutes(positionEnd, positionStart))
-  const height = (duration / 60) * hourHeight
+  // Add gap between back-to-back events
+  const eventGap = 4
+  const height = Math.max(20, (duration / 60) * hourHeight - eventGap)
   const isSelected = selectedEvent?.id === event.id
 
   const handleClick = (e) => {

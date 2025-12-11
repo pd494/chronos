@@ -95,8 +95,7 @@ const TaskItem = ({ task, onToggleComplete, categoryColor }) => {
       color: categoryColor || 'blue',
       task,
     },
-    // Disable sorting for scheduled tasks
-    disabled: isScheduled,
+    // Allow sorting for all tasks including scheduled ones
   });
 
   const style = {

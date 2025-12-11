@@ -44,7 +44,6 @@ const Sidebar = ({ activeCategory, isSidebarCollapsed, sidebarWidth, sidebarVisi
       if (activeCategory === 'Completed') return task.completed
       return task.category_name === activeCategory
     })
-    .sort(() => 0)
 
   return (
     <div

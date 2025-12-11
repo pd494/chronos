@@ -1,4 +1,5 @@
 import { todosApi } from '../../lib/api';
+import { arrayMove } from '@dnd-kit/sortable';
 
 export const useTaskCRUD = ({
   tasks, categories, setTasksEnhanced, resolveCategory, loadCategories, clearTaskSnapshots, refs
@@ -17,7 +18,8 @@ export const useTaskCRUD = ({
       if (!category) throw new Error(`Category "${categoryName}" not found`);
 
       const optimisticTask = { id: optimisticId, content, completed: false, category_id: category.id, category_name: category.name };
-      setTasksEnhanced(prev => [...prev, optimisticTask]);
+      // Prepend new tasks at top instead of bottom
+      setTasksEnhanced(prev => [optimisticTask, ...prev]);
       optimisticAdded = true;
       lastMutationTimeRef.current = Date.now();
 
@@ -62,6 +64,22 @@ export const useTaskCRUD = ({
       ? { ...t, scheduled_date: null, scheduled_at: null, scheduled_end: null, scheduled_is_all_day: false }
       : t
     ));
+  };
+
+  // Reorder tasks within a category
+  const reorderTasks = async (activeId, overId, categoryName = null) => {
+    if (activeId === overId) return;
+
+    setTasksEnhanced(prev => {
+      const oldIndex = prev.findIndex(t => t.id === activeId);
+      const newIndex = prev.findIndex(t => t.id === overId);
+
+      if (oldIndex === -1 || newIndex === -1) return prev;
+
+      return arrayMove(prev, oldIndex, newIndex);
+    });
+
+    lastMutationTimeRef.current = Date.now();
   };
 
   const toggleTaskComplete = async (id) => {
@@ -116,5 +134,5 @@ export const useTaskCRUD = ({
     }
   };
 
-  return { addTask, deleteTask, updateTask, clearTaskSchedule, toggleTaskComplete };
+  return { addTask, deleteTask, updateTask, clearTaskSchedule, toggleTaskComplete, reorderTasks };
 };

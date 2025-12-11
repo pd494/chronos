@@ -27,7 +27,7 @@ export const useTaskProvider = () => {
     [categories]
   );
 
-  const { addTask, toggleTaskComplete, deleteTask, updateTask } = useTaskCRUD({
+  const { addTask, toggleTaskComplete, deleteTask, updateTask, reorderTasks } = useTaskCRUD({
     tasks, categories, setTasksEnhanced, resolveCategory, loadCategories, clearTaskSnapshots, refs
   });
 
@@ -39,7 +39,7 @@ export const useTaskProvider = () => {
 
   return {
     tasks, categories, addTask, toggleTaskComplete, deleteTask, updateTask,
-    createCategory, updateCategory, deleteCategory, loadData, reorderCategories, convertTodoToEvent
+    createCategory, updateCategory, deleteCategory, loadData, reorderCategories, reorderTasks, convertTodoToEvent
   };
 };
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
-import { FiChevronLeft, FiChevronRight, FiChevronDown, FiPlus, FiUser, FiLogOut, FiRefreshCcw, FiCloud } from 'react-icons/fi'
+import { FiChevronLeft, FiChevronRight, FiChevronDown, FiPlus, FiUser, FiLogOut, FiCalendar } from 'react-icons/fi'
 import { useCalendar } from '../context/CalendarContext/CalendarContext'
 import { useTaskContext } from '../context/TaskContext/context'
 import { useAuth } from '../context/AuthContext'
@@ -63,8 +63,6 @@ const Header = () => {
   const [showViewDropdown, setShowViewDropdown] = useState(false)
   const [showUserMenu, setShowUserMenu] = useState(false)
   const [isManualRefresh, setIsManualRefresh] = useState(false)
-  const [isSyncing, setIsSyncing] = useState(false)
-  const [lastSyncTime, setLastSyncTime] = useState(null)
   const [showCalendarMenu, setShowCalendarMenu] = useState(false)
   const [calendars, setCalendars] = useState([])
   const [manualCalendars, setManualCalendars] = useState(() => {
@@ -88,6 +86,7 @@ const Header = () => {
   const [calLoading, setCalLoading] = useState(false)
   const [calError, setCalError] = useState('')
   const [manualInput, setManualInput] = useState('')
+  const [calendarSearch, setCalendarSearch] = useState('')
   
   // Task context for categories
   const { tasks } = useTaskContext()
@@ -225,14 +224,16 @@ const Header = () => {
     window.chronosCalendarIdMap = idMap
   }, [calendars])
 
-  const calendarDots = useMemo(() => {
-    return calendars.map(c => ({
-      id: c.id,
-      color: c.color,
-      summary: c.summary,
-      checked: selectedCalendarIds.includes(c.id)
-    }))
-  }, [calendars, selectedCalendarIds])
+  const visibleCalendars = useMemo(() => {
+    const term = calendarSearch.trim().toLowerCase()
+    if (!term) return calendars
+    return calendars.filter(c => (c.summary || '').toLowerCase().includes(term))
+  }, [calendars, calendarSearch])
+
+  const selectedCalendars = useMemo(
+    () => calendars.filter(c => selectedCalendarIds.includes(c.id)),
+    [calendars, selectedCalendarIds]
+  )
 
   const handleManualRefresh = async () => {
     if (isManualRefresh) return
@@ -243,20 +244,6 @@ const Header = () => {
       console.error('Manual refresh failed:', error)
     } finally {
       setIsManualRefresh(false)
-    }
-  }
-
-  const handleSync = async () => {
-    if (isSyncing) return
-    setIsSyncing(true)
-    try {
-      await calendarApi.syncCalendar()
-      setLastSyncTime(new Date())
-      await refreshEvents()
-    } catch (error) {
-      console.error('Sync failed:', error)
-    } finally {
-      setIsSyncing(false)
     }
   }
 
@@ -302,28 +289,29 @@ const Header = () => {
         <div style={{ position: 'relative', zIndex: 9999 }} ref={calendarMenuRef}>
           <button
             onClick={() => setShowCalendarMenu(p => !p)}
-            className="clean-button"
+            className="clean-button calendar-chip"
             style={{ WebkitAppRegion: 'no-drag' }}
           >
-            <span className="flex items-center gap-1">
-              {calendarDots.slice(0, 3).map(dot => (
-                <span
-                  key={dot.id}
-                  style={{
-                    width: 10,
-                    height: 10,
-                    borderRadius: '9999px',
-                    backgroundColor: dot.color,
-                    opacity: dot.checked ? 1 : 0.35
-                  }}
-                />
-              ))}
-              {calendarDots.length > 3 && (
-                <span className="text-xs text-gray-500">+{calendarDots.length - 3}</span>
-              )}
-              <span className="ml-1 text-sm text-gray-700">
-                {calLoading ? 'Calendars…' : `${calendars.length || 0} calendars`}
+            <span className="flex items-center gap-2">
+              <span className="flex items-center gap-1">
+                {selectedCalendars.slice(0, 5).map(dot => (
+                  <span
+                    key={dot.id}
+                    className="calendar-chip-dot"
+                    style={{ backgroundColor: dot.color }}
+                  />
+                ))}
+                {selectedCalendars.length === 0 && <span className="calendar-chip-dot muted" />}
+                {selectedCalendars.length > 5 && (
+                  <span className="text-[10px] text-gray-500 font-medium">
+                    +{selectedCalendars.length - 5}
+                  </span>
+                )}
               </span>
+              <span className="text-sm text-gray-800 font-medium">
+                {calLoading ? 'Calendars…' : `${selectedCalendars.length || 0} calendars`}
+              </span>
+              <span className="calendar-chip-add">+</span>
             </span>
           </button>
 
@@ -339,62 +327,66 @@ const Header = () => {
                 border: '1px solid #e5e7eb',
                 borderRadius: '10px',
                 boxShadow: '0 8px 20px rgba(0,0,0,0.08)',
-                minWidth: '260px',
-                padding: '10px',
+                width: 'fit-content',
+                maxWidth: '80vw',
+                padding: '0',
                 zIndex: 10000
               }}
             >
-              <div className="flex items-center justify-between mb-2">
-                <div className="text-sm font-semibold text-gray-800">Calendars</div>
-                {calError && <span className="text-xs text-red-500">{calError}</span>}
-              </div>
-              <div className="max-h-64 overflow-y-auto space-y-1 pr-1">
-                {calLoading && <div className="text-xs text-gray-500">Loading…</div>}
-                {!calLoading && calendars.length === 0 && (
-                  <div className="text-xs text-gray-500">No calendars yet</div>
-                )}
-                {!calLoading && calendars.map(cal => (
-                  <label key={cal.id} className="flex items-center gap-2 text-sm text-gray-800 py-1 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={selectedCalendarIds.includes(cal.id)}
-                      onChange={() => handleToggleCalendar(cal.id)}
-                    />
-                    <span
-                      style={{
-                        width: 10,
-                        height: 10,
-                        borderRadius: '9999px',
-                        backgroundColor: cal.color
-                      }}
-                    />
-                    <span className="truncate">{cal.summary}</span>
-                  </label>
-                ))}
-              </div>
-              <div className="border-t border-gray-200 mt-3 pt-3 space-y-2">
-                <div className="text-xs font-semibold text-gray-700">Add calendar</div>
-                <button
-                  onClick={handleAddGoogle}
-                  className="clean-button w-full justify-start"
-                  style={{ WebkitAppRegion: 'no-drag' }}
-                >
-                  <FiPlus size={14} className="mr-1" />
-                  <span>Connect Google account</span>
-                </button>
-                <form onSubmit={handleAddManual} className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    value={manualInput}
-                    onChange={(e) => setManualInput(e.target.value)}
-                    placeholder="ICS URL or calendar ID"
-                    className="flex-1 text-sm border border-gray-200 rounded-md px-2 py-1 focus:outline-none focus:ring-1 focus:ring-purple-500"
-                  />
-                  <button type="submit" className="clean-button" style={{ WebkitAppRegion: 'no-drag' }}>
-                    Add
-                  </button>
-                </form>
-              </div>
+              {/* Group calendars by their source account */}
+              {calLoading ? (
+                <div className="text-xs text-gray-500 p-4">Loading…</div>
+              ) : visibleCalendars.length === 0 ? (
+                <div className="text-xs text-gray-500 p-4">No calendars yet</div>
+              ) : (
+                (() => {
+                  const grouped = {}
+                  visibleCalendars.forEach(cal => {
+                    const email = cal.raw?.email || (cal.summary.includes('@') ? cal.summary : user?.email || 'Calendars')
+                    if (!grouped[email]) grouped[email] = []
+                    grouped[email].push(cal)
+                  })
+                  
+                  return Object.entries(grouped).map(([email, cals], idx) => (
+                    <div key={email}>
+                      {idx > 0 && <div className="border-t border-gray-200" />}
+                      <div className="px-4 py-3">
+                        <div className="text-xs font-medium text-gray-600 mb-2">{email}</div>
+                        <div className="space-y-2">
+                          {cals.map(cal => (
+                            <label
+                              key={cal.id}
+                              className={`calendar-row ${selectedCalendarIds.includes(cal.id) ? 'active' : ''}`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={selectedCalendarIds.includes(cal.id)}
+                                onChange={() => handleToggleCalendar(cal.id)}
+                              />
+                              <svg
+                                width="18"
+                                height="18"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke={cal.color}
+                                strokeWidth="2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                style={{ flexShrink: 0 }}
+                              >
+                                <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z" />
+                                <line x1="7" y1="2" x2="7" y2="6" />
+                                <line x1="17" y1="2" x2="17" y2="6" />
+                              </svg>
+                              <span style={{ color: cal.color, fontWeight: 600 }}>{cal.summary}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                })()
+              )}
             </div>
           )}
         </div>
@@ -407,28 +399,6 @@ const Header = () => {
         >
           <FiPlus size={14} className="mr-1" />
           <span>Event</span>
-        </button>
-
-        <button
-          onClick={handleManualRefresh}
-          className={`clean-button ${isManualRefresh ? 'opacity-60 cursor-wait' : ''}`}
-          style={{ WebkitAppRegion: 'no-drag' }}
-          disabled={isManualRefresh}
-          title="Refresh events from Google Calendar"
-        >
-          <FiRefreshCcw size={14} className={isManualRefresh ? 'animate-spin' : ''} />
-          <span className="ml-1">{isManualRefresh ? 'Refreshing' : 'Refresh'}</span>
-        </button>
-
-        <button
-          onClick={handleSync}
-          className={`clean-button ${isSyncing ? 'opacity-60 cursor-wait' : ''}`}
-          style={{ WebkitAppRegion: 'no-drag' }}
-          disabled={isSyncing}
-          title={lastSyncTime ? `Last synced: ${lastSyncTime.toLocaleTimeString()}` : 'Sync with Google Calendar'}
-        >
-          <FiCloud size={14} className={isSyncing ? 'animate-pulse' : ''} />
-          <span className="ml-1">{isSyncing ? 'Syncing...' : 'Sync'}</span>
         </button>
         
         {/* View Dropdown - Borderless with completely redone dropdown */}

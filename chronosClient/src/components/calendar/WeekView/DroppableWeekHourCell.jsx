@@ -18,7 +18,7 @@ const DroppableWeekHourCell = ({
     handleDragLeave,
     clearTodoDragPreview
 }) => {
-    const { activeTodo, lockedCellId } = useDndKit();
+    const { activeTodo, lockedCellId, isOverCalendar } = useDndKit();
     const dateStr = format(day, 'yyyy-MM-dd');
     const droppableId = `week-hour-${dateStr}-${hour}`;
 
@@ -31,7 +31,7 @@ const DroppableWeekHourCell = ({
     const isLockedOnThisCell = lockedCellId === droppableId;
     const isAnyWeekHourLocked = lockedCellId?.startsWith('week-hour-');
 
-    const showEventPreview = activeTodo && (
+    const showEventPreview = activeTodo && isOverCalendar && (
         isLockedOnThisCell || (isAnyWeekHourLocked && isDndKitHovering)
     );
 
@@ -53,29 +53,40 @@ const DroppableWeekHourCell = ({
         const previewEnd = new Date(previewStart);
         previewEnd.setHours(hour + 1, 0, 0, 0);
 
+        // Match WeekEvent styling exactly
         return (
             <div
-                className="absolute rounded-lg p-1 overflow-hidden text-sm pointer-events-none shadow-sm"
+                className="absolute rounded-lg p-1 overflow-hidden text-sm pointer-events-none"
                 style={{
                     top: 0,
                     left: '2px',
                     right: '2px',
-                    minHeight: `${hourHeight}px`,
+                    height: `${hourHeight - 4}px`,
                     backgroundColor: colors.background,
-                    boxShadow: '0 0 0 1px rgba(148, 163, 184, 0.5)',
                     zIndex: 9997,
+                    opacity: 0.9,
+                    paddingLeft: '10px'
                 }}
             >
+                {/* Vertical line - matching WeekEvent exactly */}
                 <div
-                    className="absolute top-0 bottom-0 w-1 rounded-full"
-                    style={{ left: '2px', backgroundColor: colors.border, zIndex: 3 }}
+                    className="absolute left-0.5 top-0.5 bottom-0.5 w-1 rounded-full pointer-events-none"
+                    style={{ backgroundColor: colors.border, zIndex: 3 }}
                 />
-                <div className="ml-3">
-                    <div className="font-medium text-xs truncate" style={{ color: colors.text }}>
-                        {activeTodo.title}
+                <div className="ml-3.5" style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                    <div
+                        className="font-medium mb-0.5"
+                        style={{ color: colors.text, fontSize: '12px', marginLeft: '6px', fontWeight: 600 }}
+                    >
+                        <span className="whitespace-nowrap overflow-hidden text-ellipsis">
+                            {activeTodo.title}
+                        </span>
                     </div>
-                    <div className="text-xs" style={{ color: 'rgba(55, 65, 81, 0.75)' }}>
-                        {format(previewStart, 'h:mm a')} - {format(previewEnd, 'h:mm a')}
+                    <div
+                        className="text-xs leading-tight"
+                        style={{ color: 'rgba(55, 65, 81, 0.7)', fontWeight: 600, marginLeft: '6px' }}
+                    >
+                        {format(previewStart, 'h:mm a')} – {format(previewEnd, 'h:mm a')}
                     </div>
                 </div>
             </div>
