@@ -61,6 +61,8 @@ export const useTaskConversion = ({
     if (typeof window !== 'undefined') {
       // Track conversion time to prevent premature day index rebuilds
       window.__chronosLastTodoConversion = Date.now();
+      // Clear the marker quickly so calendar views rebuild promptly
+      setTimeout(() => { window.__chronosLastTodoConversion = null }, 500);
 
       window.dispatchEvent(new CustomEvent('chronos-todo-overlay-hide'));
 
@@ -93,7 +95,8 @@ export const useTaskConversion = ({
         color: uiCategoryColor,
         todoId: todoKey,
         todo_id: todoKey,
-        _freshDrop: false
+        // Keep drop animation for newly created events (applies in day/week/month views)
+        _freshDrop: true
       };
 
       setTasksEnhanced(prev =>
@@ -136,4 +139,3 @@ export const useTaskConversion = ({
 
   return { convertTodoToEvent };
 };
-

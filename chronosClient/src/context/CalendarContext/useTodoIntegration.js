@@ -17,7 +17,7 @@ export const useTodoIntegration = ({
     optimisticEventCacheRef
   } = eventState
 
-  const { indexEventByDays, removeTodoFromAllSnapshots, rebuildEventsByDayIndex } = snapshotHelpers
+  const { indexEventByDays, removeTodoFromAllSnapshots, rebuildEventsByDayIndex, saveSnapshotsForAllViews } = snapshotHelpers
 
   const pendingLinkUpdatesRef = useRef(new Map())
   const linkUpdateTimerRef = useRef(null)
@@ -227,10 +227,10 @@ export const useTodoIntegration = ({
               eventIdsRef.current.delete(cachedId)
             }
           }
-          const cacheEvent = { ...newEvent }
-          delete cacheEvent._freshDrop
-          addEventToCache(user?.id, cacheEvent).catch(() => { })
+          addEventToCache(user?.id, newEvent).catch(() => { })
         }
+        // Keep session snapshots in sync so view switches/refreshes see the new event immediately
+        saveSnapshotsForAllViews(newEvent)
         setEvents(prev => {
           const next = []
           const removedIds = new Set()
@@ -244,7 +244,7 @@ export const useTodoIntegration = ({
           next.push(newEvent)
           removedIds.forEach(id => eventIdsRef.current.delete(id))
           return next
-        }, { skipDayIndexRebuild: true })
+        })
         if (newEvent.id) {
           setTimeout(() => {
             setEvents(prev => {
@@ -254,7 +254,7 @@ export const useTodoIntegration = ({
                 return ev
               })
               return changed ? updated : prev
-            }, { skipDayIndexRebuild: true })
+            })
           }, 800)
         }
       }
