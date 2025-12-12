@@ -3,7 +3,7 @@ import { startOfDay } from 'date-fns'
 import { v4 as uuidv4 } from 'uuid'
 import { calendarApi, todosApi } from '../../lib/api'
 import { describeRecurrence } from '../../lib/recurrence'
-import { addEventToCache, removeEventFromCache, clearEventsCache } from './cache'
+import { addEventToCache, removeEventFromCache, queueDeleteForGoogleCalendar } from './cache'
 import {
   parseCalendarBoundary, resolveIsAllDay, coerceDate, safeJsonParse, safeToISOString,
   resolveEventMeetingLocation, normalizeResponseStatus, eventBehavesLikeAllDay, dispatchBounceEvent
@@ -115,7 +115,7 @@ export const useEventCRUD = ({
     eventIdsRef.current.add(newEvent.id)
     indexEventByDays(newEvent)
     setEvents(prev => [...prev, newEvent], { skipDayIndexRebuild: true })
-    addEventToCache(user?.id, { ...newEvent, isGoogleEvent: true }).catch(() => { })
+    await addEventToCache(user?.id, { ...newEvent, isGoogleEvent: true, isOptimistic: true })
     saveSnapshotsForAllViews(newEvent)
 
     if (processedData.recurrenceMeta?.enabled) {
@@ -194,8 +194,8 @@ export const useEventCRUD = ({
 
       removeEventFromAllSnapshots(newEvent.id)
       saveSnapshotsForAllViews(normalizedWithPending)
-      removeEventFromCache(newEvent.id).catch(() => { })
-      addEventToCache(user?.id, { ...normalizedWithPending, isGoogleEvent: true }).catch(() => { })
+      await removeEventFromCache(newEvent.id)
+      await addEventToCache(user?.id, { ...normalizedWithPending, isGoogleEvent: true })
 
       const resolvedServerStart = parseCalendarBoundary(created?.start) || coerceDate(created?.start) || start
       const resolvedServerEnd = parseCalendarBoundary(created?.end) || coerceDate(created?.end) || end
@@ -346,6 +346,11 @@ export const useEventCRUD = ({
         } catch (_) { }
       } else clearOptimisticRecurrenceInstances(id)
       if (linkedTodoId) emitTodoScheduleUpdate(linkedTodoId, start, end, processedData.isAllDay ?? existingEvent?.isAllDay)
+      
+      const updatedEvent = eventsRefValue.current.find(ev => ev.id === id)
+      if (updatedEvent) {
+        await addEventToCache(user?.id, { ...updatedEvent, isGoogleEvent: true })
+      }
     } catch (error) {
       console.error('Failed to update event:', error)
       const message = typeof error?.message === 'string' ? error.message : ''
@@ -372,7 +377,6 @@ export const useEventCRUD = ({
     const linkedTodoId = eventToTodoRef.current.get(String(rawId)) || (directTodoId ? String(directTodoId) : null)
     const linkedEventIdForTodo = linkedTodoId ? todoToEventRef.current.get(String(linkedTodoId)) : null
 
-    clearEventsCache().catch(() => { })
     clearAllSnapshots()
 
     const idsToRemove = new Set()
@@ -416,30 +420,15 @@ export const useEventCRUD = ({
         return prev.filter(ev => !removalIds.has(ev.id))
       }, { skipDayIndexRebuild: true })
 
+      for (const id of removalIds) {
+        await removeEventFromCache(id, todoKey)
+      }
+
       // Force UI re-render after series deletion
       bumpEventsByDayVersion()
 
-      if (!eventsToDelete.length) {
-        if (!isOptimistic && seriesId) {
-          try { await calendarApi.deleteEvent(seriesId, calendarId); if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('eventDeleted')) }
-          catch (error) { const message = typeof error?.message === 'string' ? error.message : ''; if (!/not found/i.test(message) && !/deleted/i.test(message) && !/Resource has been deleted/i.test(message)) console.error('Failed to delete event series:', error) }
-        }
-        return
-      }
-
       if (!isOptimistic && seriesId) {
-        try {
-          await calendarApi.deleteEvent(seriesId, calendarId)
-          try { const { start: visibleStart, end: visibleEnd } = getVisibleRange(currentDate, view); if (visibleStart && visibleEnd) fetchEventsForRange(visibleStart, visibleEnd, true, true).catch(() => { }) } catch (_) { }
-        } catch (error) {
-          const message = typeof error?.message === 'string' ? error.message : ''
-          if (!/not found/i.test(message) && !/deleted/i.test(message) && !/Resource has been deleted/i.test(message)) {
-            console.error('Failed to delete event series:', error)
-            if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('eventDeleted', { detail: { message: "Error couldn't delete" } }))
-            setEvents(prevEvents => [...prevEvents, ...snapshotsToRestore], { skipDayIndexRebuild: true })
-            snapshotsToRestore.forEach(snapshot => { eventIdsRef.current.add(snapshot.id); indexEventByDays(snapshot); saveSnapshotsForAllViews(snapshot); suppressedEventIdsRef.current.delete(snapshot.id) })
-          }
-        }
+        queueDeleteForGoogleCalendar(seriesId, calendarId)
       }
       return
     }
@@ -451,7 +440,13 @@ export const useEventCRUD = ({
     if (linkedEventIdForTodo && linkedEventIdForTodo !== String(rawId)) idsToRemove.add(linkedEventIdForTodo)
     setEvents(prev => prev.filter(e => !idsToRemove.has(String(e.id)) && !(todoKey && String(e.todoId) === String(todoKey))), { skipDayIndexRebuild: true })
 
-    idsToRemove.forEach(id => { eventIdsRef.current.delete(id); pendingSyncEventIdsRef.current.delete(id); unlinkEvent(id); removeEventFromAllSnapshots(id); removeEventFromCache(id).catch(() => { }) })
+    for (const id of idsToRemove) {
+      eventIdsRef.current.delete(id)
+      pendingSyncEventIdsRef.current.delete(id)
+      unlinkEvent(id)
+      removeEventFromAllSnapshots(id)
+      await removeEventFromCache(id, todoKey)
+    }
     if (todoKey) {
       idsToRemove.forEach(id => eventToTodoRef.current.delete(String(id)))
       todoToEventRef.current.delete(todoKey)
@@ -472,18 +467,8 @@ export const useEventCRUD = ({
     // Force UI re-render after single event deletion
     bumpEventsByDayVersion()
 
-    try { if (!isOptimistic) await calendarApi.deleteEvent(rawId, calendarId) }
-    catch (error) {
-      const message = typeof error?.message === 'string' ? error.message : ''
-      if (/not found/i.test(message) || /deleted/i.test(message) || /Resource has been deleted/i.test(message)) return
-      console.error('Failed to delete event:', error)
-      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('eventDeleted', { detail: { message: "Error couldn't delete" } }))
-      setEvents(prev => [...prev, ...snapshotsToRestore], { skipDayIndexRebuild: true })
-      snapshotsToRestore.forEach(s => { eventIdsRef.current.add(s.id); indexEventByDays(s); saveSnapshotsForAllViews(s); suppressedEventIdsRef.current.delete(s.id) })
-      if (linkedTodoId && snapshotsToRestore.length) {
-        const rollback = snapshotsToRestore[0]
-        emitTodoScheduleUpdate(linkedTodoId, rollback.start ? new Date(rollback.start) : null, rollback.end ? new Date(rollback.end) : null, rollback.isAllDay || false)
-      }
+    if (!isOptimistic) {
+      queueDeleteForGoogleCalendar(rawId, calendarId)
     }
   }, [unlinkEvent, indexEventByDays, removeEventFromAllSnapshots, saveSnapshotsForAllViews, clearOptimisticRecurrenceInstances, getVisibleRange, currentDate, view, fetchEventsForRange, clearAllSnapshots, removeTodoFromAllSnapshots, bumpEventsByDayVersion])
 

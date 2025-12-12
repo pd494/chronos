@@ -59,11 +59,6 @@ export const useTaskConversion = ({
     };
 
     if (typeof window !== 'undefined') {
-      // Track conversion time to prevent premature day index rebuilds
-      window.__chronosLastTodoConversion = Date.now();
-      // Clear the marker quickly so calendar views rebuild promptly
-      setTimeout(() => { window.__chronosLastTodoConversion = null }, 500);
-
       window.dispatchEvent(new CustomEvent('chronos-todo-overlay-hide'));
 
       window.dispatchEvent(new CustomEvent('todoConvertedToEvent', {

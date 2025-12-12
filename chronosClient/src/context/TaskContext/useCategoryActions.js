@@ -103,8 +103,10 @@ export const useCategoryActions = ({
       const filteredIds = orderedIds.filter(id => id && id !== ALL_CATEGORY.id);
 
       let batchUpdates = [];
+      let previousCategories = [];
 
       setCategories(prev => {
+        previousCategories = prev;
         const pinned = prev.filter(cat => cat.id === ALL_CATEGORY.id);
         const reorderable = prev.filter(cat => cat.id !== ALL_CATEGORY.id);
         const map = new Map(reorderable.map(cat => [cat.id, cat]));
@@ -128,12 +130,14 @@ export const useCategoryActions = ({
 
       try {
         await todosApi.batchReorderCategories(batchUpdates);
+        lastMutationTimeRef.current = Date.now();
       } catch (error) {
         console.error('Failed to reorder categories:', error);
+        setCategories(previousCategories);
         await refreshBootstrap(true);
       }
     },
-    [setCategories, refreshBootstrap]
+    [setCategories, refreshBootstrap, lastMutationTimeRef]
   );
 
   return {

@@ -158,12 +158,17 @@ const WeekTimeGrid = ({
                 const colors = getEventColors(todoDragPreview.color || 'blue')
                 const previewStart = todoDragPreview.start
                 const previewEnd = todoDragPreview.end
+                const previewKey = `${previewStart.getTime()}-${previewEnd.getTime()}`
                 const previewTop = (previewStart.getHours() - DAY_START_HOUR) * HOUR_HEIGHT + (previewStart.getMinutes() / 60) * HOUR_HEIGHT
                 const previewDuration = Math.max(5, differenceInMinutes(previewEnd, previewStart))
                 const previewHeight = (previewDuration / 60) * HOUR_HEIGHT
 
                 return (
-                  <div className="absolute rounded-lg p-1 overflow-hidden text-sm pointer-events-none shadow-sm" style={{ top: `${previewTop}px`, minHeight: `${previewHeight}px`, left: '2px', right: '2px', backgroundColor: colors.background, opacity: 1, boxShadow: '0 0 0 1px rgba(148, 163, 184, 0.5)', zIndex: 9997 }}>
+                  <div
+                    key={previewKey}
+                    className="absolute rounded-lg p-1 overflow-hidden text-sm pointer-events-none shadow-sm"
+                    style={{ top: `${previewTop}px`, minHeight: `${previewHeight}px`, left: '2px', right: '2px', backgroundColor: colors.background, opacity: 1, boxShadow: '0 0 0 1px rgba(148, 163, 184, 0.5)', zIndex: 9997 }}
+                  >
                     <div className="absolute top-0 bottom-0 w-1 rounded-full pointer-events-none" style={{ left: '2px', backgroundColor: colors.border, zIndex: 3 }} />
                     <div className="ml-3">
                       <div className="font-medium text-xs truncate" style={{ color: colors.text }}>{todoDragPreview.title}</div>

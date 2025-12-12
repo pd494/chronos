@@ -40,8 +40,7 @@ const AllDaySection = ({
   const showNativePreview = todoDragPreview?.isAllDay && !isDndKitHovering
   const shouldShowPreview = showDndKitPreview || showNativePreview
 
-  // Show highlight on hover (before lock-in)
-  const showDragoverStyle = isDndKitHovering && !showDndKitPreview
+  const showDragoverStyle = isDndKitHovering && isOverCalendar && !lockedCellId
 
   // Calculate required height - include extra slot when preview is showing
   const EXTRA_BOTTOM_SPACE = 10
@@ -70,9 +69,11 @@ const AllDaySection = ({
     if (!previewSource) return null
 
     const colors = getEventColors(previewSource.color || 'blue')
+    const previewKey = `${previewSource?.id || previewSource?.todoId || previewSource?.title || 'todo'}-${currentDate.toISOString()}`
     
     return (
       <div
+        key={previewKey}
         className="relative flex items-center gap-2 rounded-lg pr-2 py-1 text-xs font-medium pointer-events-none"
         style={{
           backgroundColor: colors.background,

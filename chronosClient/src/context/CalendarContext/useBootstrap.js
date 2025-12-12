@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback } from 'react'
 import { calendarApi } from '../../lib/api'
 import { SNAPSHOT_VERSION } from './constants'
-import { loadEventsFromCache, clearEventsCache } from './useStorage'
+import { loadEventsFromCache, clearEventsCache, removeOptimisticEventsFromCache } from './useStorage'
 import { safeToISOString } from './utils'
 
 export const useBootstrap = ({
@@ -229,6 +229,9 @@ export const useBootstrap = ({
         localStorage.setItem(cacheVersionKey, String(SNAPSHOT_VERSION))
       }
 
+      await removeOptimisticEventsFromCache(user.id)
+      clearAllSnapshots()
+
       let cachedEvents = await loadEventsFromCache(user.id)
       cachedEvents = filterBySelectedCalendars(cachedEvents)
       if (cachedEvents && cachedEvents.length > 0) {
@@ -236,6 +239,8 @@ export const useBootstrap = ({
         for (const e of cachedEvents) {
           eventIdsRef.current.add(e.id)
           indexEventByDays(e)
+          const todoId = e.todoId || e.todo_id
+          if (todoId) linkTodoEvent(todoId, e.id)
         }
         hasLoadedInitialRef.current = true
         setInitialLoading(false)

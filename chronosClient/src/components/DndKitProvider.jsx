@@ -41,38 +41,8 @@ const DRAG_STYLES = `
   body.dnd-kit-dragging { cursor: none !important; }
 `;
 
-// Custom collision detection that prioritizes calendar zones when dragging tasks
-const calendarPriorityCollision = (args) => {
-    const { active, droppableContainers } = args;
-
-    // If not dragging a task, use default behavior
-    if (active?.data?.current?.type !== 'task') {
-        return closestCenter(args);
-    }
-
-    // Get all intersecting droppables
-    const collisions = rectIntersection(args);
-
-    if (!collisions || collisions.length === 0) {
-        return closestCenter(args);
-    }
-
-    // Separate calendar zones from other droppables
-    const calendarCollisions = collisions.filter(collision => {
-        // Find the container data - droppableContainers is an array
-        const container = droppableContainers.find(c => c.id === collision.id);
-        const type = container?.data?.current?.type;
-        return type === 'calendar-cell' || type === 'hour-cell' || type === 'all-day-cell';
-    });
-
-    // If we're intersecting with ANY calendar zone, prioritize it
-    if (calendarCollisions.length > 0) {
-        return calendarCollisions;
-    }
-
-    // Otherwise return all collisions
-    return collisions;
-};
+const CALENDAR_ENTER_PX = 14;
+const CALENDAR_EXIT_PX = 6;
 
 const DndKitProvider = ({ children }) => {
     const { convertTodoToEvent, reorderTasks, reorderCategories, tasks, categories } = useTaskContext();
@@ -83,7 +53,9 @@ const DndKitProvider = ({ children }) => {
     const [lockedCellId, setLockedCellId] = useState(null);
     const [currentOverType, setCurrentOverType] = useState(null);
     const pointerXRef = useRef(null);
+    const pointerYRef = useRef(null);
     const dragStartXRef = useRef(null);
+    const calendarModeRef = useRef(false);
 
     const lockInTimerRef = useRef(null);
     const lastOverIdRef = useRef(null);
@@ -98,6 +70,7 @@ const DndKitProvider = ({ children }) => {
     useEffect(() => {
         const handlePointerMove = (e) => {
             pointerXRef.current = e.clientX;
+            pointerYRef.current = e.clientY;
         };
         window.addEventListener('pointermove', handlePointerMove, { passive: true });
         return () => window.removeEventListener('pointermove', handlePointerMove);
@@ -111,6 +84,30 @@ const DndKitProvider = ({ children }) => {
     const measuringConfig = useMemo(() => ({
         droppable: { strategy: MeasuringStrategy.Always },
     }), []);
+
+    const collisionDetection = useCallback((args) => {
+        const { active, droppableContainers } = args;
+        if (active?.data?.current?.type !== 'task') return closestCenter(args);
+
+        if (!calendarModeRef.current) {
+            const filtered = droppableContainers.filter(c => {
+                const type = c?.data?.current?.type;
+                return type !== 'calendar-cell' && type !== 'hour-cell' && type !== 'all-day-cell';
+            });
+            return closestCenter({ ...args, droppableContainers: filtered });
+        }
+
+        const collisions = rectIntersection(args);
+        if (!collisions || collisions.length === 0) return closestCenter(args);
+
+        const calendarCollisions = collisions.filter(collision => {
+            const container = droppableContainers.find(c => c.id === collision.id);
+            const type = container?.data?.current?.type;
+            return type === 'calendar-cell' || type === 'hour-cell' || type === 'all-day-cell';
+        });
+        if (calendarCollisions.length > 0) return calendarCollisions;
+        return collisions;
+    }, []);
 
     const getDelayForCell = (cellId) => {
         if (!cellId) return LOCK_IN_DELAYS.default;
@@ -126,6 +123,7 @@ const DndKitProvider = ({ children }) => {
         setActiveId(active.id);
         setLockedCellId(null);
         dragStartXRef.current = event?.activatorEvent?.clientX ?? null;
+        calendarModeRef.current = false;
 
         const todoData = active.data?.current;
         if (todoData?.type === 'task') {
@@ -158,12 +156,16 @@ const DndKitProvider = ({ children }) => {
         // Sidebar boundary + buffer to allow vertical reordering without calendar pill
         const sidebar = document.querySelector('.sidebar');
         const sidebarRight = sidebar?.getBoundingClientRect()?.right || 0;
-        const CONVERT_BUFFER = 80;
         // Pointer position from pointer tracker, fallback to active rect (center)
         const activeRect = active?.rect?.current?.translated;
         const fallbackX = activeRect ? activeRect.left + (activeRect.width / 2) : 0;
         const pointerX = pointerXRef.current ?? fallbackX;
-        const allowCalendar = isCalendarZone && pointerX >= (sidebarRight + CONVERT_BUFFER);
+        const shouldEnter = pointerX > (sidebarRight + CALENDAR_ENTER_PX);
+        const shouldExit = pointerX < (sidebarRight + CALENDAR_EXIT_PX);
+        if (!calendarModeRef.current && shouldEnter) calendarModeRef.current = true;
+        if (calendarModeRef.current && shouldExit) calendarModeRef.current = false;
+
+        const allowCalendar = calendarModeRef.current && isCalendarZone;
 
         setIsOverCalendar(allowCalendar);
         setCurrentOverType(over?.data?.current?.type || null);
@@ -225,11 +227,15 @@ const DndKitProvider = ({ children }) => {
         // Check pointer X position relative to sidebar to determine if this was a reorder or calendar drop
         const sidebar = document.querySelector('.sidebar');
         const sidebarRight = sidebar?.getBoundingClientRect()?.right || 0;
-        const CONVERT_BUFFER = 80;
         const activeRect = active?.rect?.current?.translated;
         const fallbackX = activeRect ? activeRect.left + (activeRect.width / 2) : 0;
         const pointerX = pointerXRef.current ?? fallbackX;
-        const allowCalendarDrop = wasOverCalendar && pointerX >= (sidebarRight + CONVERT_BUFFER);
+        const pointerY = pointerYRef.current ?? (activeRect ? activeRect.top + (activeRect.height / 2) : 0);
+        const elAtPointer = (typeof document !== 'undefined' && typeof document.elementFromPoint === 'function')
+            ? document.elementFromPoint(pointerX, pointerY)
+            : null;
+        const droppedInSidebar = Boolean(elAtPointer?.closest?.('.sidebar'));
+        const allowCalendarDrop = calendarModeRef.current && wasOverCalendar && !droppedInSidebar && pointerX > (sidebarRight + CALENDAR_ENTER_PX);
 
         setActiveId(null);
         setActiveTodo(null);
@@ -238,6 +244,7 @@ const DndKitProvider = ({ children }) => {
         setCurrentOverId(null);
         setLockedCellId(null);
         lastOverIdRef.current = null;
+        calendarModeRef.current = false;
         document.body.classList.remove('task-dragging');
         document.body.classList.remove('calendar-drag-focus');
         document.body.classList.remove('dnd-kit-dragging');
@@ -250,7 +257,6 @@ const DndKitProvider = ({ children }) => {
             }
         }
 
-        // Task -> calendar conversion (only if not in reorder zone)
         if (over && activeType === 'task' && taskId && allowCalendarDrop) {
             try {
                 const targetDate = overData.date;
@@ -283,7 +289,6 @@ const DndKitProvider = ({ children }) => {
             return;
         }
 
-        // Task reorder (including scheduled tasks)
         if (activeType === 'task' && overId && activeId !== overId) {
             const isValidTarget = tasks?.some?.(t => String(t.id) === String(overId));
             if (reorderTasks && isValidTarget) {
@@ -292,7 +297,6 @@ const DndKitProvider = ({ children }) => {
             return;
         }
 
-        // Category reorder (tabs or grouped view)
         if ((activeType === 'category-tab' || activeType === 'category') && overId && activeId !== overId && reorderCategories) {
             const orderedIds = categories
                 ?.filter(cat => cat.id && cat.id !== 'add-category')
@@ -319,6 +323,7 @@ const DndKitProvider = ({ children }) => {
         setCurrentOverId(null);
         setLockedCellId(null);
         lastOverIdRef.current = null;
+        calendarModeRef.current = false;
         document.body.classList.remove('task-dragging');
         document.body.classList.remove('calendar-drag-focus');
         document.body.classList.remove('dnd-kit-dragging');
@@ -381,11 +386,12 @@ const DndKitProvider = ({ children }) => {
         <DndKitContext.Provider value={contextValue}>
             <DndContext
                 sensors={sensors}
-                collisionDetection={calendarPriorityCollision}
+                collisionDetection={collisionDetection}
                 onDragStart={handleDragStart}
                 onDragOver={handleDragOver}
                 onDragEnd={handleDragEnd}
                 onDragCancel={handleDragCancel}
+                autoScroll={!activeTodo}
                 measuring={measuringConfig}
             >
                 {children}

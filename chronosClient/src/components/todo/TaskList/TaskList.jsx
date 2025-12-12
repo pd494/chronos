@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   SortableContext,
   verticalListSortingStrategy,
@@ -42,20 +42,23 @@ const SortableCategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToC
       className={`category-group-wrapper relative ${index > 0 ? 'mt-[14.4px]' : ''}`}
       data-category-id={category.id}
     >
-      <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing">
-        <CategoryGroup
-          category={category}
-          tasks={tasks}
-          onToggleComplete={onToggleComplete}
-          onAddTaskToCategory={onAddTaskToCategory}
-        />
-      </div>
+      <CategoryGroup
+        category={category}
+        tasks={tasks}
+        onToggleComplete={onToggleComplete}
+        onAddTaskToCategory={onAddTaskToCategory}
+        dragHandleProps={{
+          ...attributes,
+          ...listeners,
+          className: 'cursor-grab active:cursor-grabbing touch-none',
+        }}
+      />
     </div>
   );
 };
 
 const TaskList = ({ tasks, onToggleComplete, activeCategory, categories }) => {
-  const { addTask, reorderCategories } = useTaskContext();
+  const { addTask } = useTaskContext();
   const [renderKey, setRenderKey] = useState(0);
 
   const activeCategoryColor = useMemo(() => {

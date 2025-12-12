@@ -1,4 +1,5 @@
 import { format, isSameDay, isToday } from 'date-fns'
+import { useEffect, useRef } from 'react'
 import { useDroppable } from '@dnd-kit/core'
 import AllDayEvent from '../../events/AllDayEvent'
 import { getEventColors } from '../../../lib/eventColors'
@@ -42,10 +43,22 @@ const DroppableAllDayCell = ({
   const showDndKitPreview = isOverCalendar && isLockedOnThisCell && activeTodo
   const shouldShowPreview = showDndKitPreview || showNativePreview
 
-  // Show highlight on hover (before lock-in)
-  const showDragoverStyle = isDndKitHovering && !showDndKitPreview
+  const showDragoverStyle = isDndKitHovering && isOverCalendar && !lockedCellId
 
   const previewSource = showDndKitPreview ? activeTodo : todoDragPreview
+  const overlayHiddenRef = useRef(false)
+
+  useEffect(() => {
+    if (showDndKitPreview && activeTodo && !overlayHiddenRef.current) {
+      overlayHiddenRef.current = true
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('chronos-todo-overlay-hide'))
+      }
+    }
+    if (!showDndKitPreview) {
+      overlayHiddenRef.current = false
+    }
+  }, [showDndKitPreview, activeTodo])
 
   return (
     <div
@@ -71,22 +84,25 @@ const DroppableAllDayCell = ({
       {eventsForDay.map((event, idx) => renderAllDayEvent(event, idx))}
       {shouldShowPreview && previewSource && (() => {
         const colors = getEventColors(previewSource.color || 'blue')
+        const previewKey = `${previewSource?.id || previewSource?.todoId || previewSource?.title || 'todo'}-${format(day, 'yyyy-MM-dd')}`
         
         return (
           <div
+            key={previewKey}
             className="relative flex items-center gap-2 rounded-lg pr-2 py-1 text-xs font-medium pointer-events-none"
             style={{
               backgroundColor: colors.background,
               color: colors.text,
               opacity: 0.9,
-              paddingLeft: '18px',
-              borderRadius: '8px'
+              paddingLeft: '8px',
+              borderRadius: '8px',
+              boxShadow: '0 0 0 1px rgba(148, 163, 184, 0.35)'
             }}
           >
             <div
               className="absolute"
               style={{
-                left: '8px',
+                left: '6px',
                 top: '2px',
                 bottom: '2px',
                 width: '4px',
@@ -94,9 +110,9 @@ const DroppableAllDayCell = ({
                 backgroundColor: colors.border
               }}
             />
-            <span className="font-medium flex items-center gap-1.5 flex-1 min-w-0">
+            <span className="font-medium flex items-center gap-1.5 flex-1 min-w-0 ml-1">
               <span className="truncate flex-1 min-w-0">{previewSource.title}</span>
-              <span className="text-[11px] text-slate-600 whitespace-nowrap flex-shrink-0">All day</span>
+              <span className="text-[11px] font-semibold text-slate-600 whitespace-nowrap flex-shrink-0">All day</span>
             </span>
           </div>
         )

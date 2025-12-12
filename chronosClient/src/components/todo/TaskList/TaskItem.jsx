@@ -39,7 +39,7 @@ const TaskItemContent = forwardRef(({
   return (
     <div
       ref={ref}
-      className={`task-item flex items-center py-2.5 pr-4 mb-1.5 rounded-[20px] relative transition-all duration-200 hover:bg-black/[0.03] ${task.completed ? 'completed' : ''} ${isScheduled ? 'scheduled' : ''} ${isDragging ? 'opacity-50' : ''}`}
+      className={`task-item flex items-center py-2.5 pr-4 mb-1.5 rounded-[20px] relative transition-all duration-200 ${task.completed ? 'completed' : ''} ${isScheduled ? 'scheduled' : ''} ${isDragging ? 'opacity-50' : ''}`}
       style={style}
       data-id={task.id}
       data-task-id={task.id}
@@ -49,9 +49,9 @@ const TaskItemContent = forwardRef(({
     >
       <div
         ref={checkboxRef}
-        className={`w-[18px] h-[18px] border-2 border-[#8e8e93] rounded-md mr-3 flex justify-center items-center text-white transition-all duration-200 relative overflow-hidden cursor-default
-          ${task.completed ? 'bg-[#34c759] border-[#34c759]' : ''}
-          ${isChecking ? 'bg-[#34c759] border-[#34c759] checking' : ''}`}
+        className={`task-checkbox w-[18px] h-[18px] border-2 border-[#8e8e93] rounded-md mr-3 flex justify-center items-center text-[#2c2c2e] transition-all duration-150 relative overflow-hidden cursor-default
+          ${task.completed ? 'bg-[#D3D3FF] border-[#B8B8FF]' : ''}
+          ${isChecking ? 'bg-[#D3D3FF] border-[#B8B8FF] checking' : ''}`}
         onClick={() => handleCheckboxClick(task.id)}
       >
         {(task.completed || isChecking) ? <span>✓</span> : <span></span>}

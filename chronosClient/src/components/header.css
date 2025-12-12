@@ -10,30 +10,11 @@
 }
 
 /* Ensure all header elements are vertically centered */
-.header-container header,
-.header-container .flex {
+.header-container header {
   height: 48px;
   min-height: 48px;
   display: flex;
   align-items: center;
-}
-
-/* Category tabs in header */
-#header-tabs-wrapper {
-  height: 48px;
-  min-height: 48px;
-  display: flex;
-  align-items: center;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-  white-space: nowrap;
-  padding-left: 0;
-  transition: width 0.3s ease;
-}
-
-#header-tabs-wrapper::-webkit-scrollbar {
-  display: none;
 }
 
 /* Main header */
@@ -48,8 +29,7 @@ header {
 }
 
 /* Make buttons the same height */
-header button,
-.category-tab-horizontal {
+header button {
   height: 28px;
   min-height: 28px;
   display: flex;
@@ -201,8 +181,7 @@ header .dark-mode-button svg {
   background-color: #3a3a3c !important;
 }
 
-.dark header,
-.dark #header-tabs-wrapper {
+.dark header {
   background-color: #1c1c1e;
   border-color: #2c2c2e;
 } 

@@ -14,7 +14,7 @@ export const useTodoIntegration = ({
   const {
     events, setEvents, eventsRefValue, eventsByDayRef, eventIdsRef,
     todoToEventRef, eventToTodoRef, suppressedEventIdsRef, suppressedTodoIdsRef,
-    optimisticEventCacheRef
+    optimisticEventCacheRef, bumpEventsByDayVersion
   } = eventState
 
   const { indexEventByDays, removeTodoFromAllSnapshots, rebuildEventsByDayIndex, saveSnapshotsForAllViews } = snapshotHelpers
@@ -131,7 +131,7 @@ export const useTodoIntegration = ({
         const next = arr.filter(ev => String(ev.todoId) !== todoKey && String(ev.id) !== resolvedEventId)
         eventsByDayRef.current.set(key, next)
       }
-      if (resolvedEventId) removeEventFromCache(resolvedEventId).catch(() => { })
+      if (resolvedEventId) await removeEventFromCache(resolvedEventId, todoKey)
       if (resolvedEventId) {
         try { const calId = linkedEvent?.calendar_id || 'primary'; await calendarApi.deleteEvent(resolvedEventId, calId) }
         catch (error) { console.error('Failed to delete linked calendar event:', error) }
@@ -155,7 +155,7 @@ export const useTodoIntegration = ({
   }, [setEventCheckedState, events, unlinkTodo, removeTodoFromAllSnapshots])
 
   useEffect(() => {
-    const handleTodoConverted = (e) => {
+    const handleTodoConverted = async (e) => {
       const eventData = e.detail?.eventData
       const isOptimistic = e.detail?.isOptimistic
       const todoId = e.detail?.todoId || eventData?.todoId
@@ -216,10 +216,12 @@ export const useTodoIntegration = ({
         }
 
         if (!isOptimistic && todoKey && newEvent.id) linkTodoEvent(todoKey, newEvent.id)
+        
+        const cacheEvent = { ...newEvent, isOptimistic: Boolean(isOptimistic), isGoogleEvent: true }
+        delete cacheEvent._freshDrop
+        await addEventToCache(user?.id, cacheEvent)
+        
         if (!isOptimistic) {
-          // Remove any optimistic events for this todo from the cache
-          // The optimistic event has a temp ID like "temp-todo-123-...", not the resolved Google ID
-          // So we need to find it by todoId
           for (const [cachedId, cachedEvent] of optimisticEventCacheRef.current.entries()) {
             const cachedTodoId = cachedEvent.todoId || cachedEvent.todo_id
             if (todoKey && String(cachedTodoId) === todoKey) {
@@ -227,10 +229,9 @@ export const useTodoIntegration = ({
               eventIdsRef.current.delete(cachedId)
             }
           }
-          addEventToCache(user?.id, newEvent).catch(() => { })
         }
-        // Keep session snapshots in sync so view switches/refreshes see the new event immediately
         saveSnapshotsForAllViews(newEvent)
+        bumpEventsByDayVersion()
         setEvents(prev => {
           const next = []
           const removedIds = new Set()
@@ -259,16 +260,20 @@ export const useTodoIntegration = ({
         }
       }
     }
-    const handleTodoConversionFailed = (e) => {
+    const handleTodoConversionFailed = async (e) => {
       const eventId = e.detail?.eventId
+      const todoId = e.detail?.todoId
       if (eventId) {
         setEvents(prev => prev.filter(ev => ev.id !== eventId), { skipDayIndexRebuild: true })
         eventIdsRef.current.delete(eventId)
+        optimisticEventCacheRef.current.delete(eventId)
         unlinkEvent(eventId)
         for (const [key, arr] of eventsByDayRef.current.entries()) {
           const filtered = arr.filter(ev => ev.id !== eventId)
           if (filtered.length !== arr.length) eventsByDayRef.current.set(key, filtered)
         }
+        await removeEventFromCache(eventId, todoId)
+        bumpEventsByDayVersion()
       }
     }
     window.addEventListener('todoConvertedToEvent', handleTodoConverted)
@@ -277,7 +282,7 @@ export const useTodoIntegration = ({
       window.removeEventListener('todoConvertedToEvent', handleTodoConverted)
       window.removeEventListener('todoConversionFailed', handleTodoConversionFailed)
     }
-  }, [linkTodoEvent, unlinkEvent, rebuildEventsByDayIndex, user?.id])
+  }, [linkTodoEvent, unlinkEvent, rebuildEventsByDayIndex, user?.id, saveSnapshotsForAllViews, bumpEventsByDayVersion])
 
   return {
     hydrateEventTodoLinks, persistEventTodoLinks, isEventChecked, setEventCheckedState,

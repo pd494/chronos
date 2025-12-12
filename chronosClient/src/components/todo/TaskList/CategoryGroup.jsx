@@ -5,11 +5,12 @@ import {
 } from '@dnd-kit/sortable';
 import TaskItem from './TaskItem';
 
-const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory }) => {
+const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory, dragHandleProps }) => {
   const [isCollapsed, setIsCollapsed] = useState(category.name === 'Completed');
   const [isEditingNewTask, setIsEditingNewTask] = useState(false);
   const [newTaskText, setNewTaskText] = useState('');
   const newTaskInputRef = useRef(null);
+  const { className: dragHandleClassName, ...dragHandleRest } = dragHandleProps || {};
 
   // Get task IDs for SortableContext
   const taskIds = useMemo(() => tasks.map(task => task.id), [tasks]);
@@ -53,9 +54,10 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
     <div className="category-group mb-3 rounded-lg overflow-hidden">
       <div className="flex items-center justify-between relative">
         <div
-          className="category-header flex items-center py-2.5 px-4 bg-transparent cursor-pointer rounded-2xl transition-colors duration-200 relative flex-grow hover:bg-black/5"
+          className={`category-header flex items-center py-2.5 px-4 bg-transparent cursor-pointer rounded-2xl transition-colors duration-200 relative flex-grow hover:bg-black/5 ${dragHandleClassName || ''}`}
           role="button"
           tabIndex={0}
+          {...dragHandleRest}
           onClick={handleHeaderActivate}
           onKeyDown={(event) => {
             if (event.key === 'Enter' || event.key === ' ') {
@@ -126,7 +128,7 @@ const CategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory 
           )}
 
           {tasks.length === 0 && !isEditingNewTask && (
-            <div className="flex justify-center items-center py-6 px-4 text-[#8e8e93] text-[15px] italic">
+            <div className="flex justify-center items-center py-[15px] px-4 text-[#8e8e93] text-[15px] italic">
               <p>No tasks in this category</p>
             </div>
           )}

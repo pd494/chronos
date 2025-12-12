@@ -1,2 +1,2 @@
-export { addEventToCache, removeEventFromCache, clearEventsCache } from './useStorage'
+export { addEventToCache, removeEventFromCache, clearEventsCache, removeOptimisticEventsFromCache, queueDeleteForGoogleCalendar } from './useStorage'
 

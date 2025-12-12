@@ -13,7 +13,6 @@ import CategoryTabs from './components/todo/CategoryTabs'
 import EventModal from './components/events/EventModal/EventModal'
 
 import { useCalendar } from './context/CalendarContext/CalendarContext'
-import './components/header.css'
 
 // Toast notification component
 const Toast = ({ message, visible, onClose, autoCloseDelay = 3000 }) => {
@@ -235,11 +234,11 @@ function AppContent() {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="header-container">
-        <div className="flex w-full items-center bg-white dark:bg-gray-800">
+      <div className="w-full flex flex-col relative z-50 border-b border-[#e5e5ea] overflow-visible">
+        <div className="flex w-full items-center bg-white dark:bg-gray-800 h-12 min-h-12">
           <div
             id="header-tabs-wrapper"
-            className="flex-shrink-0 flex items-center bg-white overflow-hidden border-r border-gray-200"
+            className="flex-shrink-0 flex items-center bg-white overflow-hidden border-r border-gray-200 h-12 min-h-12 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden whitespace-nowrap pl-0 transition-[width] duration-300 ease-in-out"
             style={{ width: sidebarVisible ? sidebarWidth + 'px' : '0' }}
           >
             <CategoryTabs

@@ -162,14 +162,6 @@ export const useCalendarController = () => {
       return
     }
 
-    // Skip rebuild if we recently had a todo conversion (prevents flicker on view switch)
-    if (typeof window !== 'undefined' && window.__chronosLastTodoConversion) {
-      const timeSinceConversion = Date.now() - window.__chronosLastTodoConversion
-      if (timeSinceConversion < 2000) {
-        return
-      }
-    }
-
     let idMap = {}
     if (typeof window !== 'undefined') {
       idMap = window.chronosCalendarIdMap || {}

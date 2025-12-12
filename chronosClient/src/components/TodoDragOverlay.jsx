@@ -73,9 +73,7 @@ const TodoDragOverlay = () => {
       const sidebarEl = document.querySelector('.sidebar');
       if (sidebarEl && typeof event.clientX === 'number') {
         const rect = sidebarEl.getBoundingClientRect();
-        // Add a tiny buffer so the pill appears only after we've
-        // meaningfully crossed into the calendar surface.
-        isOverCalendar = event.clientX > rect.right + 4;
+        isOverCalendar = event.clientX > rect.right + 14;
       }
       const hasCalendarFocus = document.body.classList.contains('calendar-drag-focus');
       if (!isOverCalendar && !hasCalendarFocus) {

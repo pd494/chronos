@@ -79,8 +79,8 @@ const TaskInput = ({
   return (
     <div className="my-3.5 mb-5">
       {showCategoryHeader && (
-        <div className="flex items-center justify-between px-2 pb-2 pl-[7px] cursor-default bg-transparent">
-          <div className="flex items-center gap-2.5 cursor-default">
+        <div className={`flex items-center justify-between px-2 pl-[7px] cursor-default bg-transparent ${activeCategory === 'All' ? 'pb-1' : 'pb-2'}`}>
+          <div className="flex items-center gap-4 cursor-default">
             {isEditable ? (
               <div className="relative flex items-center" ref={colorPickerRef}>
                 <button type="button" onClick={toggleColorPicker}
@@ -119,7 +119,7 @@ const TaskInput = ({
       {showNewTaskInput && (
         <form
           ref={formRef}
-          className={`flex items-center px-[18px] py-2.5 bg-[#f8f8fa] rounded-xl border border-gray-200 relative shadow-sm overflow-x-hidden mt-2.5 ${activeCategory === 'All' ? '-mt-[15px] rounded-[13px] px-4 py-3 bg-[#f5f5f7] -ml-2' : ''}`}
+          className={`flex items-center px-[18px] py-2.5 bg-[#f8f8fa] rounded-xl border border-gray-200 relative shadow-sm overflow-x-hidden ${activeCategory === 'All' ? 'mt-2.5 -mt-[22px] rounded-[13px] px-4 py-3 bg-[#f5f5f7] -ml-2' : 'mt-2.5'}`}
           onSubmit={handleSubmit}
         >
           <input ref={inputRef} type="text" value={inputValue} onChange={(e) => setInputValue(e.target.value)} placeholder={placeholder}

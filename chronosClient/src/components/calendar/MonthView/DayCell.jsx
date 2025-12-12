@@ -143,8 +143,7 @@ const DayCell = ({
   const visibleEvents = effectiveEvents.slice(0, hasPreview ? 2 : 3)
   const remainingCount = effectiveEvents.length - visibleEvents.length
 
-  // Show highlight when dnd-kit is hovering
-  const showDragoverStyle = isDndKitHovering
+  const showDragoverStyle = isDndKitHovering && isOverCalendar && !lockedCellId
 
   return (
     <div

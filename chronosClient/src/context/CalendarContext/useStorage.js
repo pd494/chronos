@@ -1,42 +1,63 @@
 import { useCallback } from 'react'
 import { IDB_NAME, IDB_STORE, IDB_VERSION, SNAPSHOT_VERSION } from './constants'
 import { safeToISOString, coerceDate } from './utils'
+import { calendarApi } from '../../lib/api'
 
-// IndexedDB operations
+let dbInstance = null
+let dbPromise = null
+let writeLock = Promise.resolve()
+
 export const openDB = () => {
-  return new Promise((resolve, reject) => {
+  if (dbInstance) return Promise.resolve(dbInstance)
+  if (dbPromise) return dbPromise
+  
+  dbPromise = new Promise((resolve, reject) => {
     if (typeof window === 'undefined' || !('indexedDB' in window)) {
       reject(new Error('IndexedDB not available'))
       return
     }
     const request = indexedDB.open(IDB_NAME, IDB_VERSION)
-    request.onerror = () => reject(request.error)
-    request.onsuccess = () => resolve(request.result)
+    request.onerror = () => { dbPromise = null; reject(request.error) }
+    request.onsuccess = () => { dbInstance = request.result; resolve(dbInstance) }
     request.onupgradeneeded = (e) => {
       const db = e.target.result
       if (!db.objectStoreNames.contains(IDB_STORE)) db.createObjectStore(IDB_STORE, { keyPath: 'id' })
     }
   })
+  return dbPromise
+}
+
+const withWriteLock = async (fn) => {
+  const prevLock = writeLock
+  let resolve
+  writeLock = new Promise(r => { resolve = r })
+  try {
+    await prevLock
+    return await fn()
+  } finally {
+    resolve()
+  }
 }
 
 export const saveEventsToCache = async (userId, events) => {
   if (!userId) return
-  try {
-    const db = await openDB()
-    const tx = db.transaction(IDB_STORE, 'readwrite')
-    const store = tx.objectStore(IDB_STORE)
-    const cacheData = {
-      id: 'events', userId,
-      events: events.filter(e => e.isGoogleEvent).map(e => ({
-        ...e, start: e.start instanceof Date ? e.start.toISOString() : e.start,
-        end: e.end instanceof Date ? e.end.toISOString() : e.end
-      })),
-      cachedAt: Date.now()
-    }
-    store.put(cacheData)
-    await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error) })
-    db.close()
-  } catch (e) {}
+  return withWriteLock(async () => {
+    try {
+      const db = await openDB()
+      const tx = db.transaction(IDB_STORE, 'readwrite')
+      const store = tx.objectStore(IDB_STORE)
+      const cacheData = {
+        id: 'events', userId,
+        events: events.filter(e => e.isGoogleEvent || e.isOptimistic).map(e => ({
+          ...e, start: e.start instanceof Date ? e.start.toISOString() : e.start,
+          end: e.end instanceof Date ? e.end.toISOString() : e.end
+        })),
+        cachedAt: Date.now()
+      }
+      store.put(cacheData)
+      await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error) })
+    } catch (e) { console.error('saveEventsToCache error:', e) }
+  })
 }
 
 export const loadEventsFromCache = async (userId) => {
@@ -47,61 +68,141 @@ export const loadEventsFromCache = async (userId) => {
     const store = tx.objectStore(IDB_STORE)
     const request = store.get('events')
     const cacheData = await new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
-    db.close()
     if (!cacheData) return null
     if (cacheData.userId !== userId) return null
     if (Date.now() - cacheData.cachedAt > 24 * 60 * 60 * 1000) return null
-    return cacheData.events.map(e => ({ ...e, start: new Date(e.start), end: new Date(e.end) }))
-  } catch (e) { return null }
+    const loadedEvents = cacheData.events
+      .filter(e => {
+        if (!e.isOptimistic) return true
+        const todoId = e.todoId || e.todo_id
+        if (todoId) return true
+        return false
+      })
+      .map(e => ({ ...e, start: new Date(e.start), end: new Date(e.end) }))
+    return loadedEvents
+  } catch (e) { console.error('loadEventsFromCache error:', e); return null }
 }
 
 export const addEventToCache = async (userId, newEvent) => {
   if (!userId || !newEvent) return
-  try {
-    const db = await openDB()
-    const tx = db.transaction(IDB_STORE, 'readwrite')
-    const store = tx.objectStore(IDB_STORE)
-    const request = store.get('events')
-    const cacheData = await new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
-    const events = cacheData?.events || []
-    const eventToAdd = {
-      ...newEvent, start: newEvent.start instanceof Date ? newEvent.start.toISOString() : newEvent.start,
-      end: newEvent.end instanceof Date ? newEvent.end.toISOString() : newEvent.end
-    }
-    const existingIdx = events.findIndex(e => e.id === newEvent.id)
-    if (existingIdx >= 0) events[existingIdx] = eventToAdd
-    else events.push(eventToAdd)
-    store.put({ id: 'events', userId, events, cachedAt: Date.now() })
-    await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error) })
-    db.close()
-  } catch (e) {}
+  return withWriteLock(async () => {
+    try {
+      const db = await openDB()
+      const tx = db.transaction(IDB_STORE, 'readwrite')
+      const store = tx.objectStore(IDB_STORE)
+      const request = store.get('events')
+      const cacheData = await new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
+      let events = cacheData?.events || []
+      const eventToAdd = {
+        ...newEvent, start: newEvent.start instanceof Date ? newEvent.start.toISOString() : newEvent.start,
+        end: newEvent.end instanceof Date ? newEvent.end.toISOString() : newEvent.end
+      }
+      const todoId = newEvent.todoId || newEvent.todo_id
+      if (todoId) {
+        events = events.filter(e => {
+          const eTodoId = e.todoId || e.todo_id
+          if (eTodoId && String(eTodoId) === String(todoId) && e.id !== newEvent.id) {
+            if (e.isOptimistic && !newEvent.isOptimistic) return false
+            if (!e.isOptimistic && newEvent.isOptimistic) return true
+            return false
+          }
+          return true
+        })
+      }
+      const existingIdx = events.findIndex(e => e.id === newEvent.id)
+      if (existingIdx >= 0) events[existingIdx] = eventToAdd
+      else events.push(eventToAdd)
+      store.put({ id: 'events', userId, events, cachedAt: Date.now() })
+      await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error) })
+    } catch (e) { console.error('addEventToCache error:', e) }
+  })
 }
 
-export const removeEventFromCache = async (eventId) => {
-  if (!eventId) return
-  try {
-    const db = await openDB()
-    const tx = db.transaction(IDB_STORE, 'readwrite')
-    const store = tx.objectStore(IDB_STORE)
-    const request = store.get('events')
-    const cacheData = await new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
-    if (!cacheData?.events) { db.close(); return }
-    const events = cacheData.events.filter(e => e.id !== eventId)
-    store.put({ ...cacheData, events, cachedAt: Date.now() })
-    await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error) })
-    db.close()
-  } catch (e) {}
+export const removeEventFromCache = async (eventId, todoId = null) => {
+  if (!eventId && !todoId) return
+  return withWriteLock(async () => {
+    try {
+      const db = await openDB()
+      const tx = db.transaction(IDB_STORE, 'readwrite')
+      const store = tx.objectStore(IDB_STORE)
+      const request = store.get('events')
+      const cacheData = await new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
+      if (!cacheData?.events) return
+      const events = cacheData.events.filter(e => {
+        if (eventId && e.id === eventId) return false
+        if (todoId) {
+          const eTodoId = e.todoId || e.todo_id
+          if (eTodoId && String(eTodoId) === String(todoId)) return false
+        }
+        return true
+      })
+      store.put({ ...cacheData, events, cachedAt: Date.now() })
+      await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error) })
+    } catch (e) { console.error('removeEventFromCache error:', e) }
+  })
 }
 
 export const clearEventsCache = async () => {
-  try {
-    const db = await openDB()
-    const tx = db.transaction(IDB_STORE, 'readwrite')
-    const store = tx.objectStore(IDB_STORE)
-    store.delete('events')
-    await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error) })
-    db.close()
-  } catch (e) {}
+  return withWriteLock(async () => {
+    try {
+      const db = await openDB()
+      const tx = db.transaction(IDB_STORE, 'readwrite')
+      const store = tx.objectStore(IDB_STORE)
+      store.delete('events')
+      await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error) })
+    } catch (e) { console.error('clearEventsCache error:', e) }
+  })
+}
+
+export const removeOptimisticEventsFromCache = async (userId) => {
+  if (!userId) return
+  return withWriteLock(async () => {
+    try {
+      const db = await openDB()
+      const tx = db.transaction(IDB_STORE, 'readwrite')
+      const store = tx.objectStore(IDB_STORE)
+      const request = store.get('events')
+      const cacheData = await new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
+      if (!cacheData?.events) return
+      const events = cacheData.events.filter(e => {
+        if (!e.isOptimistic && !String(e.id).startsWith('temp-')) return true
+        const todoId = e.todoId || e.todo_id
+        if (todoId) return true
+        return false
+      })
+      store.put({ ...cacheData, events, cachedAt: Date.now() })
+      await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error) })
+    } catch (e) { console.error('removeOptimisticEventsFromCache error:', e) }
+  })
+}
+
+const deleteQueue = []
+let isProcessingDeleteQueue = false
+
+export const queueDeleteForGoogleCalendar = (eventId, calendarId) => {
+  if (!eventId || String(eventId).startsWith('temp-')) return
+  deleteQueue.push({ eventId, calendarId: calendarId || 'primary', timestamp: Date.now() })
+  processDeleteQueue()
+}
+
+const processDeleteQueue = async () => {
+  if (isProcessingDeleteQueue || deleteQueue.length === 0) return
+  isProcessingDeleteQueue = true
+  
+  while (deleteQueue.length > 0) {
+    const item = deleteQueue.shift()
+    try {
+      await calendarApi.deleteEvent(item.eventId, item.calendarId)
+    } catch (error) {
+      const message = typeof error?.message === 'string' ? error.message : ''
+      if (!/not found/i.test(message) && !/deleted/i.test(message) && !/Resource has been deleted/i.test(message)) {
+        console.error('Failed to delete event from Google Calendar:', item.eventId, error)
+      }
+    }
+    await new Promise(r => setTimeout(r, 100))
+  }
+  
+  isProcessingDeleteQueue = false
 }
 
 // Session storage snapshot operations
