@@ -381,6 +381,10 @@ export const calendarApi = {
     return postJson('/calendar/sync', {})
   },
 
+  async syncCalendarForeground(){
+    return postJson('/calendar/sync', { foreground: true })
+  },
+
   async getSyncStatus(){
     return get('/calendar/sync-status')
   }, 
@@ -424,6 +428,17 @@ export const calendarApi = {
       response_status: responseStatus
     }
     return postJson(`/calendar/events/${eventId}/respond`, payload)
+  },
+
+  async addAccount({ accessToken, refreshToken, expiresAt, externalAccountId, accountEmail, scopes }) {
+    return postJson('/calendar/add-account', {
+      access_token: accessToken,
+      refresh_token: refreshToken,
+      expires_at: expiresAt,
+      external_account_id: externalAccountId,
+      account_email: accountEmail,
+      scopes
+    })
   }
 
 }

@@ -18,24 +18,24 @@ const hashColor = (id = '') => {
 }
 
 const normalizeCalendar = (cal) => {
-  const id = cal.id || cal.provider_calendar_id || cal.external_id || cal.calendar_id
-  const summary = cal.summary || cal.name || cal.provider_calendar_id || 'Calendar'
+  const id = cal.id || cal.internal_id || cal.provider_calendar_id || cal.external_id || cal.calendar_id
+  const providerCalendarId = cal.provider_calendar_id || cal.providerCalendarId || cal.provider_calendarId
+  const summary = cal.summary || cal.name || providerCalendarId || 'Calendar'
   const color = cal.color || cal.backgroundColor || hashColor(id || summary)
-  return { id, summary, color, raw: cal }
+  return { id, summary, color, raw: cal, providerCalendarId }
 }
 
 const ViewButton = ({ view, currentView, onChange }) => {
   // Capitalize first letter
   const label = view.charAt(0).toUpperCase() + view.slice(1);
-  
+
   return (
     <button
       onClick={() => onChange(view)}
-      className={`px-3 py-1 text-sm ${
-        currentView === view
-          ? 'bg-gray-100 dark:bg-gray-700 font-medium'
-          : 'bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700'
-      }`}
+      className={`px-3 py-1 text-sm ${currentView === view
+        ? 'bg-gray-100 dark:bg-gray-700 font-medium'
+        : 'bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700'
+        }`}
       style={{ WebkitAppRegion: 'no-drag', pointerEvents: 'auto' }}
     >
       {label}
@@ -56,9 +56,9 @@ const Header = () => {
     refreshEvents,
     setSelectedCalendars
   } = useCalendar()
-  
-  const { user, login, logout } = useAuth()
-  
+
+  const { user, login, logout, addGoogleAccount } = useAuth()
+
   // State for view dropdown
   const [showViewDropdown, setShowViewDropdown] = useState(false)
   const [showUserMenu, setShowUserMenu] = useState(false)
@@ -87,10 +87,10 @@ const Header = () => {
   const [calError, setCalError] = useState('')
   const [manualInput, setManualInput] = useState('')
   const [calendarSearch, setCalendarSearch] = useState('')
-  
+
   // Task context for categories
   const { tasks } = useTaskContext()
-  
+
   // Reference for dropdown button
   const viewButtonRef = useRef(null)
   const userMenuRef = useRef(null)
@@ -99,14 +99,14 @@ const Header = () => {
   const persistSelected = (ids) => {
     setSelectedCalendarIds(ids)
     if (typeof window !== 'undefined') {
-      try { window.localStorage.setItem('chronos:selected-calendars', JSON.stringify(ids)) } catch (_) {}
+      try { window.localStorage.setItem('chronos:selected-calendars', JSON.stringify(ids)) } catch (_) { }
     }
   }
 
   const persistManualCalendars = (list) => {
     setManualCalendars(list)
     if (typeof window !== 'undefined') {
-      try { window.localStorage.setItem('chronos:manual-calendars', JSON.stringify(list)) } catch (_) {}
+      try { window.localStorage.setItem('chronos:manual-calendars', JSON.stringify(list)) } catch (_) { }
     }
   }
 
@@ -118,7 +118,27 @@ const Header = () => {
       const list = (res.calendars || []).map(normalizeCalendar).filter(c => c.id)
       const merged = [...list, ...manualCalendars]
       setCalendars(merged)
-      if (selectedCalendarIds.length === 0 && merged.length) {
+      if (typeof window !== 'undefined') {
+        let known = []
+        try {
+          const raw = window.localStorage.getItem('chronos:known-calendars')
+          known = raw ? JSON.parse(raw) : []
+          if (!Array.isArray(known)) known = []
+        } catch (_) {
+          known = []
+        }
+        const knownSet = new Set(known)
+        const newIds = merged.map(c => c.id).filter(Boolean).filter(id => !knownSet.has(id))
+        const nextKnown = Array.from(new Set([...known, ...merged.map(c => c.id).filter(Boolean)]))
+        try { window.localStorage.setItem('chronos:known-calendars', JSON.stringify(nextKnown)) } catch (_) { }
+
+        if (selectedCalendarIds.length === 0 && merged.length) {
+          persistSelected(merged.map(c => c.id))
+        } else if (newIds.length) {
+          const nextSelected = Array.from(new Set([...selectedCalendarIds, ...newIds]))
+          persistSelected(nextSelected)
+        }
+      } else if (selectedCalendarIds.length === 0 && merged.length) {
         persistSelected(merged.map(c => c.id))
       }
     } catch (e) {
@@ -156,29 +176,32 @@ const Header = () => {
 
   const handleAddGoogle = async () => {
     try {
-      await login({ forceConsent: true })
-      await loadCalendars()
+      if (user) {
+        await addGoogleAccount()
+      } else {
+        await login({ forceConsent: true })
+      }
     } catch (_) {
       // ignore
     }
   }
-  
+
   // Handle view change
   const handleViewChange = (newView) => {
     changeView(newView);
     setShowViewDropdown(false);
   }
-  
+
   // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (showViewDropdown && viewButtonRef.current && !viewButtonRef.current.contains(event.target) &&
-          !event.target.closest('.view-dropdown-menu')) {
+        !event.target.closest('.view-dropdown-menu')) {
         setShowViewDropdown(false)
       }
-      
+
       if (showUserMenu && userMenuRef.current && !userMenuRef.current.contains(event.target) &&
-          !event.target.closest('.user-menu-dropdown')) {
+        !event.target.closest('.user-menu-dropdown')) {
         setShowUserMenu(false)
       }
 
@@ -186,7 +209,7 @@ const Header = () => {
         setShowCalendarMenu(false)
       }
     }
-    
+
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [showViewDropdown, showUserMenu, showCalendarMenu])
@@ -203,6 +226,18 @@ const Header = () => {
   }, [])
 
   useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const handler = async () => {
+      try {
+        await loadCalendars()
+      } catch (_) { }
+    }
+    window.addEventListener('chronos:google-account-added', handler)
+    return () => window.removeEventListener('chronos:google-account-added', handler)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
     setSelectedCalendars(selectedCalendarIds)
   }, [selectedCalendarIds, setSelectedCalendars])
 
@@ -210,18 +245,37 @@ const Header = () => {
     if (!calendars.length) return
     const colorMap = {}
     const idMap = {}
+    const accountEmails = new Set()
     calendars.forEach(c => { if (c.id && c.color) colorMap[c.id] = c.color })
     calendars.forEach(c => {
       if (c.id) idMap[c.id] = c.id
       const providerId = c.raw?.provider_calendar_id
-      if (providerId && c.id) idMap[providerId] = c.id
+      if (providerId && c.id) {
+        idMap[providerId] = c.id
+        idMap[c.id] = providerId
+      }
+      // Collect account emails from calendars (check multiple sources)
+      const email = c.raw?.account_email || c.raw?.accountEmail
+      if (email) accountEmails.add(email.toLowerCase())
+      // Also check external_account_id if it looks like an email
+      const accountId = c.raw?.external_account_id
+      if (accountId && typeof accountId === 'string' && accountId.includes('@')) {
+        accountEmails.add(accountId.toLowerCase())
+      }
+      // Also check provider_calendar_id if it's a primary calendar (usually owner's email)
+      const providerCalId = c.raw?.provider_calendar_id
+      if (providerCalId && typeof providerCalId === 'string' && providerCalId.includes('@')) {
+        accountEmails.add(providerCalId.toLowerCase())
+      }
     })
     if (typeof window !== 'undefined') {
-      try { window.localStorage.setItem('chronos:calendar-colors', JSON.stringify(colorMap)) } catch (_) {}
-      try { window.localStorage.setItem('chronos:calendar-id-map', JSON.stringify(idMap)) } catch (_) {}
+      try { window.localStorage.setItem('chronos:calendar-colors', JSON.stringify(colorMap)) } catch (_) { }
+      try { window.localStorage.setItem('chronos:calendar-id-map', JSON.stringify(idMap)) } catch (_) { }
+      try { window.localStorage.setItem('chronos:account-emails', JSON.stringify([...accountEmails])) } catch (_) { }
     }
     window.chronosCalendarColors = colorMap
     window.chronosCalendarIdMap = idMap
+    window.chronosAccountEmails = [...accountEmails]
   }, [calendars])
 
   const visibleCalendars = useMemo(() => {
@@ -255,7 +309,7 @@ const Header = () => {
         <span className="text-sm font-semibold text-gray-900 select-none current-date" style={{ WebkitAppRegion: 'no-drag' }}>
           {formatDateHeader()}
         </span>
-        
+
         {/* Navigate Previous/Next - Now after month text */}
         <div className="flex items-center navigation-buttons">
           <button
@@ -273,7 +327,7 @@ const Header = () => {
             <FiChevronRight size={18} />
           </button>
         </div>
-        
+
         {/* Today Button - Now after arrows, simpler styling */}
         <button
           onClick={navigateToToday}
@@ -342,49 +396,66 @@ const Header = () => {
                 (() => {
                   const grouped = {}
                   visibleCalendars.forEach(cal => {
-                    const email = cal.raw?.email || (cal.summary.includes('@') ? cal.summary : user?.email || 'Calendars')
-                    if (!grouped[email]) grouped[email] = []
-                    grouped[email].push(cal)
+                    const accountId = cal.raw?.external_account_id || cal.external_account_id
+                    const email = cal.raw?.account_email || cal.raw?.accountEmail
+                    const emailFallback = (!email && typeof accountId === 'string' && accountId.includes('@')) ? accountId : null
+                    const label = email || emailFallback || (accountId ? `Google account ${String(accountId).slice(0, 6)}…` : (user?.email || 'Calendars'))
+                    if (!grouped[label]) grouped[label] = []
+                    grouped[label].push(cal)
                   })
-                  
-                  return Object.entries(grouped).map(([email, cals], idx) => (
-                    <div key={email}>
-                      {idx > 0 && <div className="border-t border-gray-200" />}
-                      <div className="px-4 py-3">
-                        <div className="text-xs font-medium text-gray-600 mb-2">{email}</div>
-                        <div className="space-y-2">
-                          {cals.map(cal => (
-                            <label
-                              key={cal.id}
-                              className={`calendar-row ${selectedCalendarIds.includes(cal.id) ? 'active' : ''}`}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={selectedCalendarIds.includes(cal.id)}
-                                onChange={() => handleToggleCalendar(cal.id)}
-                              />
-                              <svg
-                                width="18"
-                                height="18"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke={cal.color}
-                                strokeWidth="2"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                style={{ flexShrink: 0 }}
-                              >
-                                <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z" />
-                                <line x1="7" y1="2" x2="7" y2="6" />
-                                <line x1="17" y1="2" x2="17" y2="6" />
-                              </svg>
-                              <span style={{ color: cal.color, fontWeight: 600 }}>{cal.summary}</span>
-                            </label>
-                          ))}
+
+                  return (
+                    <>
+                      {Object.entries(grouped).map(([email, cals], idx) => (
+                        <div key={email}>
+                          {idx > 0 && <div className="border-t border-gray-200" />}
+                          <div className="px-4 py-3">
+                            <div className="text-xs font-medium text-gray-600 mb-2">{email}</div>
+                            <div className="space-y-2">
+                              {cals.map(cal => (
+                                <label
+                                  key={cal.id}
+                                  className={`calendar-row ${selectedCalendarIds.includes(cal.id) ? 'active' : ''}`}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedCalendarIds.includes(cal.id)}
+                                    onChange={() => handleToggleCalendar(cal.id)}
+                                  />
+                                  <svg
+                                    width="18"
+                                    height="18"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke={cal.color}
+                                    strokeWidth="2"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    style={{ flexShrink: 0 }}
+                                  >
+                                    <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z" />
+                                    <line x1="7" y1="2" x2="7" y2="6" />
+                                    <line x1="17" y1="2" x2="17" y2="6" />
+                                  </svg>
+                                  <span style={{ color: cal.color, fontWeight: 600 }}>{cal.summary}</span>
+                                </label>
+                              ))}
+                            </div>
+                          </div>
                         </div>
+                      ))}
+                      <div className="border-t border-gray-200" />
+                      <div className="px-4 py-3">
+                        <button
+                          onClick={handleAddGoogle}
+                          className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-700 font-medium"
+                        >
+                          <FiPlus size={14} />
+                          <span>Add Google account</span>
+                        </button>
                       </div>
-                    </div>
-                  ))
+                    </>
+                  )
                 })()
               )}
             </div>
@@ -400,10 +471,10 @@ const Header = () => {
           <FiPlus size={14} className="mr-1" />
           <span>Event</span>
         </button>
-        
+
         {/* View Dropdown - Borderless with completely redone dropdown */}
         <div style={{ position: 'relative', zIndex: 9999 }}>
-          <button 
+          <button
             ref={viewButtonRef}
             onClick={() => setShowViewDropdown(!showViewDropdown)}
             className="clean-button"
@@ -412,7 +483,7 @@ const Header = () => {
             <span className="mr-1">{view.charAt(0).toUpperCase() + view.slice(1)}</span>
             <FiChevronDown size={14} />
           </button>
-          
+
           {showViewDropdown && (
             <div className="view-dropdown-menu modal-fade-in">
               <button
@@ -439,14 +510,14 @@ const Header = () => {
             </div>
           )}
         </div>
-        
+
         {/* Auth Button/Menu */}
         {user ? (
           <div style={{ position: 'relative', zIndex: 9999 }}>
             <button
               ref={userMenuRef}
               onClick={() => setShowUserMenu(!showUserMenu)}
-              style={{ 
+              style={{
                 WebkitAppRegion: 'no-drag',
                 border: 'none',
                 background: 'none',
@@ -455,15 +526,15 @@ const Header = () => {
               }}
             >
               {user.avatar_url ? (
-                <img 
-                  src={user.avatar_url} 
-                  alt={user.name} 
-                  style={{ 
-                    width: '32px', 
-                    height: '32px', 
+                <img
+                  src={user.avatar_url}
+                  alt={user.name}
+                  style={{
+                    width: '32px',
+                    height: '32px',
                     borderRadius: '50%',
                     objectFit: 'cover'
-                  }} 
+                  }}
                 />
               ) : (
                 <div style={{
@@ -479,7 +550,7 @@ const Header = () => {
                 </div>
               )}
             </button>
-            
+
             {showUserMenu && (
               <div className="user-menu-dropdown modal-fade-in" style={{
                 position: 'absolute',

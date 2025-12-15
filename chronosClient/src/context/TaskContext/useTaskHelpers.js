@@ -33,19 +33,20 @@ export const useTaskState = (user) => {
 
   const clearTaskSnapshots = useCallback(() => {
     if (!snapshotKey || typeof window === 'undefined') return;
-    try { window.sessionStorage.removeItem(snapshotKey); } catch (_) {}
-    try { window.localStorage.removeItem(snapshotKey); } catch (_) {}
+    try { window.sessionStorage.removeItem(snapshotKey); } catch (_) { }
+    try { window.localStorage.removeItem(snapshotKey); } catch (_) { }
   }, [snapshotKey]);
 
   const hydrateFromSnapshot = useCallback(() => false, []);
 
+  const refs = useMemo(() => ({
+    conversionInFlightRef, hasHydratedSnapshotRef, bootstrapPromiseRef,
+    lastBootstrapAtRef, hasStartedLoadingRef, lastMutationTimeRef, categoryOverrideRef
+  }), []);
+
   return {
     tasks, categories, setTasksEnhanced, setCategories, snapshotKey,
-    resetState, clearTaskSnapshots, hydrateFromSnapshot,
-    refs: {
-      conversionInFlightRef, hasHydratedSnapshotRef, bootstrapPromiseRef,
-      lastBootstrapAtRef, hasStartedLoadingRef, lastMutationTimeRef, categoryOverrideRef
-    }
+    resetState, clearTaskSnapshots, hydrateFromSnapshot, refs
   };
 };
 
@@ -76,7 +77,7 @@ export const useTaskPersistence = ({ snapshotKey, tasks, categories, user }) => 
       const payload = { tasks, categories, savedAt: Date.now() };
       const serialized = JSON.stringify(payload);
       window.sessionStorage.setItem(snapshotKey, serialized);
-      try { window.localStorage.setItem(snapshotKey, serialized); } catch (_) {}
+      try { window.localStorage.setItem(snapshotKey, serialized); } catch (_) { }
     } catch (error) { console.warn('Failed to persist tasks snapshot:', error); }
   }, [snapshotKey, tasks, categories, user]);
 };
@@ -99,7 +100,7 @@ export const useTaskScheduleListener = ({ setTasksEnhanced, clearTaskSnapshots }
           return { ...t, scheduled_date: null, scheduled_at: null, scheduled_end: null, scheduled_is_all_day: false, date: null };
         }));
         if (!isTempId) {
-          todosApi.updateTodo(todoId, { scheduled_date: null, scheduled_at: null, scheduled_end: null, scheduled_is_all_day: false, date: null }).catch(() => {});
+          todosApi.updateTodo(todoId, { scheduled_date: null, scheduled_at: null, scheduled_end: null, scheduled_is_all_day: false, date: null }).catch(() => { });
         }
         clearTaskSnapshots();
         return;

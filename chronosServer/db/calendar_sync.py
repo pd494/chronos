@@ -13,36 +13,40 @@ from db.google_credentials import GoogleCalendarService
 logger = logging.getLogger(__name__)
 
 class CalendarSyncService:
-    def __init__(self, user_id: str, provider_account_id: str, supabase: Client):
+    def __init__(self, user_id: str, external_account_id: str, supabase: Client):
         self.user_id = user_id
-        self.provider_account_id = provider_account_id
+        self.external_account_id = external_account_id
         self.supabase = supabase
-        self.google_service = GoogleCalendarService(user_id, supabase, provider_account_id)
+        self.google_service = GoogleCalendarService(user_id, supabase, external_account_id)
     
     def get_calendar_id(self, google_calendar: Dict[str, Any]) -> UUID:
         google_calendar_id = google_calendar.get("id")
         result = (
-            self.supabase.table("calendar_list")
+            self.supabase.table("connected_calendars")
             .select("id")
             .eq("user_id", self.user_id)
+            .eq("external_account_id", self.external_account_id)
             .eq("provider_calendar_id", google_calendar_id)
             .execute()
         )
-        
-        if result.data:
-            calendar_id = UUID(result.data[0]["id"])
+
+        result_data = getattr(result, "data", None) if result is not None else None
+        if result_data:
+            calendar_id = UUID(result_data[0]["id"])
             update_data = {
                 "summary": google_calendar.get("summary"),
                 "color": google_calendar.get("backgroundColor", "#4285f4"),
                 "access_role": google_calendar.get("accessRole"),
                 "etag": google_calendar.get("etag"),
+                "external_account_id": self.external_account_id,
                 "updated_at": datetime.now(timezone.utc).isoformat()
             }
-            self.supabase.table("calendar_list").update(update_data).eq("id", str(calendar_id)).execute()
+            self.supabase.table("connected_calendars").update(update_data).eq("id", str(calendar_id)).execute()
             return calendar_id
         
         new_calendar = {
             "user_id": self.user_id,
+            "external_account_id": self.external_account_id,
             "provider_calendar_id": google_calendar_id,
             "summary": google_calendar.get("summary", ""),
             "color": google_calendar.get("backgroundColor", "#4285f4"),
@@ -51,11 +55,14 @@ class CalendarSyncService:
             "etag": google_calendar.get("etag")
         }
         result = (
-            self.supabase.table("calendar_list")
+            self.supabase.table("connected_calendars")
             .insert(new_calendar)
             .execute()
         )
-        return UUID(result.data[0]["id"])
+        insert_data = getattr(result, "data", None) if result is not None else None
+        if not insert_data:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to insert connected calendar")
+        return UUID(insert_data[0]["id"])
     
     def _parse_event_boundaries(self, google_event: Dict[str, Any]) -> Dict[str, Any]:
         start_data = google_event.get("start", {}) or {}
@@ -152,7 +159,8 @@ class CalendarSyncService:
             .upsert(db_event, on_conflict="user_id,calendar_id,external_id")
             .execute()
         )
-        saved_event = result.data[0] if result.data else None
+        result_data = getattr(result, "data", None) if result is not None else None
+        saved_event = result_data[0] if result_data else None
         
         if saved_event and db_event.get('recurrence_rule'):
             self._expand_recurring_event(saved_event, calendar_id)
@@ -219,7 +227,8 @@ class CalendarSyncService:
             .eq("calendar_id", str(calendar_id))
             .maybe_single()
             .execute())
-            return res.data or defaults
+            data = getattr(res, "data", None) if res is not None else None
+            return data or defaults
         
         payload = {**defaults, **updates}
         self.supabase.table("event_sync_state").upsert(
@@ -235,7 +244,8 @@ class CalendarSyncService:
             .maybe_single()
             .execute()
         )
-        return res.data or payload
+        data = getattr(res, "data", None) if res is not None else None
+        return data or payload
     
     def sync_date_range(self, calendar_id: UUID, google_calendar_id: str, start_date: datetime, end_date: datetime) -> Optional[str]:
         """
@@ -305,60 +315,102 @@ class CalendarSyncService:
     
     def delta_sync(self, calendar_id: UUID, google_calendar_id: str) -> Dict[str, Any]:
         """
-        Perform incremental sync using updatedMin parameter.
-        Fetches events modified since last sync.
-        Returns dict with sync results.
+        Perform incremental sync using syncToken.
+        Falls back to full resync on 410 Gone.
         """
+        from googleapiclient.errors import HttpError
+        
         sync_state = self.sync_state(calendar_id)
-        last_sync = sync_state.get('last_delta_sync_at') or sync_state.get('last_full_sync_at')
+        sync_token = sync_state.get('next_sync_token')
         
-        # Default to last 5 minutes if no last sync time
-        if last_sync:
-            try:
-                updated_min = datetime.fromisoformat(last_sync.replace('Z', '+00:00'))
-            except:
-                updated_min = datetime.now(timezone.utc) - timedelta(minutes=5)
-        else:
-            updated_min = datetime.now(timezone.utc) - timedelta(minutes=5)
-        
-        try:
-            logger.info(f"Delta sync for {google_calendar_id} - fetching events updated since {updated_min.isoformat()}")
+        def _do_sync(token: Optional[str] = None) -> Dict[str, Any]:
+            events = []
+            next_sync_token = None
+            next_page_token = None
             
-            events_result = self.google_service._execute_with_retry(
-                lambda svc: svc.events().list(
-                    calendarId=google_calendar_id,
-                    updatedMin=updated_min.isoformat(),
-                    maxResults=500,
-                    singleEvents=True,  # expand instances so cancelled occurrences are returned
-                    showDeleted=True
-                ).execute(),
-                f"delta sync for {google_calendar_id}"
-            )
-            
-            events = events_result.get('items', [])
-            next_page_token = events_result.get('nextPageToken')
-            
-            # Handle pagination (unlikely for delta sync but just in case)
-            while next_page_token:
-                page_result = self.google_service._execute_with_retry(
+            if token:
+                logger.info(f"Delta sync for {google_calendar_id} using syncToken")
+                try:
+                    events_result = self.google_service._execute_with_retry(
+                        lambda svc: svc.events().list(
+                            calendarId=google_calendar_id,
+                            syncToken=token,
+                            maxResults=500,
+                            showDeleted=True
+                        ).execute(),
+                        f"delta sync for {google_calendar_id}"
+                    )
+                except HttpError as e:
+                    if e.resp.status == 410:
+                        logger.warning(f"SyncToken expired (410) for {google_calendar_id}, doing full resync")
+                        self.sync_state(calendar_id, next_sync_token=None)
+                        return _do_sync(None)
+                    raise
+            else:
+                logger.info(f"Full sync for {google_calendar_id} (no syncToken)")
+                now = datetime.now(timezone.utc)
+                time_min = (now - timedelta(days=365)).isoformat()
+                time_max = (now + timedelta(days=365)).isoformat()
+                events_result = self.google_service._execute_with_retry(
                     lambda svc: svc.events().list(
                         calendarId=google_calendar_id,
-                        updatedMin=updated_min.isoformat(),
-                        pageToken=next_page_token,
+                        timeMin=time_min,
+                        timeMax=time_max,
                         maxResults=500,
                         singleEvents=True,
                         showDeleted=True
                     ).execute(),
-                    f"delta sync page for {google_calendar_id}"
+                    f"full sync for {google_calendar_id}"
                 )
+            
+            events.extend(events_result.get('items', []))
+            next_page_token = events_result.get('nextPageToken')
+            next_sync_token = events_result.get('nextSyncToken')
+            
+            while next_page_token:
+                if token:
+                    page_result = self.google_service._execute_with_retry(
+                        lambda svc: svc.events().list(
+                            calendarId=google_calendar_id,
+                            syncToken=token,
+                            pageToken=next_page_token,
+                            maxResults=500,
+                            showDeleted=True
+                        ).execute(),
+                        f"delta sync page for {google_calendar_id}"
+                    )
+                else:
+                    now = datetime.now(timezone.utc)
+                    time_min = (now - timedelta(days=365)).isoformat()
+                    time_max = (now + timedelta(days=365)).isoformat()
+                    page_result = self.google_service._execute_with_retry(
+                        lambda svc: svc.events().list(
+                            calendarId=google_calendar_id,
+                            timeMin=time_min,
+                            timeMax=time_max,
+                            pageToken=next_page_token,
+                            maxResults=500,
+                            singleEvents=True,
+                            showDeleted=True
+                        ).execute(),
+                        f"full sync page for {google_calendar_id}"
+                    )
                 events.extend(page_result.get('items', []))
                 next_page_token = page_result.get('nextPageToken')
+                if not next_page_token:
+                    next_sync_token = page_result.get('nextSyncToken')
             
-            logger.info(f"Delta sync got {len(events)} updated events")
+            return {"events": events, "next_sync_token": next_sync_token}
+        
+        try:
+            result = _do_sync(sync_token)
+            events = result.get("events", [])
+            new_sync_token = result.get("next_sync_token")
+            
+            logger.info(f"Delta sync got {len(events)} events")
             
             for event in events:
                 if event.get('status') == 'cancelled':
-                    # Soft delete cancelled events and prune instances, including series occurrences
                     external_id = event.get('id')
                     self.supabase.table("events").update({
                         "deleted_at": datetime.now(timezone.utc).isoformat(),
@@ -369,7 +421,6 @@ class CalendarSyncService:
                         "status": "cancelled"
                     }).eq("user_id", self.user_id).eq("recurring_event_id", external_id).execute()
                     try:
-                        # prune instances for master and any occurrences tied to the master
                         internal_ids = []
                         internal_master = (
                             self.supabase.table("events")
@@ -379,8 +430,9 @@ class CalendarSyncService:
                             .maybe_single()
                             .execute()
                         )
-                        if internal_master and internal_master.data:
-                            internal_ids.append(internal_master.data.get("id"))
+                        internal_master_data = getattr(internal_master, "data", None) if internal_master is not None else None
+                        if internal_master_data:
+                            internal_ids.append(internal_master_data.get("id"))
                         linked_rows = (
                             self.supabase.table("events")
                             .select("id")
@@ -388,7 +440,8 @@ class CalendarSyncService:
                             .eq("recurring_event_id", external_id)
                             .execute()
                         )
-                        for row in linked_rows.data or []:
+                        linked_rows_data = getattr(linked_rows, "data", None) if linked_rows is not None else None
+                        for row in linked_rows_data or []:
                             if row.get("id"):
                                 internal_ids.append(row["id"])
                         for iid in internal_ids:
@@ -398,11 +451,10 @@ class CalendarSyncService:
                 else:
                     self.save_event(event, calendar_id)
             
-            # Update last delta sync time
-            self.sync_state(
-                calendar_id,
-                last_delta_sync_at=datetime.now(timezone.utc).isoformat()
-            )
+            update_payload = {"last_delta_sync_at": datetime.now(timezone.utc).isoformat()}
+            if new_sync_token:
+                update_payload["next_sync_token"] = new_sync_token
+            self.sync_state(calendar_id, **update_payload)
             
             return {"status": "completed", "events_synced": len(events)}
             
@@ -410,7 +462,7 @@ class CalendarSyncService:
             logger.error(f"Delta sync failed for {google_calendar_id}: {e}")
             return {"status": "error", "events_synced": 0, "error": str(e)}
     
-    def backfill_calendar(self):
+    def backfill_calendar(self, backfill_before_ts: Optional[str] = None, backfill_after_ts: Optional[str] = None):
         calendars = self.google_service.list_calendars()
         
         if not calendars:
@@ -421,10 +473,16 @@ class CalendarSyncService:
             calendar_id = self.get_calendar_id(calendar)
             
             now = datetime.now(timezone.utc)
-            # Backfill a generous window so holiday calendars and
-            # recurring events are available far from “today”.
-            backfill_start = now - timedelta(days=20 * 365)
-            backfill_end = now + timedelta(days=20 * 365)
+            backfill_start = now - timedelta(days=2 * 365)
+            backfill_end = now + timedelta(days=2 * 365)
+            try:
+                if isinstance(backfill_before_ts, str) and backfill_before_ts:
+                    backfill_start = datetime.fromisoformat(backfill_before_ts.replace('Z', '+00:00'))
+                if isinstance(backfill_after_ts, str) and backfill_after_ts:
+                    backfill_end = datetime.fromisoformat(backfill_after_ts.replace('Z', '+00:00'))
+            except Exception:
+                backfill_start = now - timedelta(days=2 * 365)
+                backfill_end = now + timedelta(days=2 * 365)
             
             next_sync_token = self.sync_date_range(calendar_id, google_calendar_id, backfill_start, backfill_end)
             

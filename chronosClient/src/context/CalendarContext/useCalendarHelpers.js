@@ -142,9 +142,6 @@ const useCalendarGrid = ({ eventsByDayRef, suppressedEventIdsRef, suppressedTodo
     }
     next.forEach((arr, key) => {
       arr.sort((a, b) => {
-        const weight = (event) => event.isOptimistic ? -2 : event.isPendingSync ? -1 : 0
-        const weightDiff = weight(a) - weight(b)
-        if (weightDiff !== 0) return weightDiff
         const aStart = coerceDate(a.start)?.getTime() ?? 0
         const bStart = coerceDate(b.start)?.getTime() ?? 0
         if (aStart !== bStart) return aStart - bStart
@@ -163,12 +160,19 @@ const useCalendarGrid = ({ eventsByDayRef, suppressedEventIdsRef, suppressedTodo
     let e = startOfDay(new Date(endValue))
     if (ev.isAllDay) e = addDays(e, -1)
     if (e < s) e = s
+    const evStartTime = startValue.getTime()
+    const evTitle = ev.title || ''
     for (let d = new Date(s); d <= e; d = addDays(d, 1)) {
       const key = dateKey(d)
       const arr = eventsByDayRef.current.get(key) || []
       if (!arr.some(item => item.id === ev.id)) {
-        if (ev.isOptimistic) arr.unshift(ev)
-        else arr.push(ev)
+        let insertIdx = arr.length
+        for (let i = 0; i < arr.length; i++) {
+          const itemStart = coerceDate(arr[i].start)?.getTime() ?? 0
+          if (evStartTime < itemStart) { insertIdx = i; break }
+          if (evStartTime === itemStart && evTitle.localeCompare(arr[i].title || '') < 0) { insertIdx = i; break }
+        }
+        arr.splice(insertIdx, 0, ev)
         eventsByDayRef.current.set(key, arr)
       }
     }

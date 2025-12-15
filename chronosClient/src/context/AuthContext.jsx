@@ -2,6 +2,8 @@ import React, { createContext, useContext, useState, useEffect, useRef, useCallb
 import { supabase } from '../lib/supabase'
 import { authApi, calendarApi } from '../lib/api'
 
+const ADD_ACCOUNT_FLAG_KEY = 'chronos:adding-google-account'
+
 const GOOGLE_SCOPES = [
   'https://www.googleapis.com/auth/calendar',
   'https://www.googleapis.com/auth/calendar.events',
@@ -51,13 +53,21 @@ const cleanOAuthParams = () => {
     const url = new URL(window.location.href)
     const hadCode = url.searchParams.has('code')
     const hadState = url.searchParams.has('state')
-    if (!hadCode && !hadState) return
+    const hadError = url.searchParams.has('error') || url.searchParams.has('error_code')
+    if (!hadCode && !hadState && !hadError) {
+      if (!url.hash.includes('error')) return
+    }
     url.searchParams.delete('code')
     url.searchParams.delete('state')
+    url.searchParams.delete('error')
+    url.searchParams.delete('error_code')
+    url.searchParams.delete('error_description')
+    url.searchParams.delete('add_google_account')
     const nextQuery = url.searchParams.toString()
-    const nextUrl = `${url.pathname}${nextQuery ? `?${nextQuery}` : ''}${url.hash}`
+    const cleanHash = url.hash.includes('error') ? '' : url.hash
+    const nextUrl = `${url.pathname}${nextQuery ? `?${nextQuery}` : ''}${cleanHash}`
     window.history.replaceState({}, document.title, nextUrl)
-  } catch (_) {}
+  } catch (_) { }
 }
 
 const getGoogleConsentFlag = () => {
@@ -77,7 +87,34 @@ const setGoogleConsentFlag = (value) => {
     } else {
       window.localStorage.removeItem(GOOGLE_CONSENT_FLAG_KEY)
     }
-  } catch (_) {}
+  } catch (_) { }
+}
+
+const getAddAccountFlag = () => {
+  if (typeof window === 'undefined') return false
+  try {
+    const url = new URL(window.location.href)
+    if (url.searchParams.get('add_google_account') === '1') return true
+  } catch (_) { }
+  try {
+    return window.localStorage.getItem(ADD_ACCOUNT_FLAG_KEY) === 'true'
+  } catch (_) {
+    return false
+  }
+}
+
+const clearAddAccountFlag = () => {
+  if (typeof window === 'undefined') return
+  try { window.localStorage.removeItem(ADD_ACCOUNT_FLAG_KEY) } catch (_) { }
+  try {
+    const url = new URL(window.location.href)
+    if (url.searchParams.has('add_google_account')) {
+      url.searchParams.delete('add_google_account')
+      const nextQuery = url.searchParams.toString()
+      const nextUrl = `${url.pathname}${nextQuery ? `?${nextQuery}` : ''}${url.hash}`
+      window.history.replaceState({}, document.title, nextUrl)
+    }
+  } catch (_) { }
 }
 
 export const AuthProvider = ({ children }) => {
@@ -94,7 +131,8 @@ export const AuthProvider = ({ children }) => {
   const forcedConsentAttemptRef = useRef(false)
   const lastSessionSignatureRef = useRef(null)
   const lastCheckAuthRef = useRef(0)
-  const checkAuthCooldownMs = 30000 // 30 seconds cooldown between checkAuth calls
+  const checkAuthCooldownMs = 30000
+  const isAddingAccountRef = useRef(getAddAccountFlag())
 
   const persistUser = useCallback((value) => {
     const prev = currentUserRef.current
@@ -138,7 +176,7 @@ export const AuthProvider = ({ children }) => {
   }, [])
 
   const startGoogleOAuth = useCallback(
-    async ({ forceConsent = false } = {}) => {
+    async ({ forceConsent = false, redirectTo } = {}) => {
       if (typeof window === 'undefined') {
         throw new Error('OAuth login is only available in the browser')
       }
@@ -153,7 +191,7 @@ export const AuthProvider = ({ children }) => {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: `${window.location.origin}/`,
+          redirectTo: redirectTo || `${window.location.origin}/`,
           scopes: GOOGLE_SCOPES.join(' '),
           queryParams
         }
@@ -170,6 +208,7 @@ export const AuthProvider = ({ children }) => {
   }, [user?.has_google_credentials])
 
   useEffect(() => {
+    cleanOAuthParams()
     let unsubscribe
 
     const initAuth = async () => {
@@ -248,7 +287,7 @@ export const AuthProvider = ({ children }) => {
           }
           setTimeout(poll, 150)
         }
-      } catch (_) {}
+      } catch (_) { }
     }
 
     initAuth()
@@ -267,10 +306,14 @@ export const AuthProvider = ({ children }) => {
         return
       }
 
-      await authApi.syncSession(supabaseAccessToken, supabaseRefreshToken)
-      await checkAuth()
+      const isAddingAccount = isAddingAccountRef.current
+
+      if (!isAddingAccount) {
+        await authApi.syncSession(supabaseAccessToken, supabaseRefreshToken)
+        await checkAuth()
+      }
       shouldClearSupabaseSession = true
-            
+
       const providerAccessToken = session.provider_token
       const providerRefreshToken = session.provider_refresh_token
       const alreadyHasCredentials = Boolean(currentUserRef.current?.has_google_credentials)
@@ -288,26 +331,63 @@ export const AuthProvider = ({ children }) => {
         setGoogleConsentFlag(false)
         try {
           await supabase.auth.signOut({ scope: 'local' })
-        } catch (_) {}
+        } catch (_) { }
         await startGoogleOAuth({ forceConsent: true })
         return
       }
 
       forcedConsentAttemptRef.current = false
       const approxExpiry = new Date(Date.now() + 55 * 60 * 1000).toISOString()
+
+      const isAddingAccountAfterSync = isAddingAccountRef.current
+
       try {
-        await calendarApi.saveCredentials({
-          access_token: providerAccessToken,
-          refresh_token: providerRefreshToken,
-          expires_at: approxExpiry
-        })
+        const googleUser = session?.user?.user_metadata
+        const externalAccountId = googleUser?.sub
+        const accountEmail = googleUser?.email
+
+        try {
+          if (isAddingAccountAfterSync && externalAccountId) {
+            await calendarApi.addAccount({
+              accessToken: providerAccessToken,
+              refreshToken: providerRefreshToken,
+              expiresAt: approxExpiry,
+              externalAccountId,
+              accountEmail
+            })
+
+            if (typeof window !== 'undefined') {
+              window.dispatchEvent(new CustomEvent('chronos:google-account-added', { detail: { external_account_id: externalAccountId } }))
+            }
+
+            suppressSupabaseSignOutRef.current = true
+            try {
+              await supabase.auth.signOut({ scope: 'local' })
+            } catch (_) { }
+            setTimeout(() => { suppressSupabaseSignOutRef.current = false }, 400)
+          } else {
+            await calendarApi.saveCredentials({
+              access_token: providerAccessToken,
+              refresh_token: providerRefreshToken,
+              expires_at: approxExpiry
+            })
+          }
+        } finally {
+          if (isAddingAccountAfterSync) {
+            clearAddAccountFlag()
+            isAddingAccountRef.current = false
+          }
+        }
         setGoogleConsentFlag(true)
       } catch (credError) {
         console.error('Failed to save Google credentials:', credError)
         setGoogleConsentFlag(false)
       }
     } catch (error) {
-      persistUser(null)
+      const isAddingAccount = isAddingAccountRef.current
+      if (!isAddingAccount) {
+        persistUser(null)
+      }
       clearSupabaseSession()
     } finally {
       if (shouldClearSupabaseSession) {
@@ -326,16 +406,16 @@ export const AuthProvider = ({ children }) => {
     if (!force && currentUserRef.current && (now - lastCheckAuthRef.current) < checkAuthCooldownMs) {
       return
     }
-    
+
     const hadCachedUser = hasCachedUserRef.current
     // When forcing (e.g., account switch), always show loading state
     const shouldSetLoading = !hadCachedUser || force
     if (shouldSetLoading) {
       setLoading(true)
     }
-    
+
     lastCheckAuthRef.current = now
-    
+
     try {
       let userData
       let attemptedRefresh = false
@@ -406,7 +486,7 @@ export const AuthProvider = ({ children }) => {
     suppressSupabaseSignOutRef.current = true
     const supabaseSignOutPromise = supabase.auth
       .signOut({ scope: 'local' })
-      .catch(() => {})
+      .catch(() => { })
       .finally(() => {
         setTimeout(() => {
           suppressSupabaseSignOutRef.current = false
@@ -435,8 +515,18 @@ export const AuthProvider = ({ children }) => {
     }
   }, [persistUser])
 
+  const addGoogleAccount = useCallback(async () => {
+    if (typeof window !== 'undefined') {
+      try { window.localStorage.setItem(ADD_ACCOUNT_FLAG_KEY, 'true') } catch (_) { }
+      const redirectTo = `${window.location.origin}/?add_google_account=1`
+      await startGoogleOAuth({ forceConsent: true, redirectTo })
+      return
+    }
+    await startGoogleOAuth({ forceConsent: true })
+  }, [startGoogleOAuth])
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, checkAuth }}>
+    <AuthContext.Provider value={{ user, loading, login, logout, checkAuth, addGoogleAccount }}>
       {children}
     </AuthContext.Provider>
   )

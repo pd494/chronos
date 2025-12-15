@@ -10,7 +10,7 @@ const ColorPickerDropdown = ({
 }) => {
   return createPortal(
     <div
-      className="fixed z-[1100]"
+      className="fixed z-[7000]"
       style={{
         top: colorPickerDropdownCoords.top,
         left: colorPickerDropdownCoords.left,

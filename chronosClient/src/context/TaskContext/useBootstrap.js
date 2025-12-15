@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { todosApi } from '../../lib/api';
 import { buildCategories } from './utils';
 
@@ -39,6 +39,11 @@ export const useBootstrap = ({
     }
   }, [user, setTasksEnhanced, setCategories, lastBootstrapAtRef]);
 
+  const tasksRef = useRef(tasks);
+  const categoriesRef = useRef(categories);
+  tasksRef.current = tasks;
+  categoriesRef.current = categories;
+
   const refreshBootstrap = useCallback(
     async (force = false) => {
       if (!user) return null;
@@ -50,7 +55,7 @@ export const useBootstrap = ({
         return null;
       }
       
-      if (!force && !stale && lastBootstrapAtRef.current > 0 && tasks.length && categories.length > 1) {
+      if (!force && !stale && lastBootstrapAtRef.current > 0 && tasksRef.current.length && categoriesRef.current.length > 1) {
         return null;
       }
       if (bootstrapPromiseRef.current) {
@@ -65,7 +70,7 @@ export const useBootstrap = ({
       })();
       return bootstrapPromiseRef.current;
     },
-    [user, loadBootstrap, tasks.length, categories.length, lastBootstrapAtRef, lastMutationTimeRef, bootstrapPromiseRef]
+    [user, loadBootstrap, lastBootstrapAtRef, lastMutationTimeRef, bootstrapPromiseRef]
   );
 
   const loadData = useCallback(async (force = false) => {

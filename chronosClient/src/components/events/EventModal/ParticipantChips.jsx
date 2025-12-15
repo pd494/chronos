@@ -9,18 +9,48 @@ const ParticipantChips = ({
   toggleChip,
   handleRemoveParticipant
 }) => {
+  const isOrganizer = selectedEvent?.viewerIsOrganizer || !selectedEvent
+
+  // Get connected account emails from window or localStorage
+  const getConnectedAccountEmails = () => {
+    if (typeof window !== 'undefined' && window.chronosAccountEmails) {
+      return window.chronosAccountEmails
+    }
+    try {
+      const stored = window?.localStorage?.getItem('chronos:account-emails')
+      return stored ? JSON.parse(stored) : []
+    } catch (_) {
+      return []
+    }
+  }
+  const connectedEmails = getConnectedAccountEmails()
+
+  // Filter out the organizer from the list if:
+  // 1. The viewer is the organizer (viewerIsOrganizer === true)
+  // 2. OR the organizer email is in the list of connected account emails
+  const organizerEmail = selectedEvent?.organizerEmail
+
+  const displayParticipants = visibleParticipants.filter(email => {
+    if (!organizerEmail || email !== organizerEmail) return true
+    // Hide organizer if: viewer is organizer
+    if (isOrganizer) return false
+    // Hide organizer if their email is in our connected accounts
+    if (connectedEmails.some(e => e.toLowerCase() === organizerEmail.toLowerCase())) return false
+    return true
+  })
+
   const hasAttendeeData = selectedEvent?.attendees && Array.isArray(selectedEvent.attendees)
   const attendeesMap = hasAttendeeData ? new Map(selectedEvent.attendees.map(a => [a.email, a])) : new Map()
   const goingCount = hasAttendeeData ? selectedEvent.attendees.filter(a => a.responseStatus === 'accepted').length : 0
 
   let declinedCount = 0
-  visibleParticipants.forEach(email => {
+  displayParticipants.forEach(email => {
     const attendee = attendeesMap.get(email)
     if (attendee?.responseStatus === 'declined') declinedCount++
   })
 
   let awaitingCount = 0
-  visibleParticipants.forEach(email => {
+  displayParticipants.forEach(email => {
     const attendee = attendeesMap.get(email)
     if (!attendee) awaitingCount++
     else {
@@ -29,12 +59,10 @@ const ParticipantChips = ({
     }
   })
 
-  const isOrganizer = selectedEvent?.viewerIsOrganizer || !selectedEvent
-
   return (
     <div className="space-y-2">
       <div className="flex items-center">
-        {visibleParticipants.slice(0, 5).map((email, index) => {
+        {displayParticipants.slice(0, 5).map((email, index) => {
           const bgColor = getParticipantColor(email)
           const attendee = attendeesMap.get(email)
           const isAccepted = attendee?.responseStatus === 'accepted'
@@ -76,10 +104,10 @@ const ParticipantChips = ({
             </div>
           )
         })}
-        {visibleParticipants.length > 5 && (
+        {displayParticipants.length > 5 && (
           <div className="rounded-full text-xs font-semibold bg-gray-200 text-gray-600 flex items-center justify-center border-2 border-white"
             style={{ marginLeft: '-5px', zIndex: 0, width: '33.6px', height: '33.6px' }}>
-            +{visibleParticipants.length - 5}
+            +{displayParticipants.length - 5}
           </div>
         )}
         {(goingCount > 0 || declinedCount > 0 || awaitingCount > 0) && (
@@ -95,7 +123,7 @@ const ParticipantChips = ({
       {expandedChips.size > 0 && (
         <div className="pt-1">
           <span className="text-xs text-gray-600">
-            {visibleParticipants.filter(email => expandedChips.has(email)).map((email, index, array) => {
+            {displayParticipants.filter(email => expandedChips.has(email)).map((email, index, array) => {
               const isOrganizerEmail = selectedEvent?.organizerEmail === email && email !== user?.email
               const attendee = attendeesMap.get(email)
               const isAccepted = attendee?.responseStatus === 'accepted'

@@ -6,7 +6,8 @@ const LocationSection = ({
   location, setLocation,
   isGeneratingMeeting, tempEventId,
   handleGenerateMeetingLink, cleanupTemporaryEvent,
-  setConferenceRequestId, setShowSuggestions: parentSetShowSuggestions
+  setConferenceRequestId, setShowSuggestions: parentSetShowSuggestions,
+  isReadOnly = false
 }) => {
   const locationInputRef = useRef(null)
   const locationContainerRef = useRef(null)
@@ -36,25 +37,31 @@ const LocationSection = ({
       <div className="flex items-center gap-2" ref={locationContainerRef}>
         <FiMapPin className="text-gray-400 flex-shrink-0" size={20} />
         <div className="flex-1 relative min-w-0">
-          <input
-            ref={locationInputRef}
-            type="text"
-            value={location}
-            onChange={(e) => {
-              const value = e.target.value
-              if (value !== location && !value.includes('meet.google.com')) cleanupTemporaryEvent()
-              setLocation(value)
-              setConferenceRequestId(null)
-              getPlacePredictions(value)
-            }}
-            onFocus={(e) => e.target.select()}
-            onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
-            placeholder="Add location or URL"
-            className="w-full px-0 py-1 text-sm text-gray-900 border-none focus:outline-none focus:ring-0 truncate"
-          />
+          {isReadOnly && !location ? (
+            <div className="w-full px-0 py-1 text-sm text-gray-400 cursor-default">No location</div>
+          ) : (
+            <input
+              ref={locationInputRef}
+              type="text"
+              value={location}
+              readOnly={isReadOnly}
+              onChange={(e) => {
+                if (isReadOnly) return
+                const value = e.target.value
+                if (value !== location && !value.includes('meet.google.com')) cleanupTemporaryEvent()
+                setLocation(value)
+                setConferenceRequestId(null)
+                getPlacePredictions(value)
+              }}
+              onFocus={(e) => !isReadOnly && e.target.select()}
+              onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+              placeholder={isReadOnly ? '' : 'Add location or URL'}
+              className={`w-full px-0 py-1 text-sm text-gray-900 border-none focus:outline-none focus:ring-0 truncate ${isReadOnly ? 'cursor-default' : ''}`}
+            />
+          )}
           {isLoading && <div className="absolute right-0 top-1/2 -translate-y-1/2 pointer-events-none"><FiLoader className="animate-spin text-gray-400" size={16} /></div>}
         </div>
-        {!trimmedLocation || (trimmedLocation && isLocationUrl) || isGeneratingMeeting ? (
+        {!isReadOnly && (!trimmedLocation || (trimmedLocation && isLocationUrl) || isGeneratingMeeting) ? (
           <div className="flex flex-col items-end">
             {trimmedLocation && isLocationUrl && !isGeneratingMeeting ? (
               <a href={trimmedLocation} target="_blank" rel="noreferrer"
@@ -64,9 +71,8 @@ const LocationSection = ({
               </a>
             ) : (
               <button type="button" onClick={handleGenerateMeetingLink} disabled={isGeneratingMeeting}
-                className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs flex-shrink-0 backdrop-blur disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${
-                  tempEventId || isGeneratingMeeting ? 'bg-emerald-500 text-white hover:bg-emerald-600' : 'bg-white/80 border border-gray-200 text-gray-700 hover:bg-white/90'
-                }`}>
+                className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs flex-shrink-0 backdrop-blur disabled:opacity-50 disabled:cursor-not-allowed transition-colors ${tempEventId || isGeneratingMeeting ? 'bg-emerald-500 text-white hover:bg-emerald-600' : 'bg-white/80 border border-gray-200 text-gray-700 hover:bg-white/90'
+                  }`}>
                 {isGeneratingMeeting ? (
                   <><FiLoader className="animate-spin text-white" size={16} /><span className="hidden sm:inline">Generating link...</span></>
                 ) : (
@@ -75,10 +81,16 @@ const LocationSection = ({
               </button>
             )}
           </div>
+        ) : trimmedLocation && isLocationUrl && isReadOnly ? (
+          <a href={trimmedLocation} target="_blank" rel="noreferrer"
+            className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs flex-shrink-0 backdrop-blur transition-colors bg-blue-500/80 text-white hover:bg-blue-600/80 border border-blue-500/50">
+            <FiVideo className="text-white" size={16} />
+            <span className="hidden sm:inline">Join meeting</span>
+          </a>
         ) : trimmedLocation && !isLocationUrl ? (
           <a href={googleMapsLink} target="_blank" rel="noreferrer"
             className="flex items-center gap-1.5 px-2 py-1.5 bg-white/80 border border-gray-200 rounded-lg hover:bg-white/90 text-xs text-gray-700 flex-shrink-0 backdrop-blur">
-            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C8.13 2 5 5.13 5 9c0 4.75 3.75 9.1 6.5 11.36a1 1 0 001 0C15.25 18.1 19 13.75 19 9c0-3.87-3.13-7-7-7zm0 14c-2.76-2.5-5-6.02-5-7.5 0-2.76 2.24-5 5-5s5 2.24 5 5c0 1.48-2.24 5-5 7.5zm0-10a2.5 2.5 0 100 5 2.5 2.5 0 000-5z"/></svg>
+            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C8.13 2 5 5.13 5 9c0 4.75 3.75 9.1 6.5 11.36a1 1 0 001 0C15.25 18.1 19 13.75 19 9c0-3.87-3.13-7-7-7zm0 14c-2.76-2.5-5-6.02-5-7.5 0-2.76 2.24-5 5-5s5 2.24 5 5c0 1.48-2.24 5-5 7.5zm0-10a2.5 2.5 0 100 5 2.5 2.5 0 000-5z" /></svg>
             <span className="hidden sm:inline">Get directions</span>
           </a>
         ) : null}

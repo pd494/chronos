@@ -92,10 +92,10 @@ def _resolve_event_meeting_location(event: dict, fallback: str = '') -> str:
 
 
 class GoogleCalendarService:
-    def __init__(self, user_id: str, supabase: Client, provider_account_id: Optional[str] = None):
+    def __init__(self, user_id: str, supabase: Client, external_account_id: Optional[str] = None):
         self.user_id = user_id
         self.supabase = supabase
-        self.provider_account_id = provider_account_id
+        self.external_account_id = external_account_id
         self.credentials = None
         self.service = None
         self._resolved_account_id = None
@@ -167,8 +167,8 @@ class GoogleCalendarService:
                     .eq("provider", "google")
                 )
                 
-                if self.provider_account_id:
-                    query = query.eq("provider_account_id", self.provider_account_id)
+                if self.external_account_id:
+                    query = query.eq("external_account_id", self.external_account_id)
                 
                 result = query.execute()
             except Exception as e:
@@ -188,7 +188,7 @@ class GoogleCalendarService:
                 )
             
             record = result.data[0]
-            self._resolved_account_id = record.get("provider_account_id")
+            self._resolved_account_id = record.get("external_account_id")
             expiry_value = record.get("expires_at")
             parsed_expiry = _parse_iso_datetime(expiry_value)
 
@@ -245,9 +245,9 @@ class GoogleCalendarService:
                 .eq("provider", "google")
             )
             
-            account_id = self.provider_account_id or self._resolved_account_id
+            account_id = self.external_account_id or self._resolved_account_id
             if account_id:
-                update_query = update_query.eq("provider_account_id", account_id)
+                update_query = update_query.eq("external_account_id", account_id)
             
             update_query.execute()
     
@@ -260,8 +260,8 @@ class GoogleCalendarService:
     def list_calendars(self):
         try:
             service = self.get_service()
-            calendar_list = service.calendarList().list().execute()
-            return calendar_list.get('items', [])
+            calendar_list_response = service.calendarList().list().execute()
+            return calendar_list_response.get('items', [])
         except HttpError as error:
             logger.error(f"Error listing calendars: {error}")
             raise HTTPException(

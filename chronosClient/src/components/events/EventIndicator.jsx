@@ -197,7 +197,7 @@ const EventIndicator = ({ event, isMonthView }) => {
   })()
 
   const pendingMonthClasses = (isPendingInvite || isTentative) && isMonthView
-    ? "relative overflow-hidden border border-dashed border-slate-300 bg-slate-50/90 text-slate-600 saturate-50 after:content-[''] after:absolute after:inset-[2px] after:border after:border-dotted after:border-slate-300 after:rounded-md after:pointer-events-none"
+    ? "relative overflow-hidden bg-slate-50/90 text-slate-600 saturate-50 after:content-[''] after:absolute after:inset-[2px] after:border after:border-dotted after:border-slate-300 after:rounded-md after:pointer-events-none"
     : ''
   const declinedMonthClasses = isDeclined && isMonthView
     ? "relative after:content-[''] after:absolute after:left-1 after:right-1 after:top-1/2 after:border-t after:border-slate-400/80 after:-translate-y-1/2"

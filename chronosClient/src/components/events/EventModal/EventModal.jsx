@@ -118,6 +118,10 @@ const EventModal = () => {
 
   if (typeof document === 'undefined') return null
 
+  const isReadOnly = selectedEvent?.viewerIsOrganizer === false
+  const hasDescription = !!form.eventSubtitle?.trim()
+  const shouldShowDescriptionField = !isReadOnly || hasDescription
+
   return createPortal(
     <>
       <div key={enterAnimationKey} ref={modalRef} className={`fixed bg-white shadow-xl transition-[opacity,transform] duration-[300ms] ease-[cubic-bezier(.215,.61,.355,1)] ${internalVisible ? 'opacity-100 scale-100 modal-fade-in' : 'opacity-0 scale-95 pointer-events-none'}`}
@@ -127,11 +131,11 @@ const EventModal = () => {
         }}>
         <form onSubmit={handleSubmit} onKeyDown={(e) => { if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA' && !(e.target instanceof HTMLInputElement && e.target.type === 'email')) { e.preventDefault(); handleSubmit() } }} className="flex flex-col">
           <div className="space-y-0">
-            {selectedEvent?.viewerIsAttendee && !selectedEvent?.viewerIsOrganizer && (
-              <div className="mx-4 mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 shadow-sm">Changes you make only update your view of this shared event.</div>
-            )}
             <button type="button" onClick={closeAndAnimateOut} className="absolute top-3 right-3 p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors z-10"><FiX size={20} /></button>
-            <div className={`px-4 pt-[14px] ${descriptionOverflowing ? 'pb-2' : 'pb-0'}`}>
+            <div
+              className={`px-4 pt-[14px] ${shouldShowDescriptionField && descriptionOverflowing ? 'pb-2' : 'pb-0'}`}
+              style={{ paddingBottom: !shouldShowDescriptionField ? '5px' : undefined }}
+            >
               <div className="flex items-start gap-3">
                 {selectedEvent?.id && (
                   <button type="button" onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleEventChecked?.(selectedEvent.id) }}
@@ -140,12 +144,25 @@ const EventModal = () => {
                   </button>
                 )}
                 <div className="flex-1">
-                  <input ref={titleInputRef} type="text" value={form.eventName} onChange={(e) => form.setEventName(e.target.value)} placeholder="New event"
-                    className="w-full px-0 py-1 text-xl font-semibold text-gray-900 border-none focus:outline-none focus:ring-0 placeholder-gray-400" />
-                  <textarea ref={descriptionInputRef} value={form.eventSubtitle} onChange={(e) => form.setEventSubtitle(e.target.value)} placeholder="Add description"
-                    className="w-full px-0 text-sm text-gray-500 border-none focus:outline-none focus:ring-0 resize-none" rows={1}
-                    style={{ minHeight: descriptionOverflowing ? '32px' : '0px', lineHeight: `${DESCRIPTION_LINE_HEIGHT}px`, pointerEvents: (!isDescriptionExpanded && descriptionOverflowing) ? 'none' : 'auto' }} />
-                  {descriptionOverflowing && (
+                  <input ref={titleInputRef} type="text" value={form.eventName} onChange={(e) => !isReadOnly && form.setEventName(e.target.value)} placeholder="New event"
+                    readOnly={isReadOnly} className={`w-full px-0 py-1 text-xl font-semibold text-gray-900 border-none focus:outline-none focus:ring-0 placeholder-gray-400 ${isReadOnly ? 'cursor-default' : ''}`} />
+                  {shouldShowDescriptionField && (
+                    <textarea
+                      ref={descriptionInputRef}
+                      value={form.eventSubtitle}
+                      onChange={(e) => !isReadOnly && form.setEventSubtitle(e.target.value)}
+                      placeholder={isReadOnly ? '' : 'Add description'}
+                      readOnly={isReadOnly}
+                      className={`w-full px-0 text-sm text-gray-500 border-none focus:outline-none focus:ring-0 resize-none ${isReadOnly ? 'cursor-default' : ''}`}
+                      rows={1}
+                      style={{
+                        minHeight: descriptionOverflowing ? '32px' : '0px',
+                        lineHeight: `${DESCRIPTION_LINE_HEIGHT}px`,
+                        pointerEvents: (!isDescriptionExpanded && descriptionOverflowing) ? 'none' : 'auto'
+                      }}
+                    />
+                  )}
+                  {shouldShowDescriptionField && descriptionOverflowing && (
                     <div className="pb-2 pt-0" style={{ marginTop: '-15px' }}>
                       <button type="button" onClick={() => setIsDescriptionExpanded(p => !p)} className="text-xs font-medium text-blue-600 hover:text-blue-700">{isDescriptionExpanded ? 'See less' : 'See more'}</button>
                     </div>
@@ -159,19 +176,25 @@ const EventModal = () => {
                 <div className="flex items-start gap-3 flex-1">
                   <FiUsers className="text-gray-400 mt-1" size={20} />
                   <div className="flex-1 space-y-2.5">
-                    <input type="email" value={participantEmail} onChange={(e) => setParticipantEmail(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddParticipant() } }}
-                      placeholder="Add guests" className="w-full px-0 py-1 text-sm text-gray-900 bg-transparent border-none focus:outline-none focus:ring-0" />
-                    {visibleParticipants.length > 0 && <ParticipantChips visibleParticipants={visibleParticipants} selectedEvent={selectedEvent} user={user} expandedChips={expandedChips} toggleChip={toggleChip} handleRemoveParticipant={handleRemoveParticipant} />}
+                    {isReadOnly && visibleParticipants.length === 0 ? (
+                      <div className="py-1 text-sm text-gray-400 cursor-default">Participants</div>
+                    ) : (
+                      <input type="email" value={participantEmail} onChange={(e) => !isReadOnly && setParticipantEmail(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !isReadOnly) { e.preventDefault(); handleAddParticipant() } }}
+                        placeholder={isReadOnly ? 'Participants' : 'Add guests'} readOnly={isReadOnly} className={`w-full px-0 py-1 text-sm text-gray-900 bg-transparent border-none focus:outline-none focus:ring-0 ${isReadOnly ? 'cursor-default' : ''}`} />
+                    )}
+                    {visibleParticipants.length > 0 && <ParticipantChips visibleParticipants={visibleParticipants} selectedEvent={selectedEvent} user={user} expandedChips={expandedChips} toggleChip={toggleChip} handleRemoveParticipant={isReadOnly ? () => { } : handleRemoveParticipant} />}
                   </div>
                 </div>
-                <button type="submit" disabled={(selectedEvent && !form.hasChanges) || (!!form.timeError && !form.isAllDay)}
-                  className={`px-4 py-1.5 text-sm rounded-md font-medium whitespace-nowrap self-start ${(selectedEvent && !form.hasChanges) || (!!form.timeError && !form.isAllDay) ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-green-600 text-white hover:bg-green-700'}`}>
-                  {selectedEvent ? 'Update event' : 'Create event'}
-                </button>
+                {!isReadOnly && (
+                  <button type="submit" disabled={(selectedEvent && !form.hasChanges) || (!!form.timeError && !form.isAllDay)}
+                    className={`px-4 py-1.5 text-sm rounded-md font-medium whitespace-nowrap self-start ${(selectedEvent && !form.hasChanges) || (!!form.timeError && !form.isAllDay) ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-green-600 text-white hover:bg-green-700'}`}>
+                    {selectedEvent ? 'Update event' : 'Create event'}
+                  </button>
+                )}
               </div>
             </div>
             <LocationSection location={form.location} setLocation={form.setLocation} isGeneratingMeeting={form.isGeneratingMeeting} tempEventId={form.tempEventId}
-              handleGenerateMeetingLink={form.handleGenerateMeetingLink} cleanupTemporaryEvent={form.cleanupTemporaryEvent} setConferenceRequestId={form.setConferenceRequestId} />
+              handleGenerateMeetingLink={form.handleGenerateMeetingLink} cleanupTemporaryEvent={form.cleanupTemporaryEvent} setConferenceRequestId={form.setConferenceRequestId} isReadOnly={isReadOnly} />
             <div className="px-4 py-2.5 border-b border-gray-100">
               <div className="flex items-start gap-[9px]">
                 <div className="flex flex-col gap-3 pt-0.5"><FiClock className="text-gray-400" size={20} /><FiCalendar className="text-gray-400" size={20} /></div>
@@ -179,11 +202,11 @@ const EventModal = () => {
                   <div className="space-y-2">
                     {!form.isAllDay ? (
                       <div className="flex items-center gap-2 text-sm text-gray-900">
-                        <input type="time" value={form.timeStart} onChange={(e) => form.handleTimeStartChange(e.target.value)} className="px-0 py-0.5 border-none focus:outline-none text-sm font-bold [&::-webkit-calendar-picker-indicator]:hidden" style={{ width: '95px' }} />
-                        <span className="text-gray-400 font-semibold">→</span>
-                        <input type="time" value={form.timeEnd} onChange={(e) => form.handleTimeEndChange(e.target.value)} className="px-0 border-none focus:outline-none text-sm font-bold [&::-webkit-calendar-picker-indicator]:hidden" style={{ width: '95px' }} />
-                        <label className="relative inline-flex items-center cursor-pointer ml-auto">
-                          <input type="checkbox" checked={form.isAllDay} onChange={(e) => form.handleAllDayToggle(e.target.checked)} className="sr-only peer" />
+                        <input type="time" value={form.timeStart} onChange={(e) => !isReadOnly && form.handleTimeStartChange(e.target.value)} readOnly={isReadOnly} className={`px-0 py-0.5 border-none focus:outline-none text-sm font-bold [&::-webkit-calendar-picker-indicator]:hidden ${isReadOnly ? 'cursor-default pointer-events-none' : ''}`} style={{ width: '95px' }} />
+                        <span className="flex justify-center w-6 -ml-[10.7px] text-gray-400 font-semibold">→</span>
+                        <input type="time" value={form.timeEnd} onChange={(e) => !isReadOnly && form.handleTimeEndChange(e.target.value)} readOnly={isReadOnly} className={`px-0 border-none focus:outline-none text-sm font-bold [&::-webkit-calendar-picker-indicator]:hidden ${isReadOnly ? 'cursor-default pointer-events-none' : ''}`} style={{ width: '95px' }} />
+                        <label className={`relative inline-flex items-center ml-auto ${isReadOnly ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
+                          <input type="checkbox" checked={form.isAllDay} onChange={(e) => !isReadOnly && form.handleAllDayToggle(e.target.checked)} disabled={isReadOnly} className="sr-only peer" />
                           <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600" />
                           <span className="ml-2 text-xs text-gray-600">All day</span>
                         </label>
@@ -191,8 +214,8 @@ const EventModal = () => {
                     ) : (
                       <div className="flex items-center gap-2 text-sm text-gray-900">
                         <span className="text-gray-500">All day</span>
-                        <label className="relative inline-flex items-center cursor-pointer ml-auto">
-                          <input type="checkbox" checked={form.isAllDay} onChange={(e) => form.handleAllDayToggle(e.target.checked)} className="sr-only peer" />
+                        <label className={`relative inline-flex items-center ml-auto ${isReadOnly ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
+                          <input type="checkbox" checked={form.isAllDay} onChange={(e) => !isReadOnly && form.handleAllDayToggle(e.target.checked)} disabled={isReadOnly} className="sr-only peer" />
                           <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600" />
                           <span className="ml-2 text-xs text-gray-600">All day</span>
                         </label>
@@ -200,26 +223,26 @@ const EventModal = () => {
                     )}
                   </div>
                   <div className="flex items-center gap-2 text-sm text-gray-900">
-                    <input type="date" value={form.eventDate} onChange={(e) => { form.setEventDate(e.target.value); if (form.eventEndDate && new Date(form.eventEndDate) < new Date(e.target.value)) form.setEventEndDate(e.target.value) }}
-                      className="border-none focus:outline-none text-sm [&::-webkit-calendar-picker-indicator]:hidden" style={{ width: '85px', paddingTop: '8px' }} />
-                    <span className="text-gray-400 font-semibold">→</span>
-                    <input type="date" value={form.eventEndDate} min={form.eventDate} onChange={(e) => form.setEventEndDate(new Date(e.target.value) < new Date(form.eventDate) ? form.eventDate : e.target.value)}
-                      className="border-none focus:outline-none text-sm [&::-webkit-calendar-picker-indicator]:hidden" style={{ width: '85px', paddingTop: '8px' }} />
-                    <button type="button" onClick={recurrence.handleToggleRecurrencePicker} ref={recurrence.recurrenceTriggerRef} className="flex items-center gap-2 text-xs text-gray-600 hover:text-gray-800 ml-auto">
-                      <FiRepeat size={14} /><span className={`text-sm ${recurrence.recurrenceState.enabled ? 'text-gray-900' : 'text-gray-500'}`}>{recurrence.recurrenceSummary}</span><FiChevronDown size={14} />
+                    <input type="date" value={form.eventDate} onChange={(e) => { if (isReadOnly) return; form.setEventDate(e.target.value); if (form.eventEndDate && new Date(form.eventEndDate) < new Date(e.target.value)) form.setEventEndDate(e.target.value) }}
+                      readOnly={isReadOnly} className={`border-none focus:outline-none text-sm [&::-webkit-calendar-picker-indicator]:hidden ${isReadOnly ? 'cursor-default pointer-events-none' : ''}`} style={{ width: '85px', paddingTop: '8px' }} />
+                    <span className="flex justify-center w-6 mt-[6px] -ml-[1px] text-gray-400 font-semibold">→</span>
+                    <input type="date" value={form.eventEndDate} min={form.eventDate} onChange={(e) => !isReadOnly && form.setEventEndDate(new Date(e.target.value) < new Date(form.eventDate) ? form.eventDate : e.target.value)}
+                      readOnly={isReadOnly} className={`border-none focus:outline-none text-sm [&::-webkit-calendar-picker-indicator]:hidden ${isReadOnly ? 'cursor-default pointer-events-none' : ''}`} style={{ width: '85px', paddingTop: '8px' }} />
+                    <button type="button" onClick={() => !isReadOnly && recurrence.handleToggleRecurrencePicker()} ref={recurrence.recurrenceTriggerRef} disabled={isReadOnly} className={`flex items-center gap-2 text-xs ml-auto ${isReadOnly ? 'text-gray-400 cursor-not-allowed' : 'text-gray-600 hover:text-gray-800'}`}>
+                      <FiRepeat size={14} /><span className={`text-sm ${recurrence.recurrenceState.enabled ? 'text-gray-900' : 'text-gray-500'}`}>{recurrence.recurrenceSummary}</span>{!isReadOnly && <FiChevronDown size={14} />}
                     </button>
                   </div>
                 </div>
-                {recurrence.showRecurrencePicker && <RecurrenceDropdown recurrencePickerRef={recurrence.recurrencePickerRef} recurrenceViewMode={recurrence.recurrenceViewMode} setRecurrenceViewMode={recurrence.setRecurrenceViewMode}
-                  recurrenceDraft={recurrence.recurrenceDraft} recurrenceSummary={recurrence.recurrenceSummary} recurrenceDropdownPlacement={recurrence.recurrenceDropdownPlacement} recurrenceDropdownCoords={recurrence.recurrenceDropdownCoords}
-                  recurrenceDropdownMaxHeight={recurrence.recurrenceDropdownMaxHeight} recurrenceAnchorDate={recurrence.recurrenceAnchorDate} handleRecurrenceShortcutSelect={recurrence.handleRecurrenceShortcutSelect}
-                  handleClearRecurrence={recurrence.handleClearRecurrence} handleApplyRecurrence={recurrence.handleApplyRecurrence} updateRecurrenceDraft={recurrence.updateRecurrenceDraft} toggleRecurrenceDay={recurrence.toggleRecurrenceDay} />}
               </div>
+              {recurrence.showRecurrencePicker && <RecurrenceDropdown recurrencePickerRef={recurrence.recurrencePickerRef} recurrenceViewMode={recurrence.recurrenceViewMode} setRecurrenceViewMode={recurrence.setRecurrenceViewMode}
+                recurrenceDraft={recurrence.recurrenceDraft} recurrenceSummary={recurrence.recurrenceSummary} recurrenceDropdownPlacement={recurrence.recurrenceDropdownPlacement} recurrenceDropdownCoords={recurrence.recurrenceDropdownCoords}
+                recurrenceDropdownMaxHeight={recurrence.recurrenceDropdownMaxHeight} recurrenceAnchorDate={recurrence.recurrenceAnchorDate} handleRecurrenceShortcutSelect={recurrence.handleRecurrenceShortcutSelect}
+                handleClearRecurrence={recurrence.handleClearRecurrence} handleApplyRecurrence={recurrence.handleApplyRecurrence} updateRecurrenceDraft={recurrence.updateRecurrenceDraft} toggleRecurrenceDay={recurrence.toggleRecurrenceDay} />}
             </div>
             <ModalFooter color={form.color} setShowColorPicker={setShowColorPicker} showColorPicker={showColorPicker} colorPickerTriggerRef={colorPickerTriggerRef} notificationTriggerRef={notificationTriggerRef}
               notifications={form.notifications} setShowNotificationPicker={setShowNotificationPicker} showAsBusy={form.showAsBusy} setShowAsBusy={form.setShowAsBusy} isPrivateEvent={form.isPrivateEvent} setIsPrivateEvent={form.setIsPrivateEvent}
               selectedEvent={selectedEvent} user={user} currentRSVPStatus={currentRSVPStatus} showNotifyMembers={form.showNotifyMembers} setShowNotifyMembers={form.setShowNotifyMembers}
-              handleInviteResponse={handleInviteResponse} handleDelete={handleDelete} deleteButtonRef={deleteButtonRef} visibleParticipants={visibleParticipants} />
+              handleInviteResponse={handleInviteResponse} handleDelete={handleDelete} deleteButtonRef={deleteButtonRef} visibleParticipants={visibleParticipants} isReadOnly={isReadOnly} />
           </div>
         </form>
       </div>

@@ -116,9 +116,8 @@ const DayCell = ({
   for (const g of ghostsRef.current) {
     const key = g.clientKey || g.id
     const gTodoId = g.todoId || g.todo_id
-    // Don't keep ghost if current events already have this event OR an event with the same todoId
-    // (meaning the optimistic event has been resolved)
-    if (!currentByKey.has(key) && g.isOptimistic && (!gTodoId || !currentTodoIds.has(String(gTodoId)))) {
+    const shouldKeep = g.isOptimistic || g.isPendingSync
+    if (!currentByKey.has(key) && shouldKeep && (!gTodoId || !currentTodoIds.has(String(gTodoId)))) {
       updatedGhosts.push(g)
     }
   }
@@ -127,8 +126,8 @@ const DayCell = ({
   for (const d of dropped) {
     const key = d.clientKey || d.id
     const dTodoId = d.todoId || d.todo_id
-    // Don't add ghost if an event with the same todoId exists (it has been resolved)
-    if (key && !existingGhostKeys.has(key) && d.isOptimistic && (!dTodoId || !currentTodoIds.has(String(dTodoId)))) {
+    const shouldAdd = d.isOptimistic || d.isPendingSync
+    if (key && !existingGhostKeys.has(key) && shouldAdd && (!dTodoId || !currentTodoIds.has(String(dTodoId)))) {
       updatedGhosts.push(d)
     }
   }

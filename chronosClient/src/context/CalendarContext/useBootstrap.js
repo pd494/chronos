@@ -45,7 +45,8 @@ export const useBootstrap = ({
     migrateLocalStorageToDB,
     checkAndRunBackfill,
     enablePersist,
-    disablePersist
+    disablePersist,
+    clearAllEventOverrides
   } = overrideHelpers
 
   const { hydrateEventTodoLinks, persistEventTodoLinks, linkTodoEvent } = todoLinkHelpers
@@ -140,6 +141,38 @@ export const useBootstrap = ({
   }, [authLoading, user, persistEventTodoLinks])
 
   useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    if (!user?.id) return undefined
+
+    const handleGoogleAccountAdded = async () => {
+      try {
+        clearAllSnapshots()
+        await clearEventsCache()
+      } catch (_) { }
+
+      try {
+        eventState.resetForRefresh()
+        loadedMonthsRef.current.clear()
+        hasLoadedInitialRef.current = false
+        setInitialLoading(true)
+      } catch (_) { }
+
+      try {
+        await calendarApi.syncCalendar()
+      } catch (_) { }
+
+      try {
+        await fetchGoogleEventsRef.current(false, true, true)
+      } catch (_) { }
+    }
+
+    window.addEventListener('chronos:google-account-added', handleGoogleAccountAdded)
+    return () => {
+      window.removeEventListener('chronos:google-account-added', handleGoogleAccountAdded)
+    }
+  }, [user?.id, clearAllSnapshots, eventState, loadedMonthsRef, hasLoadedInitialRef, setInitialLoading])
+
+  useEffect(() => {
     if (!Array.isArray(events) || events.length === 0) {
       rebuildEventsByDayIndex([])
       skipNextDayIndexRebuildRef.current = false
@@ -193,16 +226,28 @@ export const useBootstrap = ({
       skipNextDayIndexRebuildRef.current = false
       return
     }
-    // Skip rebuild when there are pending sync events or optimistic events.
-    // This prevents a race condition where rebuilding from state would overwrite
-    // atomic updates made directly to eventsByDayRef (e.g., when replacing an
-    // optimistic event with the real event from the server), causing flicker.
+    // Skip rebuild when there are pending sync events to prevent flicker during
+    // the brief window when an optimistic event is being replaced with the real one.
     const hasPendingSync = pendingSyncEventIdsRef.current.size > 0
-    const hasOptimistic = optimisticEventCacheRef.current.size > 0
-    if (hasPendingSync || hasOptimistic) {
+    if (hasPendingSync) {
       return
     }
-    rebuildEventsByDayIndex(deduped)
+
+    // Include optimistic events from cache in the rebuild to ensure they remain
+    // visible across view switches and after server re-fetches
+    const eventsWithOptimistic = [...deduped]
+    const existingIds = new Set(deduped.map(ev => ev.id))
+    const existingTodoIds = new Set(deduped.map(ev => ev.todoId || ev.todo_id).filter(Boolean).map(String))
+
+    optimisticEventCacheRef.current.forEach(optEvent => {
+      const optTodoId = optEvent.todoId || optEvent.todo_id
+      // Only add if ID is new AND todoId is not already present (meaning not resolved yet)
+      if (!existingIds.has(optEvent.id) && (!optTodoId || !existingTodoIds.has(String(optTodoId)))) {
+        eventsWithOptimistic.push(optEvent)
+      }
+    })
+
+    rebuildEventsByDayIndex(eventsWithOptimistic)
   }, [events, rebuildEventsByDayIndex, setEvents])
 
   useEffect(() => {
@@ -257,26 +302,27 @@ export const useBootstrap = ({
       migrateLocalStorageToDB()
       checkAndRunBackfill()
 
-      const syncKey = 'chronos:last-sync-ts'
-      let lastSync = lastSyncTimestampRef.current || 0
-      if (!lastSync && typeof window !== 'undefined') {
-        const raw = window.sessionStorage.getItem(syncKey)
-        lastSync = raw ? Number(raw) || 0 : 0
-      }
       const nowTs = Date.now()
-      const shouldSync = nowTs - lastSync > 5 * 60 * 1000
-      if (shouldSync) {
-        lastSyncTimestampRef.current = nowTs
-        if (typeof window !== 'undefined') {
-          try { window.sessionStorage.setItem(syncKey, String(nowTs)) } catch (_) { }
-        }
-        calendarApi.syncCalendar()
-          .then(() => fetchGoogleEventsRef.current(true, false, true).catch(() => { }))
-          .catch(() => { })
+      lastSyncTimestampRef.current = nowTs
+      if (typeof window !== 'undefined') {
+        const syncKey = 'chronos:last-sync-ts'
+        try { window.sessionStorage.setItem(syncKey, String(nowTs)) } catch (_) { }
       }
+      calendarApi.syncCalendarForeground()
+        .then(() => fetchGoogleEventsRef.current(true, false, true).catch(() => { }))
+        .catch(() => {
+          calendarApi.syncCalendar()
+            .then(() => fetchGoogleEventsRef.current(true, false, true).catch(() => { }))
+            .catch(() => { })
+        })
     }
     bootstrap()
   }, [authLoading, user?.id, user?.has_google_credentials, hydrateFromSnapshot, migrateLocalStorageToDB, checkAndRunBackfill, hydrateEventUserState, hydrateEventTodoLinks, indexEventByDays])
 
-  return { hydrateFromSnapshot, snapshotSaveTimerRef }
+  // Expose debug helper on window
+  if (typeof window !== 'undefined') {
+    window.chronosClearEventOverrides = clearAllEventOverrides
+  }
+
+  return { hydrateFromSnapshot, snapshotSaveTimerRef, clearAllEventOverrides }
 }

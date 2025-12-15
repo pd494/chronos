@@ -15,12 +15,12 @@ export const useEventOverrides = ({ user }) => {
     const dirtyIds = Array.from(dirtyOverrideIdsRef.current)
     if (!dirtyIds.length) return
     dirtyOverrideIdsRef.current.clear()
-    
+
     const updates = dirtyIds.map((eventId) => ({
       eventId,
       overrides: eventOverridesRef.current.get(eventId) || null
     }))
-    
+
     calendarApi.batchUpdateEventUserState(updates).catch(error => {
       console.error('Failed to persist event overrides:', error)
     })
@@ -51,6 +51,15 @@ export const useEventOverrides = ({ user }) => {
       dirtyOverrideIdsRef.current.add(eventId)
       queuePersistEventOverrides()
     }
+  }, [queuePersistEventOverrides])
+
+  const clearAllEventOverrides = useCallback(() => {
+    const ids = Array.from(eventOverridesRef.current.keys())
+    if (!ids.length) return
+    eventOverridesRef.current.clear()
+    ids.forEach(id => dirtyOverrideIdsRef.current.add(id))
+    queuePersistEventOverrides()
+    return ids.length
   }, [queuePersistEventOverrides])
 
   const recordEventOverride = useCallback((eventId, startDate, endDate) => {
@@ -126,12 +135,12 @@ export const useEventOverrides = ({ user }) => {
     try {
       const response = await calendarApi.getEventUserState()
       const states = response.states || []
-      
+
       const checkedIds = states
         .filter(state => state.is_checked_off)
         .map(state => state.event_id)
       setCheckedOffEventIds(new Set(checkedIds))
-      
+
       const overrides = new Map()
       states.forEach(state => {
         if (state.time_overrides) {
@@ -152,7 +161,7 @@ export const useEventOverrides = ({ user }) => {
       hasMigratedLegacyRef.current = true
       return
     }
-    
+
     try {
       const checkedEventsRaw = window.localStorage.getItem('chronos:checked-events')
       if (checkedEventsRaw) {
@@ -165,7 +174,7 @@ export const useEventOverrides = ({ user }) => {
           window.localStorage.removeItem('chronos:checked-events')
         }
       }
-      
+
       const overridesRaw = window.localStorage.getItem('chronos:event-overrides')
       if (overridesRaw) {
         const overrides = JSON.parse(overridesRaw)
@@ -177,7 +186,7 @@ export const useEventOverrides = ({ user }) => {
           window.localStorage.removeItem('chronos:event-overrides')
         }
       }
-      
+
       const linksRaw = window.localStorage.getItem('chronos:event-todo-links')
       if (linksRaw) {
         const links = JSON.parse(linksRaw)
@@ -189,24 +198,24 @@ export const useEventOverrides = ({ user }) => {
           window.localStorage.removeItem('chronos:event-todo-links')
         }
       }
-      
+
     } catch (error) {
       console.error('Failed to migrate localStorage data:', error)
     } finally {
       try {
         window.localStorage.setItem(migrationKey, '1')
-      } catch (_) {}
+      } catch (_) { }
       hasMigratedLegacyRef.current = true
     }
   }, [])
 
   const checkAndRunBackfill = useCallback(async () => {
     if (!user?.has_google_credentials) return
-    
+
     try {
       const response = await calendarApi.getSyncStatus()
       const syncState = response.sync_state || {}
-      
+
       if (!syncState.backfill_before_ts && !syncState.backfill_after_ts) {
         console.log('Initial backfill needed for existing user')
         calendarApi.triggerBackfill(true)
@@ -230,6 +239,7 @@ export const useEventOverrides = ({ user }) => {
     eventOverridesRef,
     lastSyncTimestampRef,
     removeEventOverride,
+    clearAllEventOverrides,
     recordEventOverride,
     clearOverrideIfSynced,
     applyEventTimeOverrides,

@@ -19,6 +19,7 @@ const MonthView = () => {
     showEventModal,
     setView,
     updateEvent,
+    events,
   } = useCalendar()
 
   const { convertTodoToEvent } = useTaskContext()

@@ -122,6 +122,7 @@ export const useEventFetcher = ({
     const updatedEvents = []
     const newEvents = []
     const reinsertedOptimisticEvents = []
+    const preservedPendingSyncEvents = []
     const now = Date.now()
     const allowDeletions = !background
 
@@ -135,6 +136,7 @@ export const useEventFetcher = ({
           const replacement = incomingById.get(ev.id)
           if (replacement) {
             pendingSyncEventIdsRef.current.delete(ev.id)
+            optimisticEventCacheRef.current.delete(ev.id)
             const merged = { ...ev, ...replacement, clientKey: ev.clientKey || replacement.clientKey || replacement.id, isPendingSync: false }
             next.push(merged)
             updatedEvents.push(merged)
@@ -149,6 +151,7 @@ export const useEventFetcher = ({
             if (ev.isOptimistic || isPendingSync) {
               const carry = isPendingSync && !ev.isPendingSync ? { ...ev, isPendingSync: true } : ev
               next.push(carry)
+              if (isPendingSync) preservedPendingSyncEvents.push(carry)
             } else if (allowDeletions && ev.isGoogleEvent) {
               eventIdsRef.current.delete(ev.id)
               pendingSyncEventIdsRef.current.delete(ev.id)
@@ -186,19 +189,19 @@ export const useEventFetcher = ({
       return next
     }, { skipDayIndexRebuild: true })
 
-    const toReindex = [...updatedEvents, ...newEvents, ...reinsertedOptimisticEvents]
+    const toReindex = [...updatedEvents, ...newEvents, ...reinsertedOptimisticEvents, ...preservedPendingSyncEvents]
+    const stillPendingIds = new Set(preservedPendingSyncEvents.map(ev => ev.id))
     if (toReindex.length) {
       for (const ev of toReindex) {
         eventIdsRef.current.add(ev.id)
-        pendingSyncEventIdsRef.current.delete(ev.id)
-        // Atomically replace events in eventsByDayRef instead of remove-then-add
-        // to prevent flicker caused by a gap between removal and re-addition
+        if (!stillPendingIds.has(ev.id)) {
+          pendingSyncEventIdsRef.current.delete(ev.id)
+        }
         for (const [key, arr] of eventsByDayRef.current.entries()) {
           const updatedArr = arr.map(item => item.id === ev.id ? ev : item)
           const hadEvent = arr.some(item => item.id === ev.id)
           if (hadEvent) eventsByDayRef.current.set(key, updatedArr)
         }
-        // Index the event in case it spans days not already indexed
         indexEventByDays(ev)
       }
     }
@@ -381,8 +384,8 @@ export const useEventFetcher = ({
   const refreshEvents = useCallback(async (getVisibleRange, currentDate, view) => {
     if (!user || !user.has_google_credentials) return
     setIsRevalidating(true)
-    try { await calendarApi.syncCalendar(); console.log('Sync completed, fetching fresh events...') }
-    catch (_) { console.log('Sync failed, fetching from DB anyway...') }
+    try { await calendarApi.syncCalendarForeground(); console.log('Sync completed, fetching fresh events...') }
+    catch (_) { try { await calendarApi.syncCalendar() } catch (_) { } }
     await fetchGoogleEvents(getVisibleRange, currentDate, view, false, true)
     setIsRevalidating(false)
   }, [user, fetchGoogleEvents])

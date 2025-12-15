@@ -60,6 +60,14 @@ export const saveEventsToCache = async (userId, events) => {
   })
 }
 
+const getSuppressedEventIds = () => {
+  if (typeof window === 'undefined') return new Set()
+  try {
+    const raw = window.sessionStorage.getItem('chronos:suppressed-event-ids')
+    return raw ? new Set(JSON.parse(raw)) : new Set()
+  } catch (_) { return new Set() }
+}
+
 export const loadEventsFromCache = async (userId) => {
   if (!userId) return null
   try {
@@ -71,8 +79,10 @@ export const loadEventsFromCache = async (userId) => {
     if (!cacheData) return null
     if (cacheData.userId !== userId) return null
     if (Date.now() - cacheData.cachedAt > 24 * 60 * 60 * 1000) return null
+    const suppressedIds = getSuppressedEventIds()
     const loadedEvents = cacheData.events
       .filter(e => {
+        if (suppressedIds.has(e.id)) return false
         if (!e.isOptimistic) return true
         const todoId = e.todoId || e.todo_id
         if (todoId) return true

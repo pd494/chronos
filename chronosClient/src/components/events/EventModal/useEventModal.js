@@ -224,14 +224,20 @@ export const useEventModal = () => {
     const scrollY = window.scrollY || 0
     const dropdownWidth = 192
     const dropdownHeight = 176
-    let placement = 'bottom'
-    let top = rect.bottom + scrollY + 8
-    if (rect.bottom + dropdownHeight > viewportHeight && rect.top - dropdownHeight > VIEWPORT_MARGIN * 2) {
-      placement = 'top'
-      top = rect.top + scrollY - 8
-    }
-    let left = rect.left + scrollX
-    if (left + dropdownWidth > viewportWidth - VIEWPORT_MARGIN) left = Math.max(VIEWPORT_MARGIN, viewportWidth - dropdownWidth - VIEWPORT_MARGIN)
+    const desiredTop = rect.top + scrollY - 8
+    const fitsAbove = rect.top - dropdownHeight > VIEWPORT_MARGIN * 2
+    const fitsBelow = rect.bottom + dropdownHeight < viewportHeight - VIEWPORT_MARGIN * 2
+    const placement = fitsAbove || !fitsBelow ? 'top' : 'bottom'
+    const top = placement === 'top'
+      ? desiredTop
+      : rect.bottom + scrollY + 8
+
+    const anchorCenterX = rect.left + rect.width / 2 + scrollX
+    let left = anchorCenterX - dropdownWidth / 2
+    const minLeft = VIEWPORT_MARGIN
+    const maxLeft = Math.max(minLeft, viewportWidth - dropdownWidth - VIEWPORT_MARGIN)
+    left = Math.min(Math.max(left, minLeft), maxLeft)
+
     setColorPickerDropdownCoords({ top, left, placement })
   }, [])
 
@@ -244,16 +250,20 @@ export const useEventModal = () => {
     const scrollY = window.scrollY || 0
     const width = Math.max(220, rect.width + 40)
     const dropdownHeight = 320
-    let placement = 'bottom'
-    let top = rect.bottom + scrollY + 4
-    if (rect.bottom + dropdownHeight > viewportHeight && rect.top - dropdownHeight > VIEWPORT_MARGIN * 2) {
-      placement = 'top'
-      top = rect.top + scrollY - 4
-    }
-    let left = rect.left + scrollX
+    const desiredTop = rect.top + scrollY - 4
+    const fitsAbove = rect.top - dropdownHeight > VIEWPORT_MARGIN * 2
+    const fitsBelow = rect.bottom + dropdownHeight < viewportHeight - VIEWPORT_MARGIN * 2
+    const placement = fitsAbove || !fitsBelow ? 'top' : 'bottom'
+    const top = placement === 'top'
+      ? desiredTop
+      : rect.bottom + scrollY + 4
+
+    const anchorCenterX = rect.left + rect.width / 2 + scrollX
+    let left = anchorCenterX - width / 2
     const minLeft = VIEWPORT_MARGIN
     const maxLeft = Math.max(minLeft, viewportWidth - width - VIEWPORT_MARGIN)
     left = Math.min(Math.max(left, minLeft), maxLeft)
+
     setNotificationDropdownCoords({ top, left, width, placement })
   }, [])
 

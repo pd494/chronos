@@ -4,10 +4,32 @@ import { v4 as uuidv4 } from 'uuid'
 import { calendarApi, todosApi } from '../../lib/api'
 import { describeRecurrence } from '../../lib/recurrence'
 import { addEventToCache, removeEventFromCache, queueDeleteForGoogleCalendar } from './cache'
+import { toast } from 'sonner'
 import {
   parseCalendarBoundary, resolveIsAllDay, coerceDate, safeJsonParse, safeToISOString,
   resolveEventMeetingLocation, normalizeResponseStatus, eventBehavesLikeAllDay, dispatchBounceEvent
 } from './utils'
+
+const formatEventDateTime = (event) => {
+  const start = coerceDate(event?.start)
+  const end = coerceDate(event?.end)
+  const isAllDay = Boolean(event?.isAllDay)
+  if (!start) return ''
+  try {
+    const dateFmt = new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+    const timeFmt = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' })
+    if (isAllDay) {
+      return `${dateFmt.format(start)} (All day)`
+    }
+    const startLabel = `${dateFmt.format(start)} ${timeFmt.format(start)}`
+    if (!end) return startLabel
+    const sameDay = start.getFullYear() === end.getFullYear() && start.getMonth() === end.getMonth() && start.getDate() === end.getDate()
+    if (sameDay) return `${startLabel}–${timeFmt.format(end)}`
+    return `${startLabel}–${dateFmt.format(end)} ${timeFmt.format(end)}`
+  } catch (_) {
+    return ''
+  }
+}
 
 export const useEventCRUD = ({
   user,
@@ -34,6 +56,14 @@ export const useEventCRUD = ({
   const { recordEventOverride, clearOverrideIfSynced, eventOverridesRef } = overrideHelpers
   const { unlinkEvent } = todoLinkHelpers
   const { fetchEventsForRange } = fetchHelpers
+
+  const persistSuppressedIds = () => {
+    if (typeof window === 'undefined') return
+    try {
+      window.sessionStorage.setItem('chronos:suppressed-event-ids', JSON.stringify([...suppressedEventIdsRef.current]))
+      window.sessionStorage.setItem('chronos:suppressed-todo-ids', JSON.stringify([...suppressedTodoIdsRef.current]))
+    } catch (_) { }
+  }
 
   const migrateOptimisticRecurrenceParentId = (oldId, newId) => {
     if (!oldId || !newId || oldId === newId) return
@@ -64,9 +94,6 @@ export const useEventCRUD = ({
       return true
     })
     return filtered.sort((a, b) => {
-      const weight = (event) => event.isOptimistic ? -2 : event.isPendingSync ? -1 : 0
-      const weightDiff = weight(a) - weight(b)
-      if (weightDiff !== 0) return weightDiff
       const aIsAllDay = eventBehavesLikeAllDay(a)
       const bIsAllDay = eventBehavesLikeAllDay(b)
       if (aIsAllDay !== bIsAllDay) return aIsAllDay ? -1 : 1
@@ -115,8 +142,15 @@ export const useEventCRUD = ({
     eventIdsRef.current.add(newEvent.id)
     indexEventByDays(newEvent)
     setEvents(prev => [...prev, newEvent], { skipDayIndexRebuild: true })
-    await addEventToCache(user?.id, { ...newEvent, isGoogleEvent: true, isOptimistic: true })
+    bumpEventsByDayVersion()
+    addEventToCache(user?.id, { ...newEvent, isGoogleEvent: true, isOptimistic: true }).catch(() => { })
     saveSnapshotsForAllViews(newEvent)
+
+    try {
+      const title = newEvent?.title || 'Untitled'
+      const when = formatEventDateTime(newEvent)
+      toast.success('Event has been created', { description: `${title} – ${when}` })
+    } catch (_) { }
 
     if (processedData.recurrenceMeta?.enabled) {
       const rangeOverride = eventState.loadedRangeRef.current
@@ -155,7 +189,6 @@ export const useEventCRUD = ({
         visibility: created?.visibility || processedData.visibility || 'public'
       }
 
-      optimisticEventCacheRef.current.delete(newEvent.id)
       migrateOptimisticRecurrenceParentId(newEvent.id, normalizedEvent.id)
 
       // If optimistic ID is missing from refs (due to race condition), log warning but DO NOT suppress the real event.
@@ -191,6 +224,10 @@ export const useEventCRUD = ({
         if (!found) result.push(normalizedWithPending)
         return result
       }, { skipDayIndexRebuild: true })
+
+      optimisticEventCacheRef.current.delete(newEvent.id)
+      optimisticEventCacheRef.current.set(normalizedEvent.id, normalizedWithPending)
+      bumpEventsByDayVersion()
 
       removeEventFromAllSnapshots(newEvent.id)
       saveSnapshotsForAllViews(normalizedWithPending)
@@ -282,7 +319,8 @@ export const useEventCRUD = ({
     const startsSame = existingStart && Math.abs(existingStart.getTime() - start.getTime()) < 60 * 1000
     const endsSame = existingEnd && Math.abs(existingEnd.getTime() - end.getTime()) < 60 * 1000
     const hasOverride = eventOverridesRef.current.has(id)
-    if (!(startsSame && endsSame && !hasOverride)) recordEventOverride(id, start, end)
+    const isOwner = existingEvent?.viewerIsOrganizer !== false
+    if (isOwner && !(startsSame && endsSame && !hasOverride)) recordEventOverride(id, start, end)
 
     const updateForSeries = { ...processedData }
     delete updateForSeries.start
@@ -346,7 +384,7 @@ export const useEventCRUD = ({
         } catch (_) { }
       } else clearOptimisticRecurrenceInstances(id)
       if (linkedTodoId) emitTodoScheduleUpdate(linkedTodoId, start, end, processedData.isAllDay ?? existingEvent?.isAllDay)
-      
+
       const updatedEvent = eventsRefValue.current.find(ev => ev.id === id)
       if (updatedEvent) {
         await addEventToCache(user?.id, { ...updatedEvent, isGoogleEvent: true })
@@ -354,10 +392,21 @@ export const useEventCRUD = ({
     } catch (error) {
       console.error('Failed to update event:', error)
       const message = typeof error?.message === 'string' ? error.message : ''
-      const forbidden = /forbiddenForNonOrganizer/i.test(message) || /Shared properties can only be changed/i.test(message)
+      const forbidden = /forbiddenForNonOrganizer/i.test(message) || /Shared properties can only be changed/i.test(message) || /Failed to update event/i.test(message)
+      const isNotOrganizer = existingEvent && existingEvent.viewerIsOrganizer === false
+      const shouldRevertAndWarn = forbidden || isNotOrganizer
       if (previousEventSnapshot) {
         revertEventState(previousEventSnapshot)
-        if (forbidden) dispatchBounceEvent(previousEventSnapshot.id)
+        bumpEventsByDayVersion()
+        if (shouldRevertAndWarn) dispatchBounceEvent(previousEventSnapshot.id)
+        addEventToCache(user?.id, { ...previousEventSnapshot, isGoogleEvent: true }).catch(() => { })
+      }
+      if (shouldRevertAndWarn) {
+        try {
+          const title = previousEventSnapshot?.title || 'Can\'t edit this event'
+          const when = formatEventDateTime(previousEventSnapshot)
+          toast.warning("You can't reschedule this event", { description: `${title}${when ? ` • ${when}` : ''}` })
+        } catch (_) { }
       }
       clearOptimisticRecurrenceInstances(id)
     }
@@ -398,7 +447,11 @@ export const useEventCRUD = ({
       clearOptimisticRecurrenceInstances(seriesId)
       const eventsToDelete = []
       const removalIds = new Set()
-      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('eventDeleted', { detail: { message: 'Deleted event' } }))
+      try {
+        const title = eventObject?.title || 'Untitled'
+        const when = formatEventDateTime(eventObject)
+        toast.success('Event has been deleted', { description: `${title} – ${when}` })
+      } catch (_) { }
 
       setEvents(prev => {
         const matches = prev.filter(ev => ev.id === seriesId || ev.recurringEventId === seriesId || ev.parentRecurrenceId === seriesId)
@@ -411,6 +464,7 @@ export const useEventCRUD = ({
           if (next.length !== arr.length) eventsByDayRef.current.set(key, next)
         }
         removalIds.forEach(id => suppressedEventIdsRef.current.add(id))
+        persistSuppressedIds()
         if (todoKey) {
           removalIds.forEach(id => eventToTodoRef.current.delete(String(id)))
           todoToEventRef.current.delete(todoKey)
@@ -424,8 +478,11 @@ export const useEventCRUD = ({
         await removeEventFromCache(id, todoKey)
       }
 
-      // Force UI re-render after series deletion
       bumpEventsByDayVersion()
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('eventDeleted', { detail: { ids: Array.from(removalIds) } }))
+      }
 
       if (!isOptimistic && seriesId) {
         queueDeleteForGoogleCalendar(seriesId, calendarId)
@@ -434,7 +491,11 @@ export const useEventCRUD = ({
     }
 
     const snapshot = { ...eventObject, start: coerceDate(eventObject.start) || new Date(), end: coerceDate(eventObject.end) || new Date() }
-    if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('eventDeleted', { detail: { message: 'Deleted Event' } }))
+    try {
+      const title = snapshot?.title || 'Untitled'
+      const when = formatEventDateTime(snapshot)
+      toast.success('Event has been deleted', { description: `${title} – ${when}` })
+    } catch (_) { }
     snapshotsToRestore = [snapshot]
     idsToRemove.add(rawId)
     if (linkedEventIdForTodo && linkedEventIdForTodo !== String(rawId)) idsToRemove.add(linkedEventIdForTodo)
@@ -463,9 +524,13 @@ export const useEventCRUD = ({
       if (next.length !== arr.length) eventsByDayRef.current.set(key, next)
     }
     idsToRemove.forEach(id => suppressedEventIdsRef.current.add(id))
+    persistSuppressedIds()
 
-    // Force UI re-render after single event deletion
     bumpEventsByDayVersion()
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('eventDeleted', { detail: { ids: Array.from(idsToRemove) } }))
+    }
 
     if (!isOptimistic) {
       queueDeleteForGoogleCalendar(rawId, calendarId)

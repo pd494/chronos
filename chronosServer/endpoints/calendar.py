@@ -100,7 +100,6 @@ async def save_credentials(request: Request, user: User = Depends(get_current_us
         if not access_token or not refresh_token or not expires_at:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing tokens")
         
-        # Ensure scopes is an array
         if scopes:
             if isinstance(scopes, str):
                 scopes = [s.strip() for s in scopes.split(',') if s.strip()]
@@ -108,23 +107,35 @@ async def save_credentials(request: Request, user: User = Depends(get_current_us
                 scopes = [str(scopes)]
         
             
-        provider_account_id = user.email
+        # Legacy/default external account key (the multi-account flow will supply a stable external id)
+        external_account_id = user.email
         
         payload = {
             "user_id": str(user.id),
             "provider": "google",
-            "provider_account_id": provider_account_id,
+            "external_account_id": external_account_id,
             "access_token": access_token,
             "refresh_token": refresh_token,
             "expires_at": expires_at,
             "scopes": scopes
         }
+        payload["account_email"] = user.email
         
         
-        result = supabase.table("calendar_accounts").upsert(payload, on_conflict="user_id,provider,provider_account_id").execute()
+        result = supabase.table("calendar_accounts").upsert(payload, on_conflict="user_id,provider,external_account_id").execute()
         
-        sync_service = CalendarSyncService(str(user.id), provider_account_id, supabase)
+        sync_service = CalendarSyncService(str(user.id), external_account_id, supabase)
         calendars = sync_service.google_service.list_calendars()
+        try:
+            primary_email = None
+            for cal in calendars or []:
+                if cal.get("primary") is True and isinstance(cal.get("id"), str) and "@" in cal.get("id"):
+                    primary_email = cal.get("id")
+                    break
+            if primary_email:
+                supabase.table("calendar_accounts").update({"account_email": primary_email}).eq("user_id", str(user.id)).eq("provider", "google").eq("external_account_id", external_account_id).execute()
+        except Exception:
+            pass
         for cal in calendars:
             cal_id = sync_service.get_calendar_id(cal)
             sync_state = sync_service.sync_state(cal_id)
@@ -143,8 +154,32 @@ async def save_credentials(request: Request, user: User = Depends(get_current_us
 
 @router.get("/calendars")
 async def get_calendars(user: User = Depends(get_current_user), supabase: Client = Depends(get_supabase_client)):
-    service = GoogleCalendarService(str(user.id), supabase)
-    calendars = service.list_calendars()
+    calendars_result = supabase.table("connected_calendars").select("*").eq("user_id", str(user.id)).execute()
+    accounts_result = (
+        supabase.table("calendar_accounts")
+        .select("external_account_id,account_email")
+        .eq("user_id", str(user.id))
+        .eq("provider", "google")
+        .execute()
+    )
+    account_email_by_external = {
+        row.get("external_account_id"): row.get("account_email")
+        for row in (accounts_result.data or [])
+        if row.get("external_account_id")
+    }
+    calendars = []
+    for cal in calendars_result.data or []:
+        ext = cal.get("external_account_id")
+        calendars.append({
+            "id": cal.get("id"),
+            "provider_calendar_id": cal.get("provider_calendar_id"),
+            "summary": cal.get("summary"),
+            "backgroundColor": cal.get("color"),
+            "accessRole": cal.get("access_role"),
+            "selected": cal.get("selected", True),
+            "external_account_id": cal.get("external_account_id"),
+            "account_email": account_email_by_external.get(ext),
+        })
     return {"calendars": calendars}
 
 @router.get("/events")
@@ -162,7 +197,7 @@ async def get_events(
         end_dt = start_dt + timedelta(days=max_span_days)
     
     calendars_result = _retry_supabase(
-        lambda: supabase.table("calendar_list").select("*").eq("user_id", str(user.id)).eq("selected", True).execute()
+        lambda: supabase.table("connected_calendars").select("*").eq("user_id", str(user.id)).eq("selected", True).execute()
     )
     calendars = calendars_result.data or []
     
@@ -199,7 +234,6 @@ async def get_events(
         if backfill_after and end_dt > datetime.fromisoformat(backfill_after.replace('Z', '+00:00')):
             coverage["has_after"] = True
     
-    # Paginate to avoid huge payloads and limit columns to essentials
     columns = [
         "id",
         "calendar_id",
@@ -300,16 +334,16 @@ async def create_event(
     
     calendar = None
     if google_calendar_id == "primary":
-        calendar_result = supabase.table("calendar_list").select("*").eq("user_id", str(user.id)).eq("provider_calendar_id", user.email).execute()
+        calendar_result = supabase.table("connected_calendars").select("*").eq("user_id", str(user.id)).eq("provider_calendar_id", user.email).execute()
         if not calendar_result.data:
-            calendar_result = supabase.table("calendar_list").select("*").eq("user_id", str(user.id)).limit(1).execute()
+            calendar_result = supabase.table("connected_calendars").select("*").eq("user_id", str(user.id)).limit(1).execute()
         calendar = calendar_result.data[0] if calendar_result and calendar_result.data else None
         if calendar:
             google_calendar_id = calendar["provider_calendar_id"]
     else:
-        calendar_result = supabase.table("calendar_list").select("*").eq("user_id", str(user.id)).eq("provider_calendar_id", google_calendar_id).execute()
+        calendar_result = supabase.table("connected_calendars").select("*").eq("user_id", str(user.id)).eq("provider_calendar_id", google_calendar_id).execute()
         if not calendar_result.data:
-            calendar_result = supabase.table("calendar_list").select("*").eq("user_id", str(user.id)).eq("id", google_calendar_id).execute()
+            calendar_result = supabase.table("connected_calendars").select("*").eq("user_id", str(user.id)).eq("id", google_calendar_id).execute()
         calendar = calendar_result.data[0] if calendar_result and calendar_result.data else None
         if calendar:
             google_calendar_id = calendar["provider_calendar_id"]
@@ -319,15 +353,13 @@ async def create_event(
     
     calendar_id = calendar["id"]
     
-    # Create event in Google first to get the external ID
-    service = GoogleCalendarService(str(user.id), supabase)
+  
+    service = GoogleCalendarService(str(user.id), supabase, calendar.get("external_account_id"))
     google_event = service.create_event(google_calendar_id, event_data, send_notifications)
     
-    # Now save to our database
-    sync_service = CalendarSyncService(str(user.id), user.email, supabase)
+    sync_service = CalendarSyncService(str(user.id), calendar.get("external_account_id") or user.email, supabase)
     db_event = sync_service.save_event(google_event, calendar["id"])
     
-    # For recurring events, sync a 1-year window in the background so instances appear without blocking creation
     recurrence = google_event.get("recurrence") or []
     if recurrence:
         def _parse_boundary(boundary):
@@ -349,7 +381,6 @@ async def create_event(
         start_dt = _parse_boundary(google_event.get("start")) or datetime.now(timezone.utc)
         end_dt = _parse_boundary(google_event.get("end")) or start_dt + timedelta(days=1)
 
-        # Sync a generous future window so the UI immediately sees the whole series
         sync_start = start_dt - timedelta(days=7)
         sync_end = end_dt + timedelta(days=365)
         def _background_sync():
@@ -382,26 +413,26 @@ async def update_event(
     target_calendar = None
     google_calendar_id = calendar_id
     if calendar_id == "primary":
-        calendar_result = supabase.table("calendar_list").select("*").eq("user_id", str(user.id)).eq("provider_calendar_id", user.email).execute()
+        calendar_result = supabase.table("connected_calendars").select("*").eq("user_id", str(user.id)).eq("provider_calendar_id", user.email).execute()
         if not calendar_result.data:
-            calendar_result = supabase.table("calendar_list").select("*").eq("user_id", str(user.id)).limit(1).execute()
+            calendar_result = supabase.table("connected_calendars").select("*").eq("user_id", str(user.id)).limit(1).execute()
         target_calendar = calendar_result.data[0] if calendar_result and calendar_result.data else None
         if target_calendar:
             google_calendar_id = target_calendar["provider_calendar_id"]
     else:
-        calendar_result = supabase.table("calendar_list").select("*").eq("user_id", str(user.id)).eq("provider_calendar_id", calendar_id).execute()
+        calendar_result = supabase.table("connected_calendars").select("*").eq("user_id", str(user.id)).eq("provider_calendar_id", calendar_id).execute()
         if not calendar_result.data:
-            calendar_result = supabase.table("calendar_list").select("*").eq("user_id", str(user.id)).eq("id", calendar_id).execute()
+            calendar_result = supabase.table("connected_calendars").select("*").eq("user_id", str(user.id)).eq("id", calendar_id).execute()
         target_calendar = calendar_result.data[0] if calendar_result and calendar_result.data else None
         if target_calendar:
             google_calendar_id = target_calendar["provider_calendar_id"]
 
-    service = GoogleCalendarService(str(user.id), supabase)
+    service = GoogleCalendarService(str(user.id), supabase, (target_calendar or {}).get("external_account_id"))
     updated_event = service.update_event(event_id, google_calendar_id, event_data, send_notifications, recurring_edit_scope)
 
     # Persist the updated event to Supabase immediately
     if target_calendar:
-        sync_service = CalendarSyncService(str(user.id), user.email, supabase)
+        sync_service = CalendarSyncService(str(user.id), target_calendar.get("external_account_id") or user.email, supabase)
         try:
             sync_service.save_event(updated_event, target_calendar["id"])
         except Exception as e:
@@ -428,25 +459,25 @@ async def patch_event(
     target_calendar = None
     google_calendar_id = calendar_id
     if calendar_id == "primary":
-        calendar_result = supabase.table("calendar_list").select("*").eq("user_id", str(user.id)).eq("provider_calendar_id", user.email).execute()
+        calendar_result = supabase.table("connected_calendars").select("*").eq("user_id", str(user.id)).eq("provider_calendar_id", user.email).execute()
         if not calendar_result.data:
-            calendar_result = supabase.table("calendar_list").select("*").eq("user_id", str(user.id)).limit(1).execute()
+            calendar_result = supabase.table("connected_calendars").select("*").eq("user_id", str(user.id)).limit(1).execute()
         target_calendar = calendar_result.data[0] if calendar_result and calendar_result.data else None
         if target_calendar:
             google_calendar_id = target_calendar["provider_calendar_id"]
     else:
-        calendar_result = supabase.table("calendar_list").select("*").eq("user_id", str(user.id)).eq("provider_calendar_id", calendar_id).execute()
+        calendar_result = supabase.table("connected_calendars").select("*").eq("user_id", str(user.id)).eq("provider_calendar_id", calendar_id).execute()
         if not calendar_result.data:
-            calendar_result = supabase.table("calendar_list").select("*").eq("user_id", str(user.id)).eq("id", calendar_id).execute()
+            calendar_result = supabase.table("connected_calendars").select("*").eq("user_id", str(user.id)).eq("id", calendar_id).execute()
         target_calendar = calendar_result.data[0] if calendar_result and calendar_result.data else None
         if target_calendar:
             google_calendar_id = target_calendar["provider_calendar_id"]
 
-    service = GoogleCalendarService(str(user.id), supabase)
+    service = GoogleCalendarService(str(user.id), supabase, (target_calendar or {}).get("external_account_id"))
     patched_event = service.patch_event(event_id, google_calendar_id, event_data)
 
     if target_calendar:
-        sync_service = CalendarSyncService(str(user.id), user.email, supabase)
+        sync_service = CalendarSyncService(str(user.id), target_calendar.get("external_account_id") or user.email, supabase)
         try:
             sync_service.save_event(patched_event, target_calendar["id"])
         except Exception as e:
@@ -469,11 +500,16 @@ async def delete_event(
     
     google_calendar_id = calendar_id
     if internal_calendar_id:
-        cal_result = supabase.table("calendar_list").select("provider_calendar_id").eq("id", internal_calendar_id).execute()
+        cal_result = supabase.table("connected_calendars").select("provider_calendar_id, external_account_id").eq("id", internal_calendar_id).execute()
         if cal_result.data:
             google_calendar_id = cal_result.data[0]["provider_calendar_id"]
+            external_account_id = cal_result.data[0].get("external_account_id")
+        else:
+            external_account_id = None
+    else:
+        external_account_id = None
     
-    service = GoogleCalendarService(str(user.id), supabase)
+    service = GoogleCalendarService(str(user.id), supabase, external_account_id)
     try:
         service.delete_event(event_id, google_calendar_id)
     except Exception as e:
@@ -558,8 +594,25 @@ async def respond_to_event(
             detail="Invalid response_status"
         )
 
-    service = GoogleCalendarService(str(user.id), supabase)
-    updated_event = service.respond_to_event(event_id, calendar_id, normalized, user.email)
+    target_calendar = None
+    google_calendar_id = calendar_id
+    if calendar_id == "primary":
+        calendar_result = supabase.table("connected_calendars").select("*").eq("user_id", str(user.id)).eq("provider_calendar_id", user.email).execute()
+        if not calendar_result.data:
+            calendar_result = supabase.table("connected_calendars").select("*").eq("user_id", str(user.id)).limit(1).execute()
+        target_calendar = calendar_result.data[0] if calendar_result and calendar_result.data else None
+        if target_calendar:
+            google_calendar_id = target_calendar.get("provider_calendar_id")
+    else:
+        calendar_result = supabase.table("connected_calendars").select("*").eq("user_id", str(user.id)).eq("id", calendar_id).execute()
+        if not calendar_result.data:
+            calendar_result = supabase.table("connected_calendars").select("*").eq("user_id", str(user.id)).eq("provider_calendar_id", calendar_id).execute()
+        target_calendar = calendar_result.data[0] if calendar_result and calendar_result.data else None
+        if target_calendar:
+            google_calendar_id = target_calendar.get("provider_calendar_id")
+
+    service = GoogleCalendarService(str(user.id), supabase, (target_calendar or {}).get("external_account_id"))
+    updated_event = service.respond_to_event(event_id, google_calendar_id, normalized, user.email)
 
     return {"event": updated_event}
 
@@ -574,71 +627,78 @@ async def sync_calendar(
     except Exception:
         body = {}
     
-    provider_account_id = body.get("provider_account_id", user.email)
     initial_backfill = body.get("initial_backfill", False)
     force_full = body.get("force_full", False)
+    foreground = bool(body.get("foreground", False))
     
-    # Run sync in background to avoid blocking the request
-    def _background_sync():
+    def _run_sync():
         import time
-        # Create fresh supabase client for background task to avoid connection issues
         from db.supabase_client import get_supabase_client
         bg_supabase = get_supabase_client()
         
         try:
-            sync_service = CalendarSyncService(str(user.id), provider_account_id, bg_supabase)
-            calendars = sync_service.google_service.list_calendars()
+            accounts_result = bg_supabase.table("calendar_accounts").select("external_account_id").eq("user_id", str(user.id)).eq("provider", "google").execute()
+            accounts = accounts_result.data or []
             
-            if not calendars:
-                logger.warning(f"No calendars found for user {user.id}")
+            if not accounts:
+                logger.warning(f"No connected accounts for user {user.id}")
                 return
             
-            for calendar in calendars:
-                google_calendar_id = calendar.get("id")
-                
-                # Skip holiday/readonly calendars that often cause issues
-                access_role = calendar.get("accessRole", "")
-                if access_role == "reader" or "#holiday@" in google_calendar_id:
-                    logger.debug(f"Skipping read-only calendar: {google_calendar_id}")
+            for account in accounts:
+                external_account_id = account.get("external_account_id")
+                if not external_account_id:
                     continue
                 
-                # Retry logic for transient connection errors
-                for attempt in range(3):
-                    try:
-                        calendar_id = sync_service.get_calendar_id(calendar)
-                        break
-                    except Exception as e:
-                        if attempt < 2 and "disconnected" in str(e).lower():
-                            logger.warning(f"Retry {attempt + 1} for get_calendar_id {google_calendar_id}")
-                            time.sleep(1)
-                            continue
-                        logger.error(f"Failed to get calendar_id for {google_calendar_id}: {e}")
-                        calendar_id = None
-                        break
-                
-                if not calendar_id:
-                    continue
-
-                if initial_backfill or force_full:
-                    try:
-                        sync_service.backfill_calendar()
-                        logger.info(f"Full backfill completed for {google_calendar_id}")
-                    except Exception as e:
-                        logger.error(f"Full backfill failed for {google_calendar_id}: {e}")
-                    continue
-
                 try:
-                    result = sync_service.delta_sync(calendar_id, google_calendar_id)
-                    logger.info(f"Delta sync completed for {google_calendar_id}: {result.get('events_synced', 0)} events")
+                    sync_service = CalendarSyncService(str(user.id), external_account_id, bg_supabase)
+                    calendars = sync_service.google_service.list_calendars()
+                    
+                    if not calendars:
+                        logger.warning(f"No calendars found for account {external_account_id}")
+                        continue
+                    
+                    for calendar in calendars:
+                        google_calendar_id = calendar.get("id")
+                        
+                        for attempt in range(3):
+                            try:
+                                calendar_id = sync_service.get_calendar_id(calendar)
+                                break
+                            except Exception as e:
+                                if attempt < 2 and "disconnected" in str(e).lower():
+                                    logger.warning(f"Retry {attempt + 1} for get_calendar_id {google_calendar_id}")
+                                    time.sleep(1)
+                                    continue
+                                logger.error(f"Failed to get calendar_id for {google_calendar_id}: {e}")
+                                calendar_id = None
+                                break
+                        
+                        if not calendar_id:
+                            continue
+
+                        if initial_backfill or force_full:
+                            try:
+                                sync_service.backfill_calendar()
+                                logger.info(f"Full backfill completed for {google_calendar_id}")
+                            except Exception as e:
+                                logger.error(f"Full backfill failed for {google_calendar_id}: {e}")
+                            continue
+
+                        try:
+                            result = sync_service.delta_sync(calendar_id, google_calendar_id)
+                            logger.info(f"Delta sync completed for {google_calendar_id}: {result.get('events_synced', 0)} events")
+                        except Exception as e:
+                            logger.error(f"Delta sync failed for {google_calendar_id}: {e}")
                 except Exception as e:
-                    logger.error(f"Delta sync failed for {google_calendar_id}: {e}")
+                    logger.error(f"Sync failed for account {external_account_id}: {e}")
         except Exception as e:
             logger.error(f"Background sync failed for user {user.id}: {e}")
     
-    # Use daemon thread so it won't block server reload/shutdown
-    threading.Thread(target=_background_sync, daemon=True).start()
-    
-    # Return immediately - sync runs in background
+    if foreground:
+        _run_sync()
+        return {"status": "completed", "message": "Sync completed"}
+
+    threading.Thread(target=_run_sync, daemon=True).start()
     return {"status": "started", "message": "Sync started in background"}
 
 @router.post("/add-account")
@@ -652,9 +712,10 @@ async def add_account(
     refresh_token = body.get("refresh_token")
     expires_at = body.get("expires_at")
     scopes = body.get("scopes")
-    provider_account_id = body.get("provider_account_id")
+    external_account_id = body.get("external_account_id")
+    account_email = body.get("account_email")
     
-    if not all([access_token, refresh_token, expires_at, provider_account_id]):
+    if not all([access_token, refresh_token, expires_at, external_account_id]):
         raise HTTPException(status_code=400, detail="Missing required fields")
     
     if scopes:
@@ -666,21 +727,73 @@ async def add_account(
     payload = {
         "user_id": str(user.id),
         "provider": "google",
-        "provider_account_id": provider_account_id,
+        "external_account_id": external_account_id,
         "access_token": access_token,
         "refresh_token": refresh_token,
         "expires_at": expires_at,
         "scopes": scopes
     }
+    if isinstance(account_email, str) and account_email.strip():
+        payload["account_email"] = account_email.strip()
+
+    supabase.table("calendar_accounts").upsert(payload, on_conflict="user_id,provider,external_account_id").execute()
+
+    if not payload.get("account_email"):
+        try:
+            svc = GoogleCalendarService(str(user.id), supabase, external_account_id)
+            calendars = svc.list_calendars()
+            primary_email = None
+            for cal in calendars or []:
+                if cal.get("primary") is True and isinstance(cal.get("id"), str) and "@" in cal.get("id"):
+                    primary_email = cal.get("id")
+                    break
+            if primary_email:
+                supabase.table("calendar_accounts").update({"account_email": primary_email}).eq("user_id", str(user.id)).eq("provider", "google").eq("external_account_id", external_account_id).execute()
+        except Exception:
+            pass
     
+    try:
+        svc = GoogleCalendarService(str(user.id), supabase, external_account_id)
+        calendars = svc.list_calendars()
+        sync_service = CalendarSyncService(str(user.id), external_account_id, supabase)
+        for cal in calendars or []:
+            try:
+                sync_service.get_calendar_id(cal)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    def _background_backfill():
+        from db.supabase_client import get_supabase_client
+        bg_supabase = get_supabase_client()
+        try:
+            sync_service = CalendarSyncService(str(user.id), external_account_id, bg_supabase)
+            try:
+                states = (
+                    bg_supabase.table("event_sync_state")
+                    .select("backfill_before_ts,backfill_after_ts")
+                    .eq("user_id", str(user.id))
+                    .execute()
+                )
+                before_list = [s.get("backfill_before_ts") for s in (states.data or []) if s.get("backfill_before_ts")]
+                after_list = [s.get("backfill_after_ts") for s in (states.data or []) if s.get("backfill_after_ts")]
+                before_ts = min(before_list) if before_list else None
+                after_ts = max(after_list) if after_list else None
+            except Exception:
+                before_ts = None
+                after_ts = None
+
+            sync_service.backfill_calendar(before_ts, after_ts)
+            logger.info(f"Initial backfill completed for account {external_account_id}")
+        except Exception as e:
+            logger.error(f"Initial backfill failed for account {external_account_id}: {e}")
     
-    result = supabase.table("calendar_accounts").upsert(payload, on_conflict="user_id,provider,provider_account_id").execute()
-    
-    sync_service = CalendarSyncService(str(user.id), provider_account_id, supabase)
+    threading.Thread(target=_background_backfill, daemon=True).start()
     
     return JSONResponse(
         status_code=200,
-        content={"message": "Account added successfully", "syncing": True}
+        content={"message": "Account added successfully", "syncing": True, "external_account_id": external_account_id}
     )
 
 @router.get("/sync-status")
@@ -697,7 +810,7 @@ async def get_sync_status(
     combined_state = {}
     
     for sync_state in sync_states:
-        calendar_result = supabase.table("calendar_list").select("*").eq("id", sync_state["calendar_id"]).maybe_single().execute()
+        calendar_result = supabase.table("connected_calendars").select("*").eq("id", sync_state["calendar_id"]).maybe_single().execute()
         calendar = calendar_result.data if calendar_result else None
         
         if calendar:

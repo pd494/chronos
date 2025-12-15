@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState } from 'react'
 import Header from './components/Header'
 import SplitView from './components/SplitView'
 import MonthView from './components/calendar/MonthView'
@@ -12,45 +12,9 @@ import { useAuth } from './context/AuthContext'
 import CategoryTabs from './components/todo/CategoryTabs'
 import EventModal from './components/events/EventModal/EventModal'
 
+import { Toaster } from 'sonner'
+
 import { useCalendar } from './context/CalendarContext/CalendarContext'
-
-// Toast notification component
-const Toast = ({ message, visible, onClose, autoCloseDelay = 3000 }) => {
-  useEffect(() => {
-    if (visible) {
-      const timer = setTimeout(() => {
-        onClose()
-      }, autoCloseDelay)
-      return () => clearTimeout(timer)
-    }
-  }, [visible, message, onClose, autoCloseDelay])
-
-  if (!visible) return null
-
-  return (
-    <div
-      className="fixed bottom-6 left-1/2 transform -translate-x-1/2 z-[9999] text-white px-6 py-4 rounded-lg shadow-lg transition-all duration-300 ease-out"
-      style={{
-        backgroundColor: 'rgb(159, 134, 255)',
-        animation: visible ? 'slideUp 0.3s ease-out' : 'none'
-      }}
-    >
-      <p className="text-base font-medium">{message}</p>
-      <style>{`
-        @keyframes slideUp {
-          from {
-            opacity: 0;
-            transform: translate(-50%, 20px);
-          }
-          to {
-            opacity: 1;
-            transform: translate(-50%, 0);
-          }
-        }
-      `}</style>
-    </div>
-  )
-}
 
 const AppSkeleton = () => (
   <div className="h-full flex flex-col animate-pulse bg-gray-50">
@@ -82,58 +46,12 @@ function AppContent() {
   const { view, showEventModal, changeView, initialLoading, selectedEvent, toggleEventChecked } = useCalendar()
   const { categories } = useTaskContext()
   const { loading: authLoading, user, login } = useAuth()
-  const [toastMessage, setToastMessage] = useState('')
-  const [toastVisible, setToastVisible] = useState(false)
   const [activeCategory, setActiveCategory] = useState('All')
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(320)
   const [sidebarVisible, setSidebarVisible] = useState(true)
-  const deletionTimerRef = useRef(null)
-  const deletionCountRef = useRef(0)
 
   const shouldShowSkeleton = authLoading && !user
-
-  // Listen for event deletion to show toast
-  useEffect(() => {
-    const handleEventDeleted = (e) => {
-      const message = e.detail?.message || 'Deleted Event'
-      const normalizedMessage = String(message).toLowerCase()
-      const isDeletion = normalizedMessage === 'deleted event'
-
-      if (isDeletion) {
-        // Clear previous timer if it exists
-        if (deletionTimerRef.current) {
-          clearTimeout(deletionTimerRef.current)
-        }
-
-        // Increment counter and update toast
-        deletionCountRef.current += 1
-        setToastMessage(`Deleted Event (${deletionCountRef.current})`)
-        setToastVisible(true)
-
-        // Reset counter after 5 seconds of no deletions
-        deletionTimerRef.current = setTimeout(() => {
-          deletionCountRef.current = 0
-        }, 5000)
-      } else {
-        // Error message - reset counter and show error
-        setToastMessage(message)
-        setToastVisible(true)
-        deletionCountRef.current = 0
-        if (deletionTimerRef.current) {
-          clearTimeout(deletionTimerRef.current)
-        }
-      }
-    }
-
-    window.addEventListener('eventDeleted', handleEventDeleted)
-    return () => {
-      window.removeEventListener('eventDeleted', handleEventDeleted)
-      if (deletionTimerRef.current) {
-        clearTimeout(deletionTimerRef.current)
-      }
-    }
-  }, [])
 
   // Add keyboard shortcuts
   useEffect(() => {
@@ -234,6 +152,7 @@ function AppContent() {
 
   return (
     <div className="h-full flex flex-col">
+      <Toaster richColors position="bottom-center" />
       <div className="w-full flex flex-col relative z-50 border-b border-[#e5e5ea] overflow-visible">
         <div className="flex w-full items-center bg-white dark:bg-gray-800 h-12 min-h-12">
           <div
@@ -280,11 +199,6 @@ function AppContent() {
       />
       {showEventModal && <EventModal />}
       {!showEventModal && <FloatingChatBar />}
-      <Toast
-        message={toastMessage}
-        visible={toastVisible}
-        onClose={() => setToastVisible(false)}
-      />
     </div>
   )
 }

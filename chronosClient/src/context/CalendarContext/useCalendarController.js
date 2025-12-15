@@ -43,7 +43,7 @@ export const useCalendarController = () => {
   const { isEventChecked, setEventCheckedState } = todoLinkHelpers
 
   const overrideHelpers = useEventOverrides({ user })
-  const { eventOverridesRef, applyEventTimeOverrides } = overrideHelpers
+  const { eventOverridesRef, applyEventTimeOverrides, clearAllEventOverrides } = overrideHelpers
 
   const fetchHelpers = useEventFetcher({
     user, selectedCalendars, eventState, snapshotHelpers, todoLinkHelpers, applyEventTimeOverrides
@@ -157,6 +157,10 @@ export const useCalendarController = () => {
       return
     }
 
+    if (pendingSyncEventIdsRef.current.size > 0) {
+      return
+    }
+
     // Skip rebuild while a todo is being dragged - prevents events from disappearing
     if (typeof document !== 'undefined' && document.body.classList.contains('task-dragging')) {
       return
@@ -227,6 +231,6 @@ export const useCalendarController = () => {
     changeView, setView: changeView, selectDate, getEventsForDate, createEvent, updateEvent,
     respondToInvite, deleteEvent, openEventModal, closeEventModal, formatDateHeader,
     setHeaderDisplayDate, refreshEvents: handleRefreshEvents, setSelectedCalendars,
-    fetchEventsForRange, isEventChecked, toggleEventChecked
+    fetchEventsForRange, isEventChecked, toggleEventChecked, clearAllEventOverrides
   }
 }
