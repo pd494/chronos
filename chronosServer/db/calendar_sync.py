@@ -1,5 +1,3 @@
-# chronosServer/db/calendar_sync.py
-
 import logging
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -21,26 +19,29 @@ class CalendarSyncService:
     
     def get_calendar_id(self, google_calendar: Dict[str, Any]) -> UUID:
         google_calendar_id = google_calendar.get("id")
+        provider_color = google_calendar.get("backgroundColor", "#4285f4")
         result = (
             self.supabase.table("connected_calendars")
-            .select("id")
+            .select("id,color")
             .eq("user_id", self.user_id)
             .eq("external_account_id", self.external_account_id)
             .eq("provider_calendar_id", google_calendar_id)
             .execute()
         )
 
-        result_data = getattr(result, "data", None) if result is not None else None
-        if result_data:
-            calendar_id = UUID(result_data[0]["id"])
+        if result.data:
+            calendar_id = UUID(result.data[0]["id"])
+            existing_color = result.data[0].get("color")
             update_data = {
                 "summary": google_calendar.get("summary"),
-                "color": google_calendar.get("backgroundColor", "#4285f4"),
+                "provider_color": provider_color,
                 "access_role": google_calendar.get("accessRole"),
                 "etag": google_calendar.get("etag"),
                 "external_account_id": self.external_account_id,
                 "updated_at": datetime.now(timezone.utc).isoformat()
             }
+            if not existing_color:
+                update_data["color"] = provider_color
             self.supabase.table("connected_calendars").update(update_data).eq("id", str(calendar_id)).execute()
             return calendar_id
         
@@ -49,7 +50,8 @@ class CalendarSyncService:
             "external_account_id": self.external_account_id,
             "provider_calendar_id": google_calendar_id,
             "summary": google_calendar.get("summary", ""),
-            "color": google_calendar.get("backgroundColor", "#4285f4"),
+            "color": provider_color,
+            "provider_color": provider_color,
             "access_role": google_calendar.get("accessRole", "reader"),
             "selected": True,
             "etag": google_calendar.get("etag")
@@ -59,10 +61,9 @@ class CalendarSyncService:
             .insert(new_calendar)
             .execute()
         )
-        insert_data = getattr(result, "data", None) if result is not None else None
-        if not insert_data:
+        if not result.data:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to insert connected calendar")
-        return UUID(insert_data[0]["id"])
+        return UUID(result.data[0]["id"])
     
     def _parse_event_boundaries(self, google_event: Dict[str, Any]) -> Dict[str, Any]:
         start_data = google_event.get("start", {}) or {}
@@ -77,7 +78,6 @@ class CalendarSyncService:
                 dt = datetime.fromisoformat(normalized)
             except ValueError:
                 return None
-            # Apply explicit time zone if provided and dt is naive
             if tz:
                 try:
                     dt = dt.replace(tzinfo=ZoneInfo(tz))
@@ -123,11 +123,13 @@ class CalendarSyncService:
         organizer = google_event.get("organizer", {})
         organizer_email = organizer.get("email") if isinstance(organizer, dict) else None
         recurring_event_id = google_event.get("recurringEventId")
+        ical_uid = google_event.get("iCalUID")
         
         return {
             "user_id": self.user_id,
             "calendar_id": str(calendar_id),
             "external_id": google_event.get("id"),
+            "ical_uid": ical_uid,
             "etag": google_event.get("etag"),
             "status": google_event.get("status", "confirmed"),
             "summary": google_event.get("summary"),
@@ -159,8 +161,7 @@ class CalendarSyncService:
             .upsert(db_event, on_conflict="user_id,calendar_id,external_id")
             .execute()
         )
-        result_data = getattr(result, "data", None) if result is not None else None
-        saved_event = result_data[0] if result_data else None
+        saved_event = result.data[0] if result.data else None
         
         if saved_event and db_event.get('recurrence_rule'):
             self._expand_recurring_event(saved_event, calendar_id)
@@ -176,8 +177,6 @@ class CalendarSyncService:
             rule = rrulestr(recurrence_rule, dtstart=datetime.fromisoformat(event['start_ts'].replace('Z', '+00:00')))
             
             now = datetime.now(timezone.utc)
-            # Expand recurring instances across a wide window so
-            # long-running series are visible far in the past/future.
             expansion_start = now - timedelta(days=20 * 365)
             expansion_end = now + timedelta(days=20 * 365)
             
@@ -222,13 +221,13 @@ class CalendarSyncService:
         if not updates:
             res = (
                 self.supabase.table("event_sync_state")
-            .select("*")
-            .eq("user_id", self.user_id)
-            .eq("calendar_id", str(calendar_id))
-            .maybe_single()
-            .execute())
-            data = getattr(res, "data", None) if res is not None else None
-            return data or defaults
+                .select("*")
+                .eq("user_id", self.user_id)
+                .eq("calendar_id", str(calendar_id))
+                .maybe_single()
+                .execute()
+            )
+            return res.data or defaults
         
         payload = {**defaults, **updates}
         self.supabase.table("event_sync_state").upsert(
@@ -244,14 +243,10 @@ class CalendarSyncService:
             .maybe_single()
             .execute()
         )
-        data = getattr(res, "data", None) if res is not None else None
-        return data or payload
+        return res.data or payload
     
     def sync_date_range(self, calendar_id: UUID, google_calendar_id: str, start_date: datetime, end_date: datetime) -> Optional[str]:
-        """
-        Sync events for a specific date range (month-by-month).
-        Returns the syncToken from the last request.
-        """
+        """Sync events month-by-month; returns the latest sync token."""
         current = start_date
         next_sync_token = None
         
@@ -304,7 +299,6 @@ class CalendarSyncService:
                     
             except Exception as e:
                 logger.warning(f"Error syncing month {current.strftime('%Y-%m')} for calendar {google_calendar_id}: {e}")
-                # Continue with next month even if this one fails
             
             if current.month == 12:
                 current = datetime(current.year + 1, 1, 1, tzinfo=timezone.utc)
@@ -314,10 +308,7 @@ class CalendarSyncService:
         return next_sync_token
     
     def delta_sync(self, calendar_id: UUID, google_calendar_id: str) -> Dict[str, Any]:
-        """
-        Perform incremental sync using syncToken.
-        Falls back to full resync on 410 Gone.
-        """
+        """Perform incremental sync using syncToken (falls back on 410 Gone)."""
         from googleapiclient.errors import HttpError
         
         sync_state = self.sync_state(calendar_id)

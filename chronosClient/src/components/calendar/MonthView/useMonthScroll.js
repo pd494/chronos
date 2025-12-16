@@ -7,13 +7,14 @@ export const useMonthScroll = ({
   rowHeight,
   fetchEventsForRange,
   setHeaderDisplayDate,
-  initialLoading
+  initialLoading,
+  weekStartsOn = 0
 }) => {
   const [referenceDate] = useState(new Date())
   const todayWeekIndex = ABOVE + BUFFER_WEEKS
 
   const [visibleWeekRange, setVisibleWeekRange] = useState(() => {
-    const thisWeek = getStartOfWeekLocal(referenceDate)
+    const thisWeek = getStartOfWeekLocal(referenceDate, weekStartsOn)
     return {
       startDate: addWeeks(thisWeek, -ABOVE - BUFFER_WEEKS),
       endDate: addWeeks(thisWeek, BELOW + BUFFER_WEEKS),
@@ -28,6 +29,14 @@ export const useMonthScroll = ({
   const lastScrollTsRef = useRef(0)
   const lastHeaderMonthRef = useRef(null)
   const hasUserScrolledRef = useRef(false)
+
+  useEffect(() => {
+    const thisWeek = getStartOfWeekLocal(referenceDate, weekStartsOn)
+    setVisibleWeekRange({
+      startDate: addWeeks(thisWeek, -ABOVE - BUFFER_WEEKS),
+      endDate: addWeeks(thisWeek, BELOW + BUFFER_WEEKS),
+    })
+  }, [weekStartsOn, referenceDate])
 
   const weeks = useMemo(() => {
     const all = []
@@ -126,36 +135,36 @@ export const useMonthScroll = ({
         const rangeStart = weeks[startWeek].days[0]
         const rangeEnd = weeks[endWeek - 1].days[6]
 
-        const normStart = startOfWeek(startOfMonth(subMonths(rangeStart, 3)))
-        const normEnd = endOfWeek(endOfMonth(addMonths(rangeEnd, 3)))
+        const normStart = startOfWeek(startOfMonth(subMonths(rangeStart, 3)), { weekStartsOn })
+        const normEnd = endOfWeek(endOfMonth(addMonths(rangeEnd, 3)), { weekStartsOn })
         const normKey = `${normStart.getTime()}_${normEnd.getTime()}`
         if (!requestedRangesRef.current.has(normKey)) {
           requestedRangesRef.current.add(normKey)
-          fetchEventsForRange(normStart, normEnd, true).catch(() => {})
+          fetchEventsForRange(normStart, normEnd, true).catch(() => { })
         }
 
         if (deltaY < 0) {
-          const upStart = startOfWeek(startOfMonth(subMonths(rangeStart, DIRECTIONAL_MONTHS)))
-          const upEnd = endOfWeek(endOfMonth(subMonths(rangeStart, 1)))
+          const upStart = startOfWeek(startOfMonth(subMonths(rangeStart, DIRECTIONAL_MONTHS)), { weekStartsOn })
+          const upEnd = endOfWeek(endOfMonth(subMonths(rangeStart, 1)), { weekStartsOn })
           const upKey = `${upStart.getTime()}_${upEnd.getTime()}`
           if (!requestedRangesRef.current.has(upKey)) {
             requestedRangesRef.current.add(upKey)
-            fetchEventsForRange(upStart, upEnd, true).catch(() => {})
+            fetchEventsForRange(upStart, upEnd, true).catch(() => { })
           }
         }
         if (deltaY > 0) {
-          const downStart = startOfWeek(startOfMonth(addMonths(rangeEnd, 1)))
-          const downEnd = endOfWeek(endOfMonth(addMonths(rangeEnd, DIRECTIONAL_MONTHS)))
+          const downStart = startOfWeek(startOfMonth(addMonths(rangeEnd, 1)), { weekStartsOn })
+          const downEnd = endOfWeek(endOfMonth(addMonths(rangeEnd, DIRECTIONAL_MONTHS)), { weekStartsOn })
           const downKey = `${downStart.getTime()}_${downEnd.getTime()}`
           if (!requestedRangesRef.current.has(downKey)) {
             requestedRangesRef.current.add(downKey)
-            fetchEventsForRange(downStart, downEnd, true).catch(() => {})
+            fetchEventsForRange(downStart, downEnd, true).catch(() => { })
           }
         }
       }
 
       if (fetchTimeout) clearTimeout(fetchTimeout)
-      fetchTimeout = setTimeout(() => {}, 500)
+      fetchTimeout = setTimeout(() => { }, 500)
     }
 
     handleScroll()
@@ -173,12 +182,12 @@ export const useMonthScroll = ({
   useEffect(() => {
     if (!displayMonthDate || initialLoading) return
     if (!hasUserScrolledRef.current) return
-    const yearPrefetchStart = startOfWeek(startOfMonth(subMonths(displayMonthDate, 12)))
-    const yearPrefetchEnd = endOfWeek(endOfMonth(addMonths(displayMonthDate, 12)))
+    const yearPrefetchStart = startOfWeek(startOfMonth(subMonths(displayMonthDate, 12)), { weekStartsOn })
+    const yearPrefetchEnd = endOfWeek(endOfMonth(addMonths(displayMonthDate, 12)), { weekStartsOn })
     const key = `year_${yearPrefetchStart.getTime()}_${yearPrefetchEnd.getTime()}`
     if (!requestedRangesRef.current.has(key)) {
       requestedRangesRef.current.add(key)
-      fetchEventsForRange(yearPrefetchStart, yearPrefetchEnd, true).catch(() => {})
+      fetchEventsForRange(yearPrefetchStart, yearPrefetchEnd, true).catch(() => { })
     }
   }, [displayMonthDate, initialLoading, fetchEventsForRange])
 

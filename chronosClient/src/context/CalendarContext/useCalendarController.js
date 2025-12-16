@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { calendarApi } from '../../lib/api'
 import { useAuth } from '../AuthContext'
+import { useSettings } from '../SettingsContext'
 import { useCalendarState, useModalControls, useSnapshots } from './useCalendarHelpers'
 import { useEventState } from './useEventState'
 import { useEventOverrides } from './useEventOverrides'
@@ -12,6 +13,7 @@ import { safeToISOString } from './utils'
 
 export const useCalendarController = () => {
   const { user, loading: authLoading } = useAuth()
+  const { settings } = useSettings()
   const calendarState = useCalendarState()
   const { currentDate, view, headerDisplayDate, setHeaderDisplayDate, navigateToToday, navigateToPrevious, navigateToNext, changeView, selectDate } = calendarState
 
@@ -56,7 +58,7 @@ export const useCalendarController = () => {
 
   const crudHelpers = useEventCRUD({
     user, eventState, snapshotHelpers, overrideHelpers: { ...overrideHelpers, eventOverridesRef },
-    todoLinkHelpers, fetchHelpers, getVisibleRange, currentDate, view
+    todoLinkHelpers, fetchHelpers, getVisibleRange, currentDate, view, settings
   })
 
   const { getEventsForDate, createEvent, updateEvent, deleteEvent, respondToInvite } = crudHelpers
@@ -133,7 +135,6 @@ export const useCalendarController = () => {
     }, 200)
   }, [currentDate, view, initialLoading, events, getVisibleRange, dateKey, snapshotKey])
 
-  // Navigation fetch effect
   const lastFetchParamsRef = useRef({ date: null, view: null })
   useEffect(() => {
     if (!user || !user.has_google_credentials) return
@@ -145,6 +146,16 @@ export const useCalendarController = () => {
     lastFetchParamsRef.current = { date: currentDateKey, view }
     fetchGoogleEventsRef.current(false)
   }, [user?.id, currentDate, view])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const handleEventsRefreshNeeded = () => {
+      if (!user || !user.has_google_credentials) return
+      fetchGoogleEventsRef.current(false, true, true)
+    }
+    window.addEventListener('eventsRefreshNeeded', handleEventsRefreshNeeded)
+    return () => window.removeEventListener('eventsRefreshNeeded', handleEventsRefreshNeeded)
+  }, [user])
 
   useEffect(() => {
     if (!user || !user.has_google_credentials) return

@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { HOUR_HEIGHT, DRAG_DISTANCE_THRESHOLD, snapHourValue } from './constants'
+import { useSettings } from '../../../context/SettingsContext'
 
 export const useDragToCreate = ({ 
   currentDate, 
@@ -7,6 +8,7 @@ export const useDragToCreate = ({
   showEventModal,
   clearEventDragPreview 
 }) => {
+  const { settings } = useSettings()
   const [isDragging, setIsDragging] = useState(false)
   const [dragStart, setDragStart] = useState(null)
   const [dragEnd, setDragEnd] = useState(null)
@@ -121,26 +123,30 @@ export const useDragToCreate = ({
 
     if (wasDragging && savedDragStart !== null && savedDragEnd !== null) {
       const startHour = Math.min(savedDragStart, savedDragEnd)
-      const endHour = Math.max(savedDragStart, savedDragEnd)
+      let endHour = Math.max(savedDragStart, savedDragEnd)
+      if (endHour === startHour) endHour = startHour + 0.25
 
       const startDate = new Date(currentDate)
       startDate.setHours(Math.floor(startHour), Math.round((startHour % 1) * 60), 0, 0)
 
       const endDate = new Date(currentDate)
       endDate.setHours(Math.floor(endHour), Math.round((endHour % 1) * 60), 0, 0)
+      if (endDate <= startDate) endDate.setTime(startDate.getTime() + 15 * 60 * 1000)
+
+      const defaultColor = settings?.default_event_color || 'blue'
 
       setPersistedDragPreview({ startHour, endHour, startDate, endDate })
 
-      openEventModal(null, true)
       window.prefilledEventDates = {
         startDate,
         endDate,
         title: '',
-        color: 'blue',
+        color: defaultColor,
         isAllDay: false
       }
+      openEventModal(null, true)
     }
-  }, [isDragging, dragStart, dragEnd, isEventResizing, currentDate, openEventModal])
+  }, [isDragging, dragStart, dragEnd, isEventResizing, currentDate, openEventModal, settings?.default_event_color])
 
   const handleCellDoubleClick = useCallback((e, hour) => {
     const rect = e.currentTarget.getBoundingClientRect()
@@ -152,17 +158,21 @@ export const useDragToCreate = ({
     startDate.setHours(hour, minutes, 0, 0)
 
     const endDate = new Date(startDate)
-    endDate.setHours(startDate.getHours() + 1, startDate.getMinutes(), 0, 0)
+    const defaultMinutesRaw = Number(settings?.default_event_duration) || 60
+    const defaultMinutes = Math.max(30, Math.min(360, defaultMinutesRaw))
+    endDate.setTime(startDate.getTime() + defaultMinutes * 60 * 1000)
 
-    openEventModal(null, true)
+    const defaultColor = settings?.default_event_color || 'blue'
+
     window.prefilledEventDates = {
       startDate,
       endDate,
       title: '',
-      color: 'blue',
+      color: defaultColor,
       isAllDay: false
     }
-  }, [currentDate, openEventModal])
+    openEventModal(null, true)
+  }, [currentDate, openEventModal, settings?.default_event_duration, settings?.default_event_color])
 
   useEffect(() => {
     const handleMouseUp = () => handleGridMouseUp()

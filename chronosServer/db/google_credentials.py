@@ -8,10 +8,8 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from google.auth.transport.requests import Request as GoogleRequest
-import httplib2
 from config import settings
 
-# Set default socket timeout for Google API calls
 socket.setdefaulttimeout(30)
 
 logger = logging.getLogger(__name__)
@@ -59,34 +57,23 @@ def _isoformat_utc(value: datetime | None):
 
 
 def _resolve_event_meeting_location(event: dict, fallback: str = '') -> str:
-    """
-    Resolves the meeting location with proper priority:
-    1. conferenceData.hangoutLink (most reliable for Google Meet)
-    2. Direct hangoutLink field (legacy support)
-    3. conferenceData.entryPoints video URI
-    4. location field (fallback)
-    """
     if not event:
         return fallback or ''
     
-    # Priority 1: conferenceData.hangoutLink
     conference = event.get('conferenceData') or {}
     conference_hangout = conference.get('hangoutLink')
     if conference_hangout:
         return conference_hangout.strip()
     
-    # Priority 2: Direct hangoutLink field
     direct_hangout = event.get('hangoutLink')
     if direct_hangout:
         return direct_hangout.strip()
     
-    # Priority 3: conferenceData.entryPoints video URI
     entry_points = conference.get('entryPoints') or []
     for entry in entry_points:
         if entry.get('entryPointType') == 'video' and entry.get('uri'):
             return entry['uri'].strip()
     
-    # Priority 4: location field
     location = (event.get('location') or '').strip()
     return location or fallback or ''
 
@@ -101,11 +88,6 @@ class GoogleCalendarService:
         self._resolved_account_id = None
     
     def _append_conference_data_version(self, request):
-        """
-        Ensures conference data (Google Meet links) are included in GET/list responses.
-        The discovery document used by googleapiclient doesn't expose conferenceDataVersion
-        for list/get, so we append it manually to the request URI.
-        """
         if not request:
             return request
         uri = getattr(request, "uri", "")
@@ -128,34 +110,17 @@ class GoogleCalendarService:
                 raise
             except (socket.timeout, TimeoutError, OSError) as exc:
                 last_error = exc
-                logger.warning(
-                    "Timeout during %s (attempt %s/%s): %s",
-                    description,
-                    attempt,
-                    retries,
-                    exc
-                )
-                # Reset service so next attempt builds a fresh HTTP connection
+                logger.warning("Timeout during %s (attempt %s/%s): %s", description, attempt, retries, exc)
                 self.service = None
                 if attempt < retries:
                     import time
-                    time.sleep(1)  # Brief delay before retry
+                    time.sleep(1)
             except Exception as exc:
                 last_error = exc
-                logger.warning(
-                    "Transient error during %s (attempt %s/%s): %s",
-                    description,
-                    attempt,
-                    retries,
-                    exc
-                )
-                # Reset service so next attempt builds a fresh HTTP connection
+                logger.warning("Transient error during %s (attempt %s/%s): %s", description, attempt, retries, exc)
                 self.service = None
         logger.error("Failed %s after %s attempts: %s", description, retries, last_error)
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Google Calendar temporarily unavailable. Please try again."
-        )
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Google Calendar temporarily unavailable. Please try again.")
     
     def get_credentials(self) -> Credentials:
         if self.credentials is None:
@@ -387,6 +352,7 @@ class GoogleCalendarService:
     def create_event(self, calendar_id: str, event_data: dict, send_notifications: bool = False):
         try:
             service = self.get_service()
+
             params = {
                 "calendarId": calendar_id,
                 "body": event_data,
@@ -407,33 +373,40 @@ class GoogleCalendarService:
     def update_event(self, event_id: str, calendar_id: str, event_data: dict, send_notifications: bool = False, recurring_edit_scope: str = None):
         try:
             service = self.get_service()
+
+            existing_event = None
+            try:
+                existing_event = service.events().get(calendarId=calendar_id, eventId=event_id).execute()
+            except HttpError:
+                existing_event = None
+
+            organizer = (existing_event or {}).get('organizer')
+            organizer_email = organizer.get('email') if isinstance(organizer, dict) else None
+            organizer_email = organizer_email.lower() if organizer_email else None
+
+            attendees = event_data.get('attendees')
+            if organizer_email and isinstance(attendees, list):
+                filtered = [
+                    a for a in attendees
+                    if isinstance(a, dict) and (a.get('email') or '').lower() != organizer_email
+                ]
+                event_data['attendees'] = filtered
             
-            # Handle recurring event edit scopes
             if recurring_edit_scope:
-                # Get the original event to check if it's recurring
-                original_event = service.events().get(calendarId=calendar_id, eventId=event_id).execute()
+                original_event = existing_event or service.events().get(calendarId=calendar_id, eventId=event_id).execute()
                 
                 if recurring_edit_scope == 'single':
-                    # Update only this instance - use the instance ID as-is
-                    # Remove recurrence rules from the update to avoid changing the series
                     event_data.pop('recurrence', None)
                     event_data.pop('recurrenceRule', None)
                     event_data.pop('recurrenceMeta', None)
                     event_data.pop('recurrenceSummary', None)
-                    # Also remove any recurrence metadata tucked into extendedProperties.private
-                    try:
-                        priv = event_data.get('extendedProperties', {}).get('private', {})
-                        if isinstance(priv, dict):
-                            priv.pop('recurrenceRule', None)
-                            priv.pop('recurrenceMeta', None)
-                            priv.pop('recurrenceSummary', None)
-                    except Exception:
-                        pass
+                    priv = event_data.get('extendedProperties', {}).get('private', {})
+                    if isinstance(priv, dict):
+                        priv.pop('recurrenceRule', None)
+                        priv.pop('recurrenceMeta', None)
+                        priv.pop('recurrenceSummary', None)
                     
                 elif recurring_edit_scope == 'future':
-                    # Best-effort: update the master recurring event so all future
-                    # instances pick up the change. To avoid shifting the series anchor,
-                    # skip start/end fields and only apply metadata (e.g., summary).
                     base_id = original_event.get('recurringEventId')
                     if base_id:
                         event_id = base_id
@@ -441,7 +414,6 @@ class GoogleCalendarService:
                         event_data.pop('end', None)
                     
                 elif recurring_edit_scope == 'all':
-                    # Update all events in the series - use the recurring event ID
                     if original_event.get('recurringEventId'):
                         event_id = original_event['recurringEventId']
             

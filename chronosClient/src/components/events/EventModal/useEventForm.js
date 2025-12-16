@@ -8,8 +8,10 @@ import {
 import {
   cloneRecurrenceState, createDefaultRecurrenceState, describeRecurrence
 } from '../../../lib/recurrence'
+import { useSettings } from '../../../context/SettingsContext'
 
 export const useEventForm = ({ selectedEvent, user, isHolidayEvent, setRecurrenceState, setRecurrenceDraft, setRecurrenceSummary }) => {
+  const { settings } = useSettings()
   const [eventName, setEventName] = useState('')
   const [eventSubtitle, setEventSubtitle] = useState('')
   const [eventDate, setEventDate] = useState(format(new Date(), 'yyyy-MM-dd'))
@@ -52,12 +54,13 @@ export const useEventForm = ({ selectedEvent, user, isHolidayEvent, setRecurrenc
 
   const cleanupTemporaryEvent = useCallback(async (eventId = tempEventIdRef.current) => {
     if (!eventId) return
-    try { await calendarApi.deleteEvent(eventId, 'primary') } catch (err) { console.error('Failed to delete temporary event:', err) }
+    const accountEmail = settings?.default_calendar_account_email || null
+    try { await calendarApi.deleteEvent(eventId, 'primary', accountEmail) } catch (err) { console.error('Failed to delete temporary event:', err) }
     finally {
       setTempEventId(current => (current === eventId ? null : current))
       if (tempEventIdRef.current === eventId) tempEventIdRef.current = null
     }
-  }, [])
+  }, [settings?.default_calendar_account_email])
 
   const ensureTimedMode = useCallback(() => {
     if (!isAllDay) return
@@ -121,9 +124,13 @@ export const useEventForm = ({ selectedEvent, user, isHolidayEvent, setRecurrenc
         endDate = buildDateWithTime(eventEndDate || eventDate, timeEnd) || new Date(startDate.getTime() + 60 * 60 * 1000)
       }
       const requestId = generateConferenceRequestId()
+      const userTimezone = settings?.use_device_timezone !== false && !settings?.timezone
+        ? Intl.DateTimeFormat().resolvedOptions().timeZone
+        : (settings?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone)
       const tempEventData = {
         title: eventName?.trim() || selectedEvent?.title || 'New Event',
         start: startDate, end: endDate, isAllDay,
+        timezone: userTimezone,
         conferenceData: { createRequest: { requestId, conferenceSolutionKey: { type: 'hangoutsMeet' } } }
       }
       const response = await calendarApi.createEvent(tempEventData, 'primary', false)
@@ -148,7 +155,7 @@ export const useEventForm = ({ selectedEvent, user, isHolidayEvent, setRecurrenc
     } finally {
       setIsGeneratingMeeting(false)
     }
-  }, [tempEventId, cleanupTemporaryEvent, isAllDay, eventDate, eventEndDate, timeStart, timeEnd, eventName, selectedEvent, buildDateWithTime])
+  }, [tempEventId, cleanupTemporaryEvent, isAllDay, eventDate, eventEndDate, timeStart, timeEnd, eventName, selectedEvent, buildDateWithTime, settings])
 
   const initializeForm = useCallback(() => {
     let initialEventName = 'New Event'
@@ -207,7 +214,26 @@ export const useEventForm = ({ selectedEvent, user, isHolidayEvent, setRecurrenc
       }
       setIsFromDayClick(!!fromDayClick)
     } else {
-      initialIsAllDay = true
+      const wantsAllDay = settings?.default_new_event_is_all_day !== false
+      initialIsAllDay = wantsAllDay
+
+      if (settings?.default_event_color) {
+        initialColor = settings.default_event_color
+      }
+
+      if (!wantsAllDay) {
+        const rawStart = String(settings?.default_event_start_time || timedFallbackStart || DEFAULT_TIMED_START)
+        const m = rawStart.match(/^([01]\d|2[0-3]):([0-5]\d)$/)
+        timedFallbackStart = m ? `${m[1]}:${m[2]}` : (timedFallbackStart || DEFAULT_TIMED_START)
+        initialTimeStart = timedFallbackStart
+
+        const defaultMinutesRaw = Number(settings?.default_event_duration) || 60
+        const defaultMinutes = Math.max(30, Math.min(360, defaultMinutesRaw))
+        const startMinutes = timeToMinutes(timedFallbackStart)
+        const endMinutes = startMinutes + defaultMinutes
+        timedFallbackEnd = minutesToTime(endMinutes)
+        initialTimeEnd = timedFallbackEnd
+      }
     }
 
     const recurrenceAnchor = (() => {
@@ -243,7 +269,10 @@ export const useEventForm = ({ selectedEvent, user, isHolidayEvent, setRecurrenc
     setShowAsBusy(initialBusyState)
     setIsPrivateEvent(initialPrivacyState)
 
-    const initialNotifications = getEventNotificationOverrides(selectedEvent)
+    let initialNotifications = getEventNotificationOverrides(selectedEvent)
+    if (!selectedEvent && settings?.default_alert_minutes !== undefined && settings.default_alert_minutes !== null) {
+      initialNotifications = [{ method: 'popup', minutes: settings.default_alert_minutes }]
+    }
     setNotifications(initialNotifications)
 
     let initialParticipants = selectedEvent?.participants || []
@@ -266,7 +295,7 @@ export const useEventForm = ({ selectedEvent, user, isHolidayEvent, setRecurrenc
     }
     setHasChanges(false)
     setParticipants(initialParticipants)
-  }, [selectedEvent, cleanupTemporaryEvent, isHolidayEvent, user?.email, buildDateWithTime, setRecurrenceState, setRecurrenceDraft, setRecurrenceSummary])
+  }, [selectedEvent, cleanupTemporaryEvent, isHolidayEvent, user?.email, buildDateWithTime, setRecurrenceState, setRecurrenceDraft, setRecurrenceSummary, settings?.default_event_color, settings?.default_event_duration])
 
   useEffect(() => { initializeForm() }, [initializeForm])
 

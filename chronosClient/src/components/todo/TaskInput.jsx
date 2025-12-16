@@ -119,7 +119,7 @@ const TaskInput = ({
       {showNewTaskInput && (
         <form
           ref={formRef}
-          className={`flex items-center px-[18px] py-2.5 bg-[#f8f8fa] rounded-xl border border-gray-200 relative shadow-sm overflow-x-hidden ${activeCategory === 'All' ? 'mt-2.5 -mt-[22px] rounded-[13px] px-4 py-3 bg-[#f5f5f7] -ml-2' : 'mt-2.5'}`}
+          className={`flex items-center px-[18px] py-2.5 bg-[#f8f8fa] rounded-xl border border-gray-200 relative shadow-sm overflow-x-hidden ${activeCategory === 'All' ? 'mt-2.5 -mt-[22px] rounded-[13px] px-4 py-3 bg-[#f5f5f7]' : 'mt-2.5'}`}
           onSubmit={handleSubmit}
         >
           <input ref={inputRef} type="text" value={inputValue} onChange={(e) => setInputValue(e.target.value)} placeholder={placeholder}

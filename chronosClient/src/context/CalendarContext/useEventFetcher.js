@@ -12,6 +12,20 @@ import {
   parseCalendarBoundary, coerceDate, transformApiEventToInternal
 } from './utils'
 
+const getAuthenticatedAccountEmails = () => {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.localStorage.getItem('chronos:authenticated-accounts')
+    const parsed = raw ? JSON.parse(raw) : []
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .map((acct) => (typeof acct?.email === 'string' ? acct.email.trim().toLowerCase() : ''))
+      .filter(Boolean)
+  } catch (_) {
+    return []
+  }
+}
+
 export const useEventFetcher = ({
   user, selectedCalendars, eventState, snapshotHelpers, todoLinkHelpers, applyEventTimeOverrides
 }) => {
@@ -47,21 +61,22 @@ export const useEventFetcher = ({
     const segStart = startOfDay(toDateFromMonth(mStart, false))
     const segEnd = endOfDay(toDateFromMonth(mEnd, true))
     const viewerEmail = typeof user?.email === 'string' ? user.email.toLowerCase() : null
+    const viewerEmails = getAuthenticatedAccountEmails()
 
     const response = await calendarApi.getEvents(segStart.toISOString(), segEnd.toISOString())
 
     const providerToInternal = new Map()
     const calendarColorMap = new Map()
     const idMapGlobal = {}
-      ; (response.calendars || []).forEach(cal => {
-        if (cal.provider_calendar_id && cal.id) providerToInternal.set(cal.provider_calendar_id, cal.id)
-        if (cal.id && cal.color) calendarColorMap.set(cal.id, cal.color)
-        if (cal.provider_calendar_id && cal.color) calendarColorMap.set(cal.provider_calendar_id, cal.color)
-        if (cal.provider_calendar_id && cal.id) {
-          idMapGlobal[cal.provider_calendar_id] = cal.id
-          idMapGlobal[cal.id] = cal.id
-        }
-      })
+    (response.calendars || []).forEach(cal => {
+      if (cal.provider_calendar_id && cal.id) providerToInternal.set(cal.provider_calendar_id, cal.id)
+      if (cal.id && cal.color) calendarColorMap.set(cal.id, cal.color)
+      if (cal.provider_calendar_id && cal.color) calendarColorMap.set(cal.provider_calendar_id, cal.color)
+      if (cal.provider_calendar_id && cal.id) {
+        idMapGlobal[cal.provider_calendar_id] = cal.id
+        idMapGlobal[cal.id] = cal.id
+      }
+    })
     const globalColors = typeof window !== 'undefined' && window.chronosCalendarColors ? window.chronosCalendarColors : {}
     if (typeof window !== 'undefined') {
       window.chronosCalendarIdMap = { ...(window.chronosCalendarIdMap || {}), ...idMapGlobal }
@@ -73,7 +88,6 @@ export const useEventFetcher = ({
         .flatMap(id => [id, providerToInternal.get(id) || null])
         .filter(Boolean)
       if (!translated.length) return null
-      // Always include 'primary' since todo-created events use this as their calendar_id
       const set = new Set(translated)
       set.add('primary')
       return set
@@ -90,7 +104,7 @@ export const useEventFetcher = ({
     }
 
     const googleEvents = response.events
-      .map(event => transformApiEventToInternal(event, { seriesInfo, viewerEmail, applyOverrides: applyEventTimeOverrides }))
+      .map(event => transformApiEventToInternal(event, { seriesInfo, viewerEmail, viewerEmails, applyOverrides: applyEventTimeOverrides }))
       .map(ev => {
         if (!ev) return ev
         const calColor = calendarColorMap.get(ev.calendar_id) || globalColors[ev.calendar_id]
@@ -384,7 +398,7 @@ export const useEventFetcher = ({
   const refreshEvents = useCallback(async (getVisibleRange, currentDate, view) => {
     if (!user || !user.has_google_credentials) return
     setIsRevalidating(true)
-    try { await calendarApi.syncCalendarForeground(); console.log('Sync completed, fetching fresh events...') }
+    try { await calendarApi.syncCalendarForeground() }
     catch (_) { try { await calendarApi.syncCalendar() } catch (_) { } }
     await fetchGoogleEvents(getVisibleRange, currentDate, view, false, true)
     setIsRevalidating(false)

@@ -6,6 +6,7 @@ import './tailwind.css'
 import { CalendarProvider } from './context/CalendarContext/CalendarContext'
 import { TaskProvider } from './context/TaskContext/TaskProvider'
 import { AuthProvider } from './context/AuthContext.jsx'
+import { SettingsProvider } from './context/SettingsContext'
 
 // Create the router
 const router = createBrowserRouter([
@@ -13,11 +14,13 @@ const router = createBrowserRouter([
     path: '/',
     element: (
       <AuthProvider>
-        <TaskProvider>
-          <CalendarProvider>
-            <App />
-          </CalendarProvider>
-        </TaskProvider>
+        <SettingsProvider>
+          <TaskProvider>
+            <CalendarProvider>
+              <App />
+            </CalendarProvider>
+          </TaskProvider>
+        </SettingsProvider>
       </AuthProvider>
     ),
   },

@@ -1,8 +1,10 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { isSameDay, format } from 'date-fns'
 import { HOUR_HEIGHT, DAY_START_HOUR, DRAG_DISTANCE_THRESHOLD, snapHourValue } from './constants'
+import { useSettings } from '../../../context/SettingsContext'
 
 export const useWeekDragToCreate = ({ openEventModal, showEventModal }) => {
+  const { settings } = useSettings()
   const [isDragging, setIsDragging] = useState(false)
   const [dragStart, setDragStart] = useState(null)
   const [dragEnd, setDragEnd] = useState(null)
@@ -106,7 +108,7 @@ export const useWeekDragToCreate = ({ openEventModal, showEventModal }) => {
     if (wasDragging) {
       const startVal = Math.min(savedDragStart, savedDragEnd)
       let endVal = Math.max(savedDragStart, savedDragEnd)
-      if (endVal === startVal) endVal = startVal + 0.5
+      if (endVal === startVal) endVal = startVal + 0.25
 
       const eventStartHour = Math.floor(startVal)
       const eventStartMinute = Math.floor((startVal - eventStartHour) * 60)
@@ -117,9 +119,11 @@ export const useWeekDragToCreate = ({ openEventModal, showEventModal }) => {
       startDate.setHours(eventStartHour, eventStartMinute, 0, 0)
       const endDate = new Date(savedDragDay)
       endDate.setHours(eventEndHour, eventEndMinute, 0, 0)
-      if (endDate <= startDate) endDate.setTime(startDate.getTime() + 30 * 60 * 1000)
+      if (endDate <= startDate) endDate.setTime(startDate.getTime() + 15 * 60 * 1000)
 
-      const newEvent = { id: `temp-${Date.now()}`, title: '', start: startDate, end: endDate, color: 'blue', isAllDay: false }
+      const defaultColor = settings?.default_event_color || 'blue'
+
+      const newEvent = { id: `temp-${Date.now()}`, title: '', start: startDate, end: endDate, color: defaultColor, isAllDay: false }
 
       const scrollTop = window.pageYOffset || document.documentElement.scrollTop
       const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft
@@ -140,24 +144,28 @@ export const useWeekDragToCreate = ({ openEventModal, showEventModal }) => {
         }
       }
 
-      window.prefilledEventDates = { startDate, endDate, title: '', color: 'blue', isAllDay: false, fromDayClick: true }
+      window.prefilledEventDates = { startDate, endDate, title: '', color: defaultColor, isAllDay: false, fromDayClick: true }
       setPersistedDragPreview({ day: savedDragDay, startHour: startVal, endHour: endVal, startDate, endDate })
       openEventModal(newEvent, true)
     }
 
     dragColumnRef.current = null
     dragStartCellRef.current = null
-  }, [isDragging, dragDay, dragStart, dragEnd, openEventModal])
+  }, [isDragging, dragDay, dragStart, dragEnd, openEventModal, settings?.default_event_color])
 
   const handleCellDoubleClick = useCallback((e, day, hour) => {
     if (e.button !== 0) return
     const startDate = new Date(day)
     startDate.setHours(hour, 0, 0, 0)
-    const endDate = new Date(day)
-    endDate.setHours(hour + 1, 0, 0, 0)
+    const endDate = new Date(startDate)
+    const defaultMinutesRaw = Number(settings?.default_event_duration) || 60
+    const defaultMinutes = Math.max(30, Math.min(360, defaultMinutesRaw))
+    endDate.setTime(startDate.getTime() + defaultMinutes * 60 * 1000)
 
-    const newEvent = { id: `temp-${Date.now()}`, title: '', start: startDate, end: endDate, color: 'blue', isAllDay: false }
-    window.prefilledEventDates = { startDate, endDate, title: '', color: 'blue', isAllDay: false, fromDayClick: true }
+    const defaultColor = settings?.default_event_color || 'blue'
+
+    const newEvent = { id: `temp-${Date.now()}`, title: '', start: startDate, end: endDate, color: defaultColor, isAllDay: false }
+    window.prefilledEventDates = { startDate, endDate, title: '', color: defaultColor, isAllDay: false, fromDayClick: true }
 
     const scrollTop = window.pageYOffset || document.documentElement.scrollTop
     const scrollLeft = window.pageXOffset || document.documentElement.scrollLeft
@@ -175,7 +183,7 @@ export const useWeekDragToCreate = ({ openEventModal, showEventModal }) => {
     }
 
     openEventModal(newEvent, true)
-  }, [openEventModal])
+  }, [openEventModal, settings?.default_event_duration, settings?.default_event_color])
 
   return {
     isDragging, dragStart, dragEnd, dragDay, persistedDragPreview,

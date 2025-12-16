@@ -5,6 +5,7 @@ import EventIndicator from '../../events/EventIndicator'
 import { normalizeToPaletteColor } from '../../../lib/eventColors'
 import { formatDateKey, MULTI_DAY_EVENT_GAP } from './constants'
 import { useDndKit } from '../../DndKitProvider'
+import { useSettings } from '../../../context/SettingsContext'
 
 const DayCell = ({
   day,
@@ -27,6 +28,7 @@ const DayCell = ({
   handleRangeMouseMove,
   days
 }) => {
+  const { settings } = useSettings()
   const isSelected = isSameDay(day, currentDate)
   const isTodayDate = isToday(day)
   const firstOfMonth = day.getDate() === 1
@@ -149,13 +151,27 @@ const DayCell = ({
       ref={setNodeRef}
       key={dateKey}
       onDoubleClick={() => {
+        const defaultColor = settings?.default_event_color || 'blue'
+        const wantsAllDay = settings?.default_new_event_is_all_day !== false
+
         const startDate = new Date(day)
-        startDate.setHours(0, 0, 0, 0)
         const endDate = new Date(day)
-        endDate.setDate(endDate.getDate() + 1)
-        endDate.setHours(0, 0, 0, 0)
+
+        if (wantsAllDay) {
+          startDate.setHours(0, 0, 0, 0)
+          endDate.setDate(endDate.getDate() + 1)
+          endDate.setHours(0, 0, 0, 0)
+        } else {
+          const startTime = String(settings?.default_event_start_time || '09:00')
+          const [hh, mm] = startTime.split(':').map(Number)
+          startDate.setHours(Number.isFinite(hh) ? hh : 9, Number.isFinite(mm) ? mm : 0, 0, 0)
+          const defaultMinutesRaw = Number(settings?.default_event_duration) || 60
+          const defaultMinutes = Math.max(30, Math.min(360, defaultMinutesRaw))
+          endDate.setTime(startDate.getTime() + defaultMinutes * 60 * 1000)
+        }
+
+        window.prefilledEventDates = { startDate, endDate, title: '', color: defaultColor, isAllDay: wantsAllDay, fromDayClick: true }
         openEventModal(null, true)
-        window.prefilledEventDates = { startDate, endDate, title: '', color: 'blue', isAllDay: true, fromDayClick: true }
       }}
       style={{ height: `${rowHeight}px`, boxSizing: 'border-box' }}
       className={`month-day-cell bg-white dark:bg-gray-800 border-r border-b border-gray-100 dark:border-gray-800 relative p-1 flex flex-col transition-colors duration-200

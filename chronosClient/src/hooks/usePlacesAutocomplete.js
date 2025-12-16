@@ -12,7 +12,7 @@ const searchGeoapify = async (query) => {
 
   try {
     const response = await fetch(
-      `https://api.geoapify.com/v1/geocode/autocomplete?text=${encodeURIComponent(query)}&apiKey=${GEOAPIFY_API_KEY}&limit=5`,
+      `https://api.geoapify.com/v1/geocode/autocomplete?text=${encodeURIComponent(query)}&type=city&apiKey=${GEOAPIFY_API_KEY}&limit=5`,
       {
         method: 'GET',
         headers: {
@@ -20,14 +20,14 @@ const searchGeoapify = async (query) => {
         }
       }
     )
-    
+
     if (!response.ok) {
       console.error('Geoapify API error:', response.status, response.statusText)
       return []
     }
-    
+
     const data = await response.json()
-    
+
     if (data.features && Array.isArray(data.features)) {
       return data.features.map((feature) => {
         const properties = feature.properties || {}
@@ -39,7 +39,7 @@ const searchGeoapify = async (query) => {
           properties.state,
           properties.country
         ].filter(Boolean).join(', ')
-        
+
         return {
           place_id: feature.properties?.place_id || feature.id || Math.random().toString(),
           description: address,
@@ -50,7 +50,7 @@ const searchGeoapify = async (query) => {
         }
       })
     }
-    
+
     return []
   } catch (error) {
     console.error('Geoapify search error:', error)
@@ -84,7 +84,7 @@ export const usePlacesAutocomplete = (inputRef, onPlaceSelect) => {
     // Debounce search requests
     searchTimeoutRef.current = setTimeout(async () => {
       setIsLoading(true)
-      
+
       try {
         const results = await searchGeoapify(input)
         setPredictions(results)

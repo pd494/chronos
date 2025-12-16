@@ -133,7 +133,11 @@ export const useTodoIntegration = ({
       }
       if (resolvedEventId) await removeEventFromCache(resolvedEventId, todoKey)
       if (resolvedEventId) {
-        try { const calId = linkedEvent?.calendar_id || 'primary'; await calendarApi.deleteEvent(resolvedEventId, calId) }
+        try {
+          const calId = linkedEvent?.calendar_id || 'primary'
+          const accountEmail = typeof linkedEvent?.organizerEmail === 'string' ? linkedEvent.organizerEmail : null
+          await calendarApi.deleteEvent(resolvedEventId, calId, accountEmail)
+        }
         catch (error) { console.error('Failed to delete linked calendar event:', error) }
       }
     }

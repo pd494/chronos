@@ -42,7 +42,6 @@ function createWindow() {
   session.defaultSession.clearCache();
 
   const startUrl = 'http://localhost:5174';
-  console.log('Loading URL:', startUrl);
   
   // Load the Vite dev server
   mainWindow.loadURL(startUrl)
@@ -63,7 +62,6 @@ function createWindow() {
   
   // Log when page is finished loading
   mainWindow.webContents.on('did-finish-load', () => {
-    console.log('Page loaded successfully');
   });
   
   // Log any errors
@@ -71,7 +69,6 @@ function createWindow() {
     console.error('Failed to load:', errorCode, errorDescription);
     // Retry loading after a short delay
     setTimeout(() => {
-      console.log('Retrying to load URL...');
       mainWindow.loadURL(startUrl);
     }, 1000);
   });
@@ -109,7 +106,6 @@ app.whenReady().then(() => {
   
   // Handle IPC message to open URLs in external browser
   ipcMain.on('open-external-url', (_, url) => {
-    console.log('Opening external URL:', url);
     shell.openExternal(url);
   });
   

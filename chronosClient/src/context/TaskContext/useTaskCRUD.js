@@ -18,7 +18,6 @@ export const useTaskCRUD = ({
       if (!category) throw new Error(`Category "${categoryName}" not found`);
 
       const optimisticTask = { id: optimisticId, content, completed: false, category_id: category.id, category_name: category.name };
-      // Prepend new tasks at top instead of bottom
       setTasksEnhanced(prev => [optimisticTask, ...prev]);
       optimisticAdded = true;
       lastMutationTimeRef.current = Date.now();
@@ -66,7 +65,6 @@ export const useTaskCRUD = ({
     ));
   };
 
-  // Reorder tasks within a category
   const reorderTasks = async (activeId, overId, categoryName = null) => {
     if (activeId === overId) return;
 

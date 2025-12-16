@@ -14,8 +14,20 @@ from models.user import User
 from models.todo import CategoryUpdate, Todo, Category, BatchCategoryReorder
 from uuid import UUID
 from models.todo import TodoUpdate
+import logging
+from datetime import datetime
 
 router = APIRouter(prefix="/todos", tags=["Todos"])
+
+logger = logging.getLogger(__name__)
+
+
+def _is_uuid(value) -> bool:
+    try:
+        UUID(str(value))
+        return True
+    except Exception:
+        return False
 
 
 @router.post("/")
@@ -26,7 +38,6 @@ async def create_todo(
 ) -> JSONResponse:
     
     todo_data = todo.model_dump(exclude={"id"}, mode="json")
-    print(f"Todo data: {todo_data}")
     todo_data["user_id"] = str(user.id)
     category_result = (
         supabase.table("categories")
@@ -63,7 +74,6 @@ async def get_todos(
 ) -> JSONResponse:
     
     try:
-        # Get both todos and categories in parallel
         todos_result = (
             supabase.table("todos")
             .select("*")
@@ -101,9 +111,6 @@ async def bootstrap_todos(
     supabase: Client = Depends(get_supabase_client),
     user: User = Depends(get_current_user)
 ) -> JSONResponse:
-    """
-    Returns todos and categories for initial hydration.
-    """
     try:
         todos_result = (
             supabase.table("todos")
@@ -207,13 +214,11 @@ async def delete_todo(
     user: User = Depends(get_current_user)
 ) -> JSONResponse:
     
-    # First, delete any todo-event links for this todo
     try:
         supabase.table("todo_event_links").delete().eq("user_id", str(user.id)).eq("todo_id", todo_id).execute()
-    except Exception:
-        pass  # Ignore errors - link may not exist
+    except Exception as e:
+        logger.debug("Failed deleting todo_event_links for todo %s: %s", todo_id, e)
     
-    # First check if the todo exists
     check_result = (
         supabase.table("todos")
         .select("id")
@@ -227,7 +232,6 @@ async def delete_todo(
             detail="Todo not found or is not yours"
         )
     
-    # Now delete it
     supabase.table("todos").delete().eq("id", todo_id).eq("user_id", str(user.id)).execute()
     return JSONResponse(
         status_code=status.HTTP_200_OK,
@@ -450,9 +454,6 @@ async def convert_todo_to_event(
     supabase: Client = Depends(get_supabase_client),
     user: User = Depends(get_current_user)
 ) -> JSONResponse:
-    """
-    Convert a todo into a Google Calendar event
-    """
     try:
         body = await request.json()
         start_date = body.get("start_date")
@@ -466,7 +467,6 @@ async def convert_todo_to_event(
                 detail="start_date and end_date are required"
             )
         
-        # Fetch the todo
         todo_result = (
             supabase.table("todos")
             .select("*")
@@ -491,11 +491,8 @@ async def convert_todo_to_event(
 
         extended_props = event_data.get("extendedProperties", {}) or {}
         private_props = extended_props.get("private", {}) or {}
-
-        # Always persist the originating todo id with the event
         private_props["todoId"] = str(todo_id)
 
-        # Store category color in extended properties if provided
         if category_color:
             private_props["categoryColor"] = category_color
 
@@ -519,7 +516,6 @@ async def convert_todo_to_event(
         event_data["extendedProperties"] = extended_props
         
         if is_all_day:
-            from datetime import datetime
             start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
             end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
             
@@ -559,21 +555,12 @@ async def convert_todo_to_event(
                 "scheduled_is_all_day": is_all_day
             }).eq("id", todo_id).eq("user_id", str(user.id)).execute()
         except Exception as update_error:
-            import logging
-            logging.getLogger(__name__).warning(
+            logger.warning(
                 "Failed to persist scheduled date for todo %s: %s", todo_id, update_error
             )
         
-        # Create todo-event link in the database
         try:
             created_event_id = created_event.get("id")
-
-            def _is_uuid(value) -> bool:
-                try:
-                    UUID(str(value))
-                    return True
-                except Exception:
-                    return False
 
             link_payload = {
                 "user_id": str(user.id),
@@ -589,8 +576,7 @@ async def convert_todo_to_event(
                 on_conflict="user_id,todo_id"
             ).execute()
         except Exception as link_error:
-            import logging
-            logging.getLogger(__name__).warning(
+            logger.warning(
                 "Failed to create todo-event link for todo %s: %s", todo_id, link_error
             )
         
@@ -605,15 +591,8 @@ async def convert_todo_to_event(
     except HTTPException:
         raise
     except Exception as e:
-        import logging
-        logger = logging.getLogger(__name__)
         logger.error(f"Error converting todo to event: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to convert todo to event: {str(e)}"
         )
-    
-
-
-    
-    

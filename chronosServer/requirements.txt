@@ -13,3 +13,5 @@ google-auth==2.37.0
 google-auth-oauthlib==1.2.1
 google-auth-httplib2==0.2.0
 google-api-python-client==2.184.0
+icalendar==6.1.0
+email-validator==2.2.0

@@ -2,6 +2,7 @@ import { useRef, useMemo, useCallback, useEffect } from 'react'
 import { useDroppable } from '@dnd-kit/core'
 import { useCalendar } from '../../../context/CalendarContext/CalendarContext'
 import { useTaskContext } from '../../../context/TaskContext/context'
+import { useSettings } from '../../../context/SettingsContext'
 import { generateHours, isAllDayEvent } from './constants'
 import { useScrollBehavior } from './useScrollBehavior'
 import { useEventDragDrop } from './useEventDragDrop'
@@ -25,6 +26,8 @@ const DayView = () => {
   } = useCalendar()
 
   const { convertTodoToEvent } = useTaskContext()
+
+  const { settings } = useSettings()
 
   const scrollContainerRef = useRef(null)
   const timelineRef = useRef(null)

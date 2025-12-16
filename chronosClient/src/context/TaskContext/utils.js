@@ -46,6 +46,33 @@ export const enhanceTaskWithSchedule = (task) => {
 
 export const enhanceTasks = (tasks = []) => tasks.map(enhanceTaskWithSchedule);
 
+export const getTaskActivityDate = (task) => {
+  if (!task) return null;
+  const raw =
+    task.completed_at ||
+    task.completedAt ||
+    task.updated_at ||
+    task.updatedAt ||
+    task.modified_at ||
+    task.modifiedAt ||
+    task.created_at ||
+    task.createdAt ||
+    task.date ||
+    task.scheduled_at ||
+    task.scheduled_date;
+  if (!raw) return null;
+  const d = raw instanceof Date ? raw : new Date(raw);
+  if (!(d instanceof Date) || Number.isNaN(d.getTime())) return null;
+  return d;
+};
+
+export const isTaskOlderThanDays = (task, days = 7) => {
+  const when = getTaskActivityDate(task);
+  if (!when) return false;
+  const cutoff = Date.now() - (Number(days) || 0) * 24 * 60 * 60 * 1000;
+  return when.getTime() < cutoff;
+};
+
 export const formatCategory = (category) => {
   if (!category?.name) return null;
   

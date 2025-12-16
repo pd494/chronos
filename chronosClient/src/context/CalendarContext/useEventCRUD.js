@@ -40,7 +40,8 @@ export const useEventCRUD = ({
   fetchHelpers,
   getVisibleRange,
   currentDate,
-  view
+  view,
+  settings
 }) => {
   const {
     events, setEvents, eventsRefValue, setSelectedEvent, eventsByDayRef, eventIdsRef,
@@ -87,10 +88,19 @@ export const useEventCRUD = ({
     const key = dateKey(startOfDay(date))
     const list = eventsByDayRef.current.get(key) || []
     if (!list.length) return list
+    const now = new Date()
     const filtered = list.filter(ev => {
       if (!ev || !ev.id) return false
       if (suppressedEventIdsRef.current.has(ev.id)) return false
       if (ev.todoId && suppressedTodoIdsRef.current.has(String(ev.todoId))) return false
+      if (settings?.hide_past_deleted_declined_events) {
+        const response = typeof ev.viewerResponseStatus === 'string'
+          ? ev.viewerResponseStatus.toLowerCase()
+          : (ev.isInvitePending ? 'needsaction' : '')
+        const isDeclined = response === 'declined'
+        const end = coerceDate(ev.end)
+        if (isDeclined && end && end < now) return false
+      }
       return true
     })
     return filtered.sort((a, b) => {
@@ -102,7 +112,7 @@ export const useEventCRUD = ({
       if (aStart !== bStart) return aStart - bStart
       return (a.title || '').localeCompare(b.title || '')
     })
-  }, [dateKey])
+  }, [dateKey, settings?.hide_past_deleted_declined_events])
 
   const createEvent = useCallback(async (eventData) => {
     let start = coerceDate(eventData.start)
@@ -112,12 +122,29 @@ export const useEventCRUD = ({
     const isAllDay = typeof eventData.isAllDay === 'boolean' ? eventData.isAllDay : false
     const recurrenceArray = Array.isArray(eventData.recurrence) && eventData.recurrence.length
       ? eventData.recurrence : (eventData.recurrenceRule ? [eventData.recurrenceRule] : undefined)
-    const targetCalendarId = eventData.calendar_id || eventData.calendarId || 'primary'
+    const targetCalendarId = eventData.calendar_id || eventData.calendarId || settings?.default_calendar_id || 'primary'
+
+    const userTimezone = settings?.use_device_timezone !== false && !settings?.timezone
+      ? Intl.DateTimeFormat().resolvedOptions().timeZone
+      : (settings?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone)
+
+    let reminders = eventData.reminders
+    if (!reminders && Array.isArray(settings?.default_alert_minutes_list) && settings.default_alert_minutes_list.length) {
+      reminders = { useDefault: false, overrides: settings.default_alert_minutes_list.map(m => ({ method: 'popup', minutes: m })) }
+    }
 
     const processedData = {
-      ...eventData, start, end, color: eventData.color || 'blue', reminders: eventData.reminders || null,
+      ...eventData, start, end, color: eventData.color || 'blue', reminders: reminders || null,
       isAllDay, transparency: eventData.transparency === 'transparent' ? 'transparent' : 'opaque',
-      visibility: eventData.visibility || 'public', calendar_id: targetCalendarId
+      visibility: eventData.visibility || (settings?.default_event_is_private ? 'private' : 'public'),
+      calendar_id: targetCalendarId,
+      timezone: userTimezone,
+      title: eventData.title || settings?.default_event_title || '',
+      location: eventData.location || settings?.default_event_location || undefined,
+      showAsBusy: eventData.showAsBusy !== undefined ? eventData.showAsBusy : (settings?.default_event_show_as_busy !== false)
+    }
+    if (processedData.showAsBusy !== undefined) {
+      processedData.transparency = processedData.showAsBusy ? 'opaque' : 'transparent'
     }
     if (recurrenceArray) processedData.recurrence = recurrenceArray
     else delete processedData.recurrence
@@ -161,7 +188,8 @@ export const useEventCRUD = ({
     try {
       const calendarId = processedData.calendar_id || 'primary'
       const sendNotifications = processedData.sendNotifications || false
-      const response = await calendarApi.createEvent(processedData, calendarId, sendNotifications)
+      const accountEmail = processedData.account_email || settings?.default_calendar_account_email || null
+      const response = await calendarApi.createEvent(processedData, calendarId, sendNotifications, accountEmail)
       const created = response?.event || response
 
       const createdStart = coerceDate(created?.start?.dateTime || created?.start?.date || created?.start) || start
@@ -175,7 +203,7 @@ export const useEventCRUD = ({
         description: created?.description || processedData.description || null,
         start: createdStart, end: createdEnd, color: createdColor,
         isAllDay: resolveIsAllDay(created?.start, created) || processedData.isAllDay,
-        calendar_id: created?.organizer?.email || created?.calendar_id || calendarId, isOptimistic: false,
+        calendar_id: created?.calendar_id || calendarId, isOptimistic: false,
         location: resolveEventMeetingLocation(created, processedData.location), participants: processedData.participants,
         todoId: processedData.todoId || processedData.todo_id || undefined,
         reminders: created?.reminders || processedData.reminders || null,
@@ -191,8 +219,6 @@ export const useEventCRUD = ({
 
       migrateOptimisticRecurrenceParentId(newEvent.id, normalizedEvent.id)
 
-      // If optimistic ID is missing from refs (due to race condition), log warning but DO NOT suppress the real event.
-      // Suppression causes the "disappearing event" bug.
       if (!eventIdsRef.current.has(newEvent.id)) {
         console.warn('[Calendar] Optimistic ID missing during creation completion - proceeding to avoid zombie state', newEvent.id)
       }
@@ -202,16 +228,12 @@ export const useEventCRUD = ({
       eventIdsRef.current.delete(newEvent.id)
       eventIdsRef.current.add(normalizedEvent.id)
 
-      // Atomically replace optimistic event with normalized event in eventsByDayRef
-      // to prevent flicker caused by a gap between removal and re-addition.
-      // We iterate all keys because the event might exist in multiple days.
       for (const [key, arr] of eventsByDayRef.current.entries()) {
         const updated = arr.map(event => event.id === newEvent.id ? normalizedWithPending : event)
         const hasOldEvent = arr.some(event => event.id === newEvent.id)
         if (hasOldEvent) eventsByDayRef.current.set(key, updated)
       }
 
-      // Also index in case the event spans additional days not covered by the optimistic version
       indexEventByDays(normalizedWithPending)
 
       setEvents(prev => {
@@ -286,9 +308,17 @@ export const useEventCRUD = ({
     if (!end || end <= start) end = new Date(start.getTime() + 30 * 60 * 1000)
     const isAllDay = typeof updatedData.isAllDay === 'boolean' ? updatedData.isAllDay : undefined
 
+    const userTimezone = settings?.use_device_timezone !== false && !settings?.timezone
+      ? Intl.DateTimeFormat().resolvedOptions().timeZone
+      : (settings?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone)
+
     const processedData = {
       ...incomingData, start, end, color: updatedData.color ?? existingEvent?.color ?? 'blue',
-      reminders: updatedData.reminders ?? existingEvent?.reminders ?? null
+      title: updatedData.title ?? existingEvent?.title ?? '',
+      reminders: updatedData.reminders ?? existingEvent?.reminders ?? null,
+      timezone: userTimezone,
+      location: updatedData.location ?? existingEvent?.location ?? undefined,
+      visibility: updatedData.visibility ?? existingEvent?.visibility ?? 'public'
     }
     if (typeof isAllDay === 'boolean') processedData.isAllDay = isAllDay
 
@@ -302,8 +332,7 @@ export const useEventCRUD = ({
     }
     if ('recurrenceSummary' in updatedData) processedData.recurrenceSummary = updatedData.recurrenceSummary
     if ('recurrenceMeta' in updatedData) processedData.recurrenceMeta = updatedData.recurrenceMeta
-    processedData.transparency = updatedData.transparency === 'transparent' ? 'transparent' : 'opaque'
-    processedData.visibility = updatedData.visibility || 'public'
+    processedData.transparency = updatedData.transparency === 'transparent' ? 'transparent' : (updatedData.showAsBusy !== undefined ? (updatedData.showAsBusy ? 'opaque' : 'transparent') : 'opaque')
 
     const recurrenceMeta = processedData.recurrenceMeta
     clearOptimisticRecurrenceInstances(id)
@@ -356,7 +385,8 @@ export const useEventCRUD = ({
       const calendarId = existingEvent?.calendar_id || 'primary'
       const sendNotifications = processedData.sendNotifications || false
       const payloadForBackend = recurringEditScope ? { ...processedData, recurringEditScope } : processedData
-      const response = await calendarApi.updateEvent(id, payloadForBackend, calendarId, sendNotifications)
+      const accountEmail = typeof existingEvent?.organizerEmail === 'string' ? existingEvent.organizerEmail : null
+      const response = await calendarApi.updateEvent(id, payloadForBackend, calendarId, sendNotifications, accountEmail)
       const serverEvent = response?.event || response
       if (serverEvent) {
         const resolvedLocation = resolveEventMeetingLocation(serverEvent, processedData.location)
@@ -365,11 +395,12 @@ export const useEventCRUD = ({
         const resolvedDescription = serverEvent?.description !== undefined ? serverEvent.description : (processedData.description || null)
         const resolvedColor = serverEvent?.extendedProperties?.private?.categoryColor || serverEvent?.color || processedData.color || existingEvent?.color || 'blue'
         const resolvedReminders = serverEvent?.reminders || processedData.reminders || existingEvent?.reminders || null
+        const resolvedTitle = serverEvent?.summary || serverEvent?.title || processedData.title || existingEvent?.title || ''
         setEvents(prev => prev.map(evt => evt.id === id
-          ? { ...evt, location: resolvedLocation, transparency: resolvedTransparency, visibility: resolvedVisibility, description: resolvedDescription, color: resolvedColor, reminders: resolvedReminders }
+          ? { ...evt, title: resolvedTitle, location: resolvedLocation, transparency: resolvedTransparency, visibility: resolvedVisibility, description: resolvedDescription, color: resolvedColor, reminders: resolvedReminders }
           : evt), { skipDayIndexRebuild: true })
         setSelectedEvent(prev => (!prev || prev.id !== id) ? prev
-          : { ...prev, location: resolvedLocation, transparency: resolvedTransparency, visibility: resolvedVisibility, description: resolvedDescription, color: resolvedColor, reminders: resolvedReminders })
+          : { ...prev, title: resolvedTitle, location: resolvedLocation, transparency: resolvedTransparency, visibility: resolvedVisibility, description: resolvedDescription, color: resolvedColor, reminders: resolvedReminders })
       }
       const hasRecurrenceUpdate = processedData.recurrenceMeta?.enabled ||
         (Array.isArray(processedData.recurrence) && processedData.recurrence.length > 0) ||
@@ -419,6 +450,7 @@ export const useEventCRUD = ({
     if (!rawId) return
 
     const calendarId = eventObject.calendar_id || eventObject.calendarId || 'primary'
+    const accountEmail = typeof eventObject?.organizerEmail === 'string' ? eventObject.organizerEmail : null
     const deleteScope = eventObject.deleteScope
     const deleteSeries = deleteScope === 'series' || deleteScope === 'all' || deleteScope === 'future' || Boolean(eventObject.deleteSeries)
     const isOptimistic = Boolean(eventObject.isOptimistic) || (typeof rawId === 'string' && rawId.startsWith('temp-'))
@@ -485,7 +517,7 @@ export const useEventCRUD = ({
       }
 
       if (!isOptimistic && seriesId) {
-        queueDeleteForGoogleCalendar(seriesId, calendarId)
+        queueDeleteForGoogleCalendar(seriesId, calendarId, accountEmail)
       }
       return
     }
@@ -533,7 +565,7 @@ export const useEventCRUD = ({
     }
 
     if (!isOptimistic) {
-      queueDeleteForGoogleCalendar(rawId, calendarId)
+      queueDeleteForGoogleCalendar(rawId, calendarId, accountEmail)
     }
   }, [unlinkEvent, indexEventByDays, removeEventFromAllSnapshots, saveSnapshotsForAllViews, clearOptimisticRecurrenceInstances, getVisibleRange, currentDate, view, fetchEventsForRange, clearAllSnapshots, removeTodoFromAllSnapshots, bumpEventsByDayVersion])
 

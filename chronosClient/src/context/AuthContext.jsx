@@ -30,7 +30,7 @@ const usersAreEqual = (a, b) => {
 
 const getStoredUser = () => {
   if (typeof window === 'undefined') return null
-  const stored = window.sessionStorage.getItem(USER_STORAGE_KEY)
+  const stored = window.localStorage.getItem(USER_STORAGE_KEY)
   if (!stored) return null
   try {
     return JSON.parse(stored)
@@ -144,17 +144,51 @@ export const AuthProvider = ({ children }) => {
     if (typeof window === 'undefined') return
     if (value) {
       try {
-        window.sessionStorage.setItem(USER_STORAGE_KEY, JSON.stringify(value))
+        window.localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(value))
       } catch (_) {
       }
       hasCachedUserRef.current = true
     } else {
-      window.sessionStorage.removeItem(USER_STORAGE_KEY)
+      window.localStorage.removeItem(USER_STORAGE_KEY)
       hasCachedUserRef.current = false
       hasProcessedOAuthRef.current = false
       lastSessionSignatureRef.current = null
       lastCheckAuthRef.current = 0 // Reset cooldown on logout to allow immediate checkAuth on next login
     }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+
+    const applyRemoteUser = (nextUser) => {
+      const prev = currentUserRef.current
+      if (usersAreEqual(prev, nextUser)) return
+      currentUserRef.current = nextUser || null
+      setUserState(nextUser || null)
+      hasCachedUserRef.current = Boolean(nextUser)
+      if (!nextUser) {
+        hasProcessedOAuthRef.current = false
+        lastSessionSignatureRef.current = null
+        lastCheckAuthRef.current = 0
+      }
+    }
+
+    const onStorage = (event) => {
+      if (event.key !== USER_STORAGE_KEY) return
+      if (!event.newValue) {
+        applyRemoteUser(null)
+        return
+      }
+      try {
+        const parsed = JSON.parse(event.newValue)
+        applyRemoteUser(parsed)
+      } catch (_) {
+        applyRemoteUser(null)
+      }
+    }
+
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
   }, [])
 
   const clearSupabaseSession = useCallback(() => {
@@ -208,7 +242,6 @@ export const AuthProvider = ({ children }) => {
   }, [user?.has_google_credentials])
 
   useEffect(() => {
-    cleanOAuthParams()
     let unsubscribe
 
     const initAuth = async () => {
@@ -357,7 +390,15 @@ export const AuthProvider = ({ children }) => {
             })
 
             if (typeof window !== 'undefined') {
-              window.dispatchEvent(new CustomEvent('chronos:google-account-added', { detail: { external_account_id: externalAccountId } }))
+              try {
+                const stored = window.localStorage.getItem('chronos:authenticated-accounts')
+                const accounts = stored ? JSON.parse(stored) : []
+                if (accountEmail && !accounts.some(a => a.email?.toLowerCase() === accountEmail.toLowerCase())) {
+                  accounts.push({ email: accountEmail, externalAccountId })
+                  window.localStorage.setItem('chronos:authenticated-accounts', JSON.stringify(accounts))
+                }
+              } catch (_) { }
+              window.dispatchEvent(new CustomEvent('chronos:google-account-added', { detail: { external_account_id: externalAccountId, account_email: accountEmail } }))
             }
 
             suppressSupabaseSignOutRef.current = true

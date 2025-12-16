@@ -9,6 +9,8 @@ import { useTaskContext } from '../../../context/TaskContext/context';
 import TaskItem from './TaskItem';
 import CategoryGroup from './CategoryGroup';
 import './taskListGlobal.css';
+import { useSettings } from '../../../context/SettingsContext'
+import { isTaskOlderThanDays } from '../../../context/TaskContext/utils'
 
 // Sortable category wrapper for the "All" view
 const SortableCategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToCategory, index }) => {
@@ -59,6 +61,7 @@ const SortableCategoryGroup = ({ category, tasks, onToggleComplete, onAddTaskToC
 
 const TaskList = ({ tasks, onToggleComplete, activeCategory, categories }) => {
   const { addTask } = useTaskContext();
+  const { settings } = useSettings()
   const [renderKey, setRenderKey] = useState(0);
 
   const activeCategoryColor = useMemo(() => {
@@ -97,6 +100,7 @@ const TaskList = ({ tasks, onToggleComplete, activeCategory, categories }) => {
 
     categories.forEach(cat => {
       if (cat.id !== 'all' && cat.id !== 'add-category') {
+        if (cat.name === 'Completed' && settings?.show_completed_tasks === false) return
         const orderValue = typeof cat.order === 'number' ? cat.order : categories.findIndex(c => c.id === cat.id);
         const icon = cat.name === 'Completed' ? '#34C759' : cat.name === 'Today' ? '#FF9500' : cat.name === 'Inbox' ? '#1761C7' : cat.icon;
         tasksByCategory[cat.name] = {
@@ -109,6 +113,9 @@ const TaskList = ({ tasks, onToggleComplete, activeCategory, categories }) => {
     });
 
     tasks.forEach(task => {
+      if (task.completed) {
+        if (settings?.show_completed_tasks !== false && isTaskOlderThanDays(task, 7)) return
+      }
       const category = task.category_name;
       if (!category || category === 'Uncategorized') return;
 
@@ -127,6 +134,7 @@ const TaskList = ({ tasks, onToggleComplete, activeCategory, categories }) => {
 
     categories.forEach(cat => {
       if (cat.id !== 'all' && cat.id !== 'add-category' && !tasksByCategory[cat.name]) {
+        if (settings?.show_completed_tasks === false && cat.name === 'Completed') return
         const orderValue = typeof cat.order === 'number' ? cat.order : categories.findIndex(c => c.id === cat.id);
         const icon = cat.name === 'Completed' ? '#34C759' : cat.name === 'Today' ? '#FF9500' : cat.name === 'Inbox' ? '#1761C7' : cat.icon;
         tasksByCategory[cat.name] = {

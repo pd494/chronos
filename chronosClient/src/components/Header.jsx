@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react'
-import { FiChevronLeft, FiChevronRight, FiChevronDown, FiPlus, FiUser, FiLogOut, FiCalendar } from 'react-icons/fi'
+import { FiChevronLeft, FiChevronRight, FiChevronDown, FiPlus, FiRefreshCw } from 'react-icons/fi'
 import { useCalendar } from '../context/CalendarContext/CalendarContext'
 import { useTaskContext } from '../context/TaskContext/context'
 import { useAuth } from '../context/AuthContext'
@@ -10,6 +10,28 @@ const CAL_COLOR_PALETTE = [
   '#7c3aed', '#10b981', '#f59e0b', '#3b82f6', '#ef4444', '#14b8a6', '#8b5cf6', '#ec4899'
 ]
 
+const NAMED_CAL_COLOR_MAP = {
+  yellow: '#B38314',
+  gold: '#B38314',
+  orange: '#C65D00',
+  red: '#7A0000',
+  green: '#0B8043',
+  teal: '#00897B',
+  blue: '#1761C7',
+  purple: '#8B4DE8',
+  violet: '#8B4DE8',
+  pink: '#D81B60',
+  brown: '#8D6E63'
+}
+
+const normalizeNamedColor = (value) => {
+  if (typeof value !== 'string') return value
+  const v = value.trim().toLowerCase()
+  if (!v) return value
+  if (v.startsWith('#')) return v
+  return NAMED_CAL_COLOR_MAP[v] || value
+}
+
 const hashColor = (id = '') => {
   let h = 0
   for (let i = 0; i < id.length; i += 1) h = (h * 31 + id.charCodeAt(i)) | 0
@@ -17,17 +39,35 @@ const hashColor = (id = '') => {
   return CAL_COLOR_PALETTE[idx]
 }
 
+const isLightColor = (hex) => {
+  if (typeof hex !== 'string') return false
+  const raw = hex.trim().replace(/^#/, '')
+  if (!(raw.length === 3 || raw.length === 6)) return false
+  const full = raw.length === 3 ? raw.split('').map(c => c + c).join('') : raw
+  const r = parseInt(full.slice(0, 2), 16)
+  const g = parseInt(full.slice(2, 4), 16)
+  const b = parseInt(full.slice(4, 6), 16)
+  if (![r, g, b].every(Number.isFinite)) return false
+  const yiq = (r * 299 + g * 587 + b * 114) / 1000
+  return yiq >= 180
+}
+
+const readableTextColor = (value) => {
+  const normalized = normalizeNamedColor(value)
+  return isLightColor(normalized) ? '#111827' : '#ffffff'
+}
+
 const normalizeCalendar = (cal) => {
   const id = cal.id || cal.internal_id || cal.provider_calendar_id || cal.external_id || cal.calendar_id
   const providerCalendarId = cal.provider_calendar_id || cal.providerCalendarId || cal.provider_calendarId
   const summary = cal.summary || cal.name || providerCalendarId || 'Calendar'
-  const color = cal.color || cal.backgroundColor || hashColor(id || summary)
+  const rawColor = cal.color || cal.backgroundColor
+  const color = normalizeNamedColor(rawColor) || hashColor(id || summary)
   return { id, summary, color, raw: cal, providerCalendarId }
 }
 
 const ViewButton = ({ view, currentView, onChange }) => {
-  // Capitalize first letter
-  const label = view.charAt(0).toUpperCase() + view.slice(1);
+  const label = view.charAt(0).toUpperCase() + view.slice(1)
 
   return (
     <button
@@ -40,8 +80,8 @@ const ViewButton = ({ view, currentView, onChange }) => {
     >
       {label}
     </button>
-  );
-};
+  )
+}
 
 const Header = () => {
   const {
@@ -57,11 +97,9 @@ const Header = () => {
     setSelectedCalendars
   } = useCalendar()
 
-  const { user, login, logout, addGoogleAccount } = useAuth()
+  const { addGoogleAccount, user, login } = useAuth()
 
-  // State for view dropdown
   const [showViewDropdown, setShowViewDropdown] = useState(false)
-  const [showUserMenu, setShowUserMenu] = useState(false)
   const [isManualRefresh, setIsManualRefresh] = useState(false)
   const [showCalendarMenu, setShowCalendarMenu] = useState(false)
   const [calendars, setCalendars] = useState([])
@@ -88,12 +126,9 @@ const Header = () => {
   const [manualInput, setManualInput] = useState('')
   const [calendarSearch, setCalendarSearch] = useState('')
 
-  // Task context for categories
   const { tasks } = useTaskContext()
 
-  // Reference for dropdown button
   const viewButtonRef = useRef(null)
-  const userMenuRef = useRef(null)
   const calendarMenuRef = useRef(null)
 
   const persistSelected = (ids) => {
@@ -186,23 +221,16 @@ const Header = () => {
     }
   }
 
-  // Handle view change
   const handleViewChange = (newView) => {
     changeView(newView);
     setShowViewDropdown(false);
   }
 
-  // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (showViewDropdown && viewButtonRef.current && !viewButtonRef.current.contains(event.target) &&
         !event.target.closest('.view-dropdown-menu')) {
         setShowViewDropdown(false)
-      }
-
-      if (showUserMenu && userMenuRef.current && !userMenuRef.current.contains(event.target) &&
-        !event.target.closest('.user-menu-dropdown')) {
-        setShowUserMenu(false)
       }
 
       if (showCalendarMenu && calendarMenuRef.current && !calendarMenuRef.current.contains(event.target)) {
@@ -212,7 +240,7 @@ const Header = () => {
 
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [showViewDropdown, showUserMenu, showCalendarMenu])
+  }, [showViewDropdown, showCalendarMenu])
 
   useEffect(() => {
     let cancelled = false
@@ -222,6 +250,15 @@ const Header = () => {
     }
     load()
     return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    const handleCalendarUpdated = () => {
+      loadCalendars()
+    }
+    window.addEventListener('calendarUpdated', handleCalendarUpdated)
+    return () => window.removeEventListener('calendarUpdated', handleCalendarUpdated)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -254,15 +291,12 @@ const Header = () => {
         idMap[providerId] = c.id
         idMap[c.id] = providerId
       }
-      // Collect account emails from calendars (check multiple sources)
       const email = c.raw?.account_email || c.raw?.accountEmail
       if (email) accountEmails.add(email.toLowerCase())
-      // Also check external_account_id if it looks like an email
       const accountId = c.raw?.external_account_id
       if (accountId && typeof accountId === 'string' && accountId.includes('@')) {
         accountEmails.add(accountId.toLowerCase())
       }
-      // Also check provider_calendar_id if it's a primary calendar (usually owner's email)
       const providerCalId = c.raw?.provider_calendar_id
       if (providerCalId && typeof providerCalId === 'string' && providerCalId.includes('@')) {
         accountEmails.add(providerCalId.toLowerCase())
@@ -301,16 +335,14 @@ const Header = () => {
     }
   }
 
+
   return (
     <header className="flex items-center justify-between h-12 bg-white px-4 md:px-6" style={{ WebkitAppRegion: 'drag' }}>
-      {/* Left: Month/Year and Navigation */}
       <div className="flex items-center space-x-3">
-        {/* Current Date Display - Now first */}
         <span className="text-sm font-semibold text-gray-900 select-none current-date" style={{ WebkitAppRegion: 'no-drag' }}>
           {formatDateHeader()}
         </span>
 
-        {/* Navigate Previous/Next - Now after month text */}
         <div className="flex items-center navigation-buttons">
           <button
             onClick={navigateToPrevious}
@@ -328,7 +360,6 @@ const Header = () => {
           </button>
         </div>
 
-        {/* Today Button - Now after arrows, simpler styling */}
         <button
           onClick={navigateToToday}
           className="today-button"
@@ -338,7 +369,6 @@ const Header = () => {
         </button>
       </div>
 
-      {/* Right: Controls */}
       <div className="flex items-center gap-2">
         <div style={{ position: 'relative', zIndex: 9999 }} ref={calendarMenuRef}>
           <button
@@ -365,7 +395,6 @@ const Header = () => {
               <span className="text-sm text-gray-800 font-medium">
                 {calLoading ? 'Calendars…' : `${selectedCalendars.length || 0} calendars`}
               </span>
-              <span className="calendar-chip-add">+</span>
             </span>
           </button>
 
@@ -387,7 +416,6 @@ const Header = () => {
                 zIndex: 10000
               }}
             >
-              {/* Group calendars by their source account */}
               {calLoading ? (
                 <div className="text-xs text-gray-500 p-4">Loading…</div>
               ) : visibleCalendars.length === 0 ? (
@@ -437,7 +465,7 @@ const Header = () => {
                                     <line x1="7" y1="2" x2="7" y2="6" />
                                     <line x1="17" y1="2" x2="17" y2="6" />
                                   </svg>
-                                  <span style={{ color: cal.color, fontWeight: 600 }}>{cal.summary}</span>
+                                  <span style={{ color: readableTextColor(cal.color), fontWeight: 600 }}>{cal.summary}</span>
                                 </label>
                               ))}
                             </div>
@@ -462,7 +490,6 @@ const Header = () => {
           )}
         </div>
 
-        {/* Create Event Button - Borderless */}
         <button
           onClick={() => openEventModal()}
           className="clean-button"
@@ -472,7 +499,16 @@ const Header = () => {
           <span>Event</span>
         </button>
 
-        {/* View Dropdown - Borderless with completely redone dropdown */}
+        <button
+          onClick={handleManualRefresh}
+          className="clean-button"
+          style={{ WebkitAppRegion: 'no-drag' }}
+          disabled={isManualRefresh}
+        >
+          <FiRefreshCw size={14} className={`mr-1 ${isManualRefresh ? 'animate-spin' : ''}`} />
+          <span>Sync</span>
+        </button>
+
         <div style={{ position: 'relative', zIndex: 9999 }}>
           <button
             ref={viewButtonRef}
@@ -511,95 +547,6 @@ const Header = () => {
           )}
         </div>
 
-        {/* Auth Button/Menu */}
-        {user ? (
-          <div style={{ position: 'relative', zIndex: 9999 }}>
-            <button
-              ref={userMenuRef}
-              onClick={() => setShowUserMenu(!showUserMenu)}
-              style={{
-                WebkitAppRegion: 'no-drag',
-                border: 'none',
-                background: 'none',
-                cursor: 'pointer',
-                padding: 0
-              }}
-            >
-              {user.avatar_url ? (
-                <img
-                  src={user.avatar_url}
-                  alt={user.name}
-                  style={{
-                    width: '32px',
-                    height: '32px',
-                    borderRadius: '50%',
-                    objectFit: 'cover'
-                  }}
-                />
-              ) : (
-                <div style={{
-                  width: '32px',
-                  height: '32px',
-                  borderRadius: '50%',
-                  backgroundColor: '#e5e7eb',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center'
-                }}>
-                  <FiUser size={18} />
-                </div>
-              )}
-            </button>
-
-            {showUserMenu && (
-              <div className="user-menu-dropdown modal-fade-in" style={{
-                position: 'absolute',
-                top: '100%',
-                right: 0,
-                marginTop: '8px',
-                backgroundColor: 'white',
-                border: '1px solid #e5e7eb',
-                borderRadius: '8px',
-                boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
-                minWidth: '200px',
-                zIndex: 10000
-              }}>
-                <div style={{ padding: '12px', borderBottom: '1px solid #e5e7eb' }}>
-                  <div style={{ fontSize: '14px', fontWeight: '500' }}>{user.name}</div>
-                  <div style={{ fontSize: '12px', color: '#6b7280' }}>{user.email}</div>
-                </div>
-                <button
-                  onClick={logout}
-                  style={{
-                    width: '100%',
-                    padding: '12px',
-                    textAlign: 'left',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    border: 'none',
-                    background: 'none',
-                    cursor: 'pointer',
-                    fontSize: '14px'
-                  }}
-                  onMouseEnter={(e) => e.target.style.backgroundColor = '#f3f4f6'}
-                  onMouseLeave={(e) => e.target.style.backgroundColor = 'transparent'}
-                >
-                  <FiLogOut size={16} />
-                  <span>Sign out</span>
-                </button>
-              </div>
-            )}
-          </div>
-        ) : (
-          <button
-            onClick={login}
-            className="share-button"
-            style={{ WebkitAppRegion: 'no-drag' }}
-          >
-            Sign In
-          </button>
-        )}
       </div>
     </header>
   )

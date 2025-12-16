@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { isSameDay } from 'date-fns'
 import { useCalendar } from '../../../context/CalendarContext/CalendarContext'
 import { useTaskContext } from '../../../context/TaskContext/context'
+import { useSettings } from '../../../context/SettingsContext'
 import { generateHours, isAllDayEvent } from './constants'
 import { useWeekScroll } from './useWeekScroll'
 import { useWeekDragToCreate } from './useWeekDragToCreate'
@@ -27,6 +28,7 @@ const WeeklyView = () => {
   } = useCalendar()
 
   const { convertTodoToEvent } = useTaskContext()
+  const { settings } = useSettings()
 
   const [days, setDays] = useState(getDaysInWeek(currentDate))
   const scrollContainerRef = useRef(null)
@@ -34,8 +36,15 @@ const WeeklyView = () => {
   const hours = useMemo(() => generateHours(), [])
 
   useEffect(() => {
-    setDays(getDaysInWeek(currentDate))
-  }, [currentDate, getDaysInWeek])
+    let weekDays = getDaysInWeek(currentDate)
+    if (settings?.hide_weekends === true) {
+      weekDays = weekDays.filter(d => {
+        const dayOfWeek = d.getDay()
+        return dayOfWeek !== 0 && dayOfWeek !== 6
+      })
+    }
+    setDays(weekDays)
+  }, [currentDate, getDaysInWeek, settings?.hide_weekends])
 
   const { handleWheel, handleTouchStart, handleTouchMove, handleTouchEnd } = useWeekScroll({
     scrollContainerRef, timelineRef, view, currentDate, navigateToNext, navigateToPrevious
@@ -62,14 +71,30 @@ const WeeklyView = () => {
   }, [eventDrag, todoDrag])
 
   const handleAllDayCellClick = useCallback((e, day) => {
+    const defaultColor = settings?.default_event_color || 'blue'
+    const wantsAllDay = settings?.default_new_event_is_all_day !== false
+
     const startDate = new Date(day)
-    startDate.setHours(0, 0, 0, 0)
     const endDate = new Date(day)
-    endDate.setHours(23, 59, 59, 999)
-    const newEvent = { id: `temp-${Date.now()}`, title: '', start: startDate, end: endDate, color: 'blue', isAllDay: true }
-    window.prefilledEventDates = { startDate, endDate, title: '', color: 'blue', isAllDay: true }
+
+    if (wantsAllDay) {
+      startDate.setHours(0, 0, 0, 0)
+      endDate.setHours(23, 59, 59, 999)
+    } else {
+      const startTime = String(settings?.default_event_start_time || '09:00')
+      const parts = startTime.split(':').map(Number)
+      const hh = Number.isFinite(parts[0]) ? parts[0] : 9
+      const mm = Number.isFinite(parts[1]) ? parts[1] : 0
+      startDate.setHours(hh, mm, 0, 0)
+      const defaultMinutesRaw = Number(settings?.default_event_duration) || 60
+      const defaultMinutes = Math.max(30, Math.min(360, defaultMinutesRaw))
+      endDate.setTime(startDate.getTime() + defaultMinutes * 60 * 1000)
+    }
+
+    const newEvent = { id: `temp-${Date.now()}`, title: '', start: startDate, end: endDate, color: defaultColor, isAllDay: wantsAllDay }
+    window.prefilledEventDates = { startDate, endDate, title: '', color: defaultColor, isAllDay: wantsAllDay }
     openEventModal(newEvent, true)
-  }, [openEventModal])
+  }, [openEventModal, settings?.default_event_color, settings?.default_new_event_is_all_day, settings?.default_event_start_time, settings?.default_event_duration])
 
   const weekEvents = useMemo(() => {
     if (!Array.isArray(days) || days.length === 0) return []

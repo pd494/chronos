@@ -181,7 +181,7 @@ export const buildBufferedRange = (start, end, pastMonths, futureMonths) => {
 };
 
 export const transformApiEventToInternal = (event, options = {}) => {
-  const { seriesInfo, viewerEmail, applyOverrides } = options
+  const { seriesInfo, viewerEmail, viewerEmails, applyOverrides } = options
   if (event.status && event.status.toLowerCase() === 'cancelled') return null
   
   const isAllDay = resolveIsAllDay(event.start, event)
@@ -207,13 +207,28 @@ export const transformApiEventToInternal = (event, options = {}) => {
     return { ...attendee, responseStatus: normalizeResponseStatus(attendee?.responseStatus) }
   }).filter(Boolean)
   
+  const viewerEmailSet = (() => {
+    const set = new Set()
+    if (typeof viewerEmail === 'string' && viewerEmail.trim()) set.add(viewerEmail.trim().toLowerCase())
+    if (Array.isArray(viewerEmails)) {
+      viewerEmails.forEach((email) => {
+        if (typeof email === 'string' && email.trim()) set.add(email.trim().toLowerCase())
+      })
+    }
+    return set
+  })()
+
   const viewerAttendee = attendeesList.find(attendee => {
     if (attendee?.self) return true
-    if (!viewerEmail || !attendee?.email) return false
-    return attendee.email.toLowerCase() === viewerEmail
+    if (!attendee?.email) return false
+    return viewerEmailSet.size > 0 && viewerEmailSet.has(attendee.email.toLowerCase())
   })
   const viewerResponseStatus = normalizeResponseStatus(viewerAttendee?.responseStatus)
-  const viewerIsOrganizer = Boolean(viewerEmail && event.organizer?.email && event.organizer.email.toLowerCase() === viewerEmail)
+  const viewerIsOrganizer = Boolean(
+    viewerEmailSet.size > 0 &&
+    event.organizer?.email &&
+    viewerEmailSet.has(event.organizer.email.toLowerCase())
+  )
   const viewerIsAttendee = Boolean(viewerAttendee)
   const inviteCanRespond = viewerIsAttendee && !viewerIsOrganizer
   const isInvitePending = viewerResponseStatus === 'needsAction'

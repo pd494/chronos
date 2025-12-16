@@ -1,6 +1,7 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
 import { useCalendar } from '../../../context/CalendarContext/CalendarContext'
 import { useTaskContext } from '../../../context/TaskContext/context'
+import { useSettings } from '../../../context/SettingsContext'
 import { WEEKS_PER_VIEW } from './constants'
 import { useMonthScroll } from './useMonthScroll'
 import { useRangeSelection } from './useRangeSelection'
@@ -23,6 +24,10 @@ const MonthView = () => {
   } = useCalendar()
 
   const { convertTodoToEvent } = useTaskContext()
+  const { settings } = useSettings()
+  const weekStartsOn = settings?.week_start_day ?? 0
+  const showWeekNumbers = settings?.show_week_numbers === true
+  const hideWeekends = settings?.hide_weekends === true
 
   const scrollContainerRef = useRef(null)
   const [rowHeight, setRowHeight] = useState(0)
@@ -46,13 +51,25 @@ const MonthView = () => {
     rowHeight,
     fetchEventsForRange,
     setHeaderDisplayDate,
-    initialLoading
+    initialLoading,
+    weekStartsOn
   })
 
   const rangeSelection = useRangeSelection({ openEventModal, showEventModal })
   const dragDrop = useMonthDragDrop({ updateEvent, convertTodoToEvent })
 
-  const dayNames = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT']
+  const allDayNames = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT']
+  const dayNames = useMemo(() => {
+    return [...allDayNames.slice(weekStartsOn), ...allDayNames.slice(0, weekStartsOn)]
+  }, [weekStartsOn])
+
+  const displayDayNames = useMemo(() => {
+    if (!hideWeekends) return dayNames
+    return dayNames.filter((_, idx) => {
+      const dayOfWeek = (weekStartsOn + idx) % 7
+      return dayOfWeek !== 0 && dayOfWeek !== 6
+    })
+  }, [dayNames, hideWeekends, weekStartsOn])
 
   return (
     <div
@@ -75,12 +92,20 @@ const MonthView = () => {
       }}
     >
       <div className="p-4 flex flex-col flex-grow overflow-hidden">
-        <div className="grid grid-cols-7 mb-2 flex-shrink-0">
-          {dayNames.map((d) => (
-            <div key={d} className="text-center text-sm text-gray-500 dark:text-gray-400 font-medium py-2">
-              {d}
-            </div>
-          ))}
+        <div className="flex mb-2 flex-shrink-0">
+          {showWeekNumbers && (
+            <div className="w-10 flex-shrink-0" />
+          )}
+          <div
+            className="grid flex-1"
+            style={{ gridTemplateColumns: `repeat(${Math.max(1, displayDayNames.length)}, minmax(0, 1fr))` }}
+          >
+            {displayDayNames.map((d) => (
+              <div key={d} className="text-center text-sm text-gray-500 dark:text-gray-400 font-medium py-2">
+                {d}
+              </div>
+            ))}
+          </div>
         </div>
 
         <div
@@ -91,13 +116,21 @@ const MonthView = () => {
           <div className="relative" style={{ height: `${weeks.length * rowHeight}px` }}>
             {weeks.slice(visibleRange.start, visibleRange.end).map(({ weekStart, days }, index) => {
               const actualIndex = visibleRange.start + index
+              const displayDays = hideWeekends
+                ? days.filter(d => {
+                    const dow = d.getDay()
+                    return dow !== 0 && dow !== 6
+                  })
+                : days
               return (
                 <WeekRow
                   key={weekStart}
                   weekStart={weekStart}
-                  days={days}
+                  days={displayDays}
                   actualIndex={actualIndex}
                   rowHeight={rowHeight}
+                  showWeekNumbers={showWeekNumbers}
+                  weekStartsOn={weekStartsOn}
                   currentDate={currentDate}
                   getEventsForDate={getEventsForDate}
                   rangeSelection={rangeSelection.rangeSelection}

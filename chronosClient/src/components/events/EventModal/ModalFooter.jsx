@@ -14,6 +14,28 @@ const ModalFooter = ({
   visibleParticipants,
   isReadOnly = false
 }) => {
+  const calendarAccountLabel = (() => {
+    const organizer = selectedEvent?.organizerEmail || selectedEvent?.organizer?.email || selectedEvent?.organizer
+    const organizerEmail = typeof organizer === 'string' ? organizer.trim() : ''
+    if (!organizerEmail) return ''
+
+    const allowed = new Set()
+    if (typeof user?.email === 'string' && user.email.trim()) allowed.add(user.email.trim().toLowerCase())
+
+    try {
+      const raw = window.localStorage.getItem('chronos:authenticated-accounts')
+      const parsed = raw ? JSON.parse(raw) : []
+      if (Array.isArray(parsed)) {
+        parsed.forEach((acct) => {
+          const email = typeof acct?.email === 'string' ? acct.email.trim().toLowerCase() : ''
+          if (email) allowed.add(email)
+        })
+      }
+    } catch (_) { }
+
+    return allowed.has(organizerEmail.toLowerCase()) ? organizerEmail : ''
+  })()
+
   return (
     <div className="z-20 bg-white border-t border-gray-100 px-4 py-3 flex flex-col gap-2">
       <div className="flex items-center gap-3">
@@ -73,6 +95,12 @@ const ModalFooter = ({
         <div className="flex items-center gap-2 text-xs text-gray-600">
           <input type="checkbox" checked={showNotifyMembers} onChange={(e) => setShowNotifyMembers(e.target.checked)} className="h-3 w-3 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
           <span>Notify members</span>
+        </div>
+      )}
+
+      {calendarAccountLabel && (
+        <div className="text-[11px] text-gray-400">
+          {calendarAccountLabel}
         </div>
       )}
     </div>

@@ -7,6 +7,7 @@ import DayView from './components/calendar/DayView'
 import Sidebar from './components/todo/Sidebar'
 import FloatingChatBar from './components/FloatingChatBar'
 import DndKitProvider from './components/DndKitProvider'
+import Settings from './components/Settings/Settings'
 import { useTaskContext } from './context/TaskContext/context'
 import { useAuth } from './context/AuthContext'
 import CategoryTabs from './components/todo/CategoryTabs'
@@ -50,20 +51,28 @@ function AppContent() {
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false)
   const [sidebarWidth, setSidebarWidth] = useState(320)
   const [sidebarVisible, setSidebarVisible] = useState(true)
+  const [currentView, setCurrentView] = useState('calendar')
 
   const shouldShowSkeleton = authLoading && !user
 
-  // Add keyboard shortcuts
   useEffect(() => {
     if (shouldShowSkeleton) return
 
     const handleKeyDown = (e) => {
-      // Skip if user is typing in an input or textarea
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
         return;
       }
 
-      // Toggle check-off on selected event
+      if (currentView === 'settings' && e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        if (typeof e.stopImmediatePropagation === 'function') {
+          e.stopImmediatePropagation()
+        }
+        setCurrentView('calendar')
+        return
+      }
+
       if (selectedEvent && e.key.toLowerCase() === 'd') {
         e.preventDefault()
         e.stopPropagation()
@@ -74,7 +83,6 @@ function AppContent() {
         return
       }
 
-      // If the event modal is open, let its internal shortcuts handle other key presses.
       if (showEventModal) {
         return;
       }
@@ -90,7 +98,6 @@ function AppContent() {
           changeView('day');
           break;
         case 'n':
-          // Focus the task input
           const taskInput = document.querySelector('.task-input-field');
           if (taskInput) {
             taskInput.focus();
@@ -106,7 +113,7 @@ function AppContent() {
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [changeView, showEventModal, shouldShowSkeleton])
+  }, [changeView, currentView, showEventModal, shouldShowSkeleton, toggleEventChecked, selectedEvent])
 
   if (shouldShowSkeleton) {
     return <AppSkeleton />
@@ -130,12 +137,19 @@ function AppContent() {
     }
   }
 
+  const handleSettingsClick = () => {
+    setCurrentView('settings')
+  }
+
+  const handleBackToCalendar = () => {
+    setCurrentView('calendar')
+  }
+
   const handleSidebarChange = (width, visible) => {
     setSidebarWidth(width);
     setSidebarVisible(visible);
   };
 
-  // Toggle sidebar collapse
   const toggleSidebar = () => {
     setIsSidebarCollapsed(!isSidebarCollapsed);
   };
@@ -150,9 +164,18 @@ function AppContent() {
     }
   };
 
+  if (currentView === 'settings') {
+    return (
+      <div className="h-full flex flex-col">
+        <Toaster position="bottom-center" />
+        <Settings onClose={handleBackToCalendar} />
+      </div>
+    )
+  }
+
   return (
     <div className="h-full flex flex-col">
-      <Toaster richColors position="bottom-center" />
+      <Toaster position="bottom-center" />
       <div className="w-full flex flex-col relative z-50 border-b border-[#e5e5ea] overflow-visible">
         <div className="flex w-full items-center bg-white dark:bg-gray-800 h-12 min-h-12">
           <div
@@ -182,6 +205,7 @@ function AppContent() {
           sidebarVisible={sidebarVisible}
           toggleSidebar={toggleSidebar}
           onCategoryRenamed={handleCategoryRenamed}
+          onSettingsClick={handleSettingsClick}
         />}
         overlayHeader={(
           <CategoryTabs

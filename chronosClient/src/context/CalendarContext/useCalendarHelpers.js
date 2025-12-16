@@ -6,16 +6,18 @@ import {
 import { getDateKey, coerceDate } from './utils'
 import { parseRecurrenceRule, expandRecurrenceInstances } from '../../lib/recurrence'
 import { useSnapshotStorage } from './useStorage'
+import { useSettings } from '../SettingsContext'
 
 const VIEW_STORAGE_KEY = 'chronos:last-view'
 
-// Calendar navigation state
 export const useCalendarState = () => {
+  const { settings } = useSettings()
   const [currentDate, setCurrentDate] = useState(new Date())
   const [view, setViewState] = useState(() => {
-    if (typeof window === 'undefined') return 'month'
+    if (typeof window === 'undefined') return settings?.default_view || 'month'
     const stored = window.localStorage.getItem(VIEW_STORAGE_KEY)
-    return stored === 'day' || stored === 'week' || stored === 'month' ? stored : 'month'
+    if (stored === 'day' || stored === 'week' || stored === 'month') return stored
+    return settings?.default_view || 'month'
   })
   const [headerDisplayDate, setHeaderDisplayDate] = useState(currentDate)
 
@@ -37,6 +39,15 @@ export const useCalendarState = () => {
   }, [changeView])
 
   useEffect(() => { persistView(view) }, [view])
+
+  useEffect(() => {
+    if (settings?.default_view && settings.default_view !== view) {
+      const stored = typeof window !== 'undefined' ? window.localStorage.getItem(VIEW_STORAGE_KEY) : null
+      if (!stored || stored === settings.default_view) {
+        changeView(settings.default_view)
+      }
+    }
+  }, [settings?.default_view, changeView, view])
 
   const navigateToToday = useCallback(() => setCurrentDate(new Date()), [])
   const navigateToPrevious = useCallback(() => {
@@ -60,8 +71,8 @@ export const useCalendarState = () => {
   }
 }
 
-// Modal controls
 export const useModalControls = ({ currentDate, view, headerDisplayDate, setSelectedEvent, setShowEventModal }) => {
+  const { settings } = useSettings()
   const openEventModal = useCallback((event = null, isNewEvent = false) => {
     if (isNewEvent && event) {
       const exactStartDate = new Date(event.start.getTime())
@@ -75,14 +86,48 @@ export const useModalControls = ({ currentDate, view, headerDisplayDate, setSele
       setSelectedEvent(event)
       window.prefilledEventDates = null
     } else {
-      const baseDate = startOfDay(currentDate || new Date())
-      const startDate = new Date(baseDate)
-      const endDate = addDays(new Date(baseDate), 1)
       setSelectedEvent(null)
-      window.prefilledEventDates = { startDate, endDate, title: 'New Event', color: 'blue', isAllDay: true, fromEventButton: true }
+
+      const hasPrefill = typeof window !== 'undefined' && window.prefilledEventDates
+      if (!hasPrefill) {
+        const baseDate = startOfDay(currentDate || new Date())
+        const startDate = new Date(baseDate)
+        const defaultColor = settings?.default_event_color || 'blue'
+        const wantsAllDay = settings?.default_new_event_is_all_day !== false
+
+        let endDate
+        if (wantsAllDay) {
+          endDate = addDays(new Date(baseDate), 1)
+        } else {
+          const startTime = String(settings?.default_event_start_time || '09:00')
+          const parts = startTime.split(':').map(Number)
+          const hh = Number.isFinite(parts[0]) ? parts[0] : 9
+          const mm = Number.isFinite(parts[1]) ? parts[1] : 0
+          startDate.setHours(hh, mm, 0, 0)
+          const defaultMinutesRaw = Number(settings?.default_event_duration) || 60
+          const defaultMinutes = Math.max(30, Math.min(360, defaultMinutesRaw))
+          endDate = new Date(startDate.getTime() + defaultMinutes * 60 * 1000)
+        }
+        window.prefilledEventDates = {
+          startDate,
+          endDate,
+          title: 'New Event',
+          color: defaultColor,
+          isAllDay: wantsAllDay,
+          fromEventButton: true
+        }
+      }
     }
     setShowEventModal(true)
-  }, [currentDate, setSelectedEvent, setShowEventModal])
+  }, [
+    currentDate,
+    setSelectedEvent,
+    setShowEventModal,
+    settings?.default_event_color,
+    settings?.default_event_duration,
+    settings?.default_new_event_is_all_day,
+    settings?.default_event_start_time
+  ])
 
   const closeEventModal = useCallback(() => { setSelectedEvent(null); setShowEventModal(false) }, [setSelectedEvent, setShowEventModal])
 
@@ -95,8 +140,10 @@ export const useModalControls = ({ currentDate, view, headerDisplayDate, setSele
   return { openEventModal, closeEventModal, formatDateHeader }
 }
 
-// Calendar grid helpers
 const useCalendarGrid = ({ eventsByDayRef, suppressedEventIdsRef, suppressedTodoIdsRef, loadedRangeRef }) => {
+  const { settings } = useSettings()
+  const weekStartsOn = settings?.week_start_day ?? 0
+
   const extendLoadedRange = useCallback((start, end) => {
     if (!(start instanceof Date) || !(end instanceof Date)) return
     const normalizedStart = startOfDay(start)
@@ -109,13 +156,13 @@ const useCalendarGrid = ({ eventsByDayRef, suppressedEventIdsRef, suppressedTodo
     loadedRangeRef.current = { start: nextStart, end: nextEnd }
   }, [])
 
-  const getDaysInMonth = useCallback((date) => eachDayOfInterval({ start: startOfWeek(startOfMonth(date)), end: endOfWeek(endOfMonth(date)) }), [])
-  const getDaysInWeek = useCallback((date) => eachDayOfInterval({ start: startOfWeek(date), end: endOfWeek(date) }), [])
+  const getDaysInMonth = useCallback((date) => eachDayOfInterval({ start: startOfWeek(startOfMonth(date), { weekStartsOn }), end: endOfWeek(endOfMonth(date), { weekStartsOn }) }), [weekStartsOn])
+  const getDaysInWeek = useCallback((date) => eachDayOfInterval({ start: startOfWeek(date, { weekStartsOn }), end: endOfWeek(date, { weekStartsOn }) }), [weekStartsOn])
   const getVisibleRange = useCallback((date, activeView) => {
     if (activeView === 'day') return { start: startOfDay(date), end: endOfDay(date) }
-    if (activeView === 'week') return { start: startOfWeek(date), end: endOfWeek(date) }
+    if (activeView === 'week') return { start: startOfWeek(date, { weekStartsOn }), end: endOfWeek(date, { weekStartsOn }) }
     return { start: startOfMonth(date), end: endOfMonth(date) }
-  }, [])
+  }, [weekStartsOn])
 
   const dateKey = useCallback(getDateKey, [])
 

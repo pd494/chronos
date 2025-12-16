@@ -217,9 +217,8 @@ export const useEventOverrides = ({ user }) => {
       const syncState = response.sync_state || {}
 
       if (!syncState.backfill_before_ts && !syncState.backfill_after_ts) {
-        console.log('Initial backfill needed for existing user')
         calendarApi.triggerBackfill(true)
-          .then(() => console.log('Backfill triggered'))
+          .then(() => {})
           .catch(error => console.error('Initial backfill failed:', error))
       }
     } catch (error) {

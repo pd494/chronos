@@ -189,9 +189,9 @@ export const removeOptimisticEventsFromCache = async (userId) => {
 const deleteQueue = []
 let isProcessingDeleteQueue = false
 
-export const queueDeleteForGoogleCalendar = (eventId, calendarId) => {
+export const queueDeleteForGoogleCalendar = (eventId, calendarId, accountEmail = null) => {
   if (!eventId || String(eventId).startsWith('temp-')) return
-  deleteQueue.push({ eventId, calendarId: calendarId || 'primary', timestamp: Date.now() })
+  deleteQueue.push({ eventId, calendarId: calendarId || 'primary', accountEmail, timestamp: Date.now() })
   processDeleteQueue()
 }
 
@@ -202,7 +202,7 @@ const processDeleteQueue = async () => {
   while (deleteQueue.length > 0) {
     const item = deleteQueue.shift()
     try {
-      await calendarApi.deleteEvent(item.eventId, item.calendarId)
+      await calendarApi.deleteEvent(item.eventId, item.calendarId, item.accountEmail)
     } catch (error) {
       const message = typeof error?.message === 'string' ? error.message : ''
       if (!/not found/i.test(message) && !/deleted/i.test(message) && !/Resource has been deleted/i.test(message)) {

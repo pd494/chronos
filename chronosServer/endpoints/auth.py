@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 @router.post("/session")
-async def create_session(request: Request, response: Response, supabase: Client = Depends(get_supabase_client)):
+async def create_session(request: Request, response: Response):
     """Accept session tokens and set httpOnly cookies"""
     try:
         body = await request.json()
@@ -22,6 +22,8 @@ async def create_session(request: Request, response: Response, supabase: Client 
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing tokens")
         _set_auth_cookies(response, access_token, refresh_token)
         return {"message": "Session created"}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Session creation failed: {str(e)}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Authentication failed")
@@ -29,6 +31,13 @@ async def create_session(request: Request, response: Response, supabase: Client 
 @router.post("/refresh")
 async def refresh_token(request: Request, response: Response, supabase: Client = Depends(get_supabase_client)):
     refresh_token = request.cookies.get("sb-refresh-token")
+
+    if not refresh_token:
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        refresh_token = body.get("refresh_token")
     
     if not refresh_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="No refresh token")
@@ -43,7 +52,11 @@ async def refresh_token(request: Request, response: Response, supabase: Client =
         _set_auth_cookies(response, session.access_token, session.refresh_token)
         logger.info("Token refreshed successfully")
         
-        return {"message": "Token refreshed"}
+        return {
+            "message": "Token refreshed",
+            "access_token": session.access_token,
+            "refresh_token": session.refresh_token,
+        }
     except Exception as e:
         logger.error(f"Token refresh failed: {str(e)}")
         _clear_auth_cookies(response)
@@ -73,6 +86,12 @@ async def logout(response: Response, request: Request, supabase: Client = Depend
     """Logout current session"""
     try:
         token = request.cookies.get("sb-access-token")
+        if not token:
+            auth_header = request.headers.get("authorization")
+            if auth_header:
+                parts = auth_header.split()
+                if len(parts) == 2 and parts[0].lower() == "bearer":
+                    token = parts[1].strip() or None
         if token:
             user = supabase.auth.get_user(token)
             supabase.table("users").update({
@@ -93,7 +112,7 @@ def _set_auth_cookies(response: Response, access_token: str, refresh_token: str)
         key="sb-access-token",
         value=access_token,
         httponly=True,
-        secure=settings.IS_PRODUCTION,
+        secure=is_production,
         samesite="lax",
         path="/",
         max_age=3600
@@ -103,7 +122,7 @@ def _set_auth_cookies(response: Response, access_token: str, refresh_token: str)
         key="sb-refresh-token",
         value=refresh_token,
         httponly=True,
-        secure=settings.IS_PRODUCTION,
+        secure=is_production,
         samesite="lax",
         path="/",
         max_age=60 * 60 * 24 * 30  
@@ -130,5 +149,6 @@ def _clear_auth_cookies(response: Response):
         secure=is_production,
         samesite="lax",
         path="/",
+        max_age=0,
         expires=0   
     )
