@@ -126,6 +126,8 @@ export const useEventState = () => {
   const resetForRefresh = useCallback(() => {
     loadedRangeRef.current = null
     prefetchedRangesRef.current.clear()
+    loadedMonthsRef.current.clear()
+    inFlightMonthsRef.current.clear()
     eventsByDayRef.current = new Map()
     eventIdsRef.current = new Set()
     pendingSyncEventIdsRef.current = new Map()

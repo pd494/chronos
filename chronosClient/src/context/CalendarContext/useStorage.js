@@ -10,7 +10,7 @@ let writeLock = Promise.resolve()
 export const openDB = () => {
   if (dbInstance) return Promise.resolve(dbInstance)
   if (dbPromise) return dbPromise
-  
+
   dbPromise = new Promise((resolve, reject) => {
     if (typeof window === 'undefined' || !('indexedDB' in window)) {
       reject(new Error('IndexedDB not available'))
@@ -83,10 +83,7 @@ export const loadEventsFromCache = async (userId) => {
     const loadedEvents = cacheData.events
       .filter(e => {
         if (suppressedIds.has(e.id)) return false
-        if (!e.isOptimistic) return true
-        const todoId = e.todoId || e.todo_id
-        if (todoId) return true
-        return false
+        return true
       })
       .map(e => ({ ...e, start: new Date(e.start), end: new Date(e.end) }))
     return loadedEvents
@@ -174,11 +171,10 @@ export const removeOptimisticEventsFromCache = async (userId) => {
       const request = store.get('events')
       const cacheData = await new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error) })
       if (!cacheData?.events) return
+      const staleThreshold = Date.now() - 24 * 60 * 60 * 1000
       const events = cacheData.events.filter(e => {
-        if (!e.isOptimistic && !String(e.id).startsWith('temp-')) return true
-        const todoId = e.todoId || e.todo_id
-        if (todoId) return true
-        return false
+        if (String(e.id).startsWith('temp-') && e.cachedAt && e.cachedAt < staleThreshold) return false
+        return true
       })
       store.put({ ...cacheData, events, cachedAt: Date.now() })
       await new Promise((resolve, reject) => { tx.oncomplete = resolve; tx.onerror = () => reject(tx.error) })
@@ -198,7 +194,7 @@ export const queueDeleteForGoogleCalendar = (eventId, calendarId, accountEmail =
 const processDeleteQueue = async () => {
   if (isProcessingDeleteQueue || deleteQueue.length === 0) return
   isProcessingDeleteQueue = true
-  
+
   while (deleteQueue.length > 0) {
     const item = deleteQueue.shift()
     try {
@@ -211,7 +207,7 @@ const processDeleteQueue = async () => {
     }
     await new Promise(r => setTimeout(r, 100))
   }
-  
+
   isProcessingDeleteQueue = false
 }
 
@@ -235,7 +231,7 @@ export const useSnapshotStorage = ({ user, view, currentDate, getVisibleRange })
         if (key && key.startsWith('chronos:snap:')) keysToRemove.push(key)
       }
       keysToRemove.forEach(key => window.sessionStorage.removeItem(key))
-    } catch (_) {}
+    } catch (_) { }
   }, [])
 
   const removeEventFromAllSnapshots = useCallback((eventId) => {
@@ -253,10 +249,10 @@ export const useSnapshotStorage = ({ user, view, currentDate, getVisibleRange })
                 window.sessionStorage.setItem(key, JSON.stringify({ version: SNAPSHOT_VERSION, events: filtered }))
               }
             }
-          } catch (e) {}
+          } catch (e) { }
         }
       })
-    } catch (e) {}
+    } catch (e) { }
   }, [])
 
   const removeTodoFromAllSnapshots = useCallback((todoId) => {
@@ -275,7 +271,7 @@ export const useSnapshotStorage = ({ user, view, currentDate, getVisibleRange })
           }
         }
       })
-    } catch (_) {}
+    } catch (_) { }
   }, [])
 
   const saveSnapshotsForAllViews = useCallback((newEvent) => {

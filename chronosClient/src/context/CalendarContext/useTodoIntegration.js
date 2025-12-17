@@ -220,11 +220,7 @@ export const useTodoIntegration = ({
         }
 
         if (!isOptimistic && todoKey && newEvent.id) linkTodoEvent(todoKey, newEvent.id)
-        
-        const cacheEvent = { ...newEvent, isOptimistic: Boolean(isOptimistic), isGoogleEvent: true }
-        delete cacheEvent._freshDrop
-        await addEventToCache(user?.id, cacheEvent)
-        
+
         if (!isOptimistic) {
           for (const [cachedId, cachedEvent] of optimisticEventCacheRef.current.entries()) {
             const cachedTodoId = cachedEvent.todoId || cachedEvent.todo_id
@@ -234,8 +230,7 @@ export const useTodoIntegration = ({
             }
           }
         }
-        saveSnapshotsForAllViews(newEvent)
-        bumpEventsByDayVersion()
+
         setEvents(prev => {
           const next = []
           const removedIds = new Set()
@@ -250,6 +245,13 @@ export const useTodoIntegration = ({
           removedIds.forEach(id => eventIdsRef.current.delete(id))
           return next
         })
+
+        bumpEventsByDayVersion()
+        saveSnapshotsForAllViews(newEvent)
+
+        const cacheEvent = { ...newEvent, isOptimistic: Boolean(isOptimistic), isGoogleEvent: true }
+        delete cacheEvent._freshDrop
+        addEventToCache(user?.id, cacheEvent).catch(() => { })
         if (newEvent.id) {
           setTimeout(() => {
             setEvents(prev => {

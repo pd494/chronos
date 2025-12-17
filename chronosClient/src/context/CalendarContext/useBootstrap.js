@@ -25,6 +25,7 @@ export const useBootstrap = ({
     hasLoadedInitialRef,
     hasBootstrappedRef,
     loadedMonthsRef,
+    inFlightMonthsRef,
     skipNextDayIndexRebuildRef,
     optimisticEventCacheRef
   } = eventState
@@ -226,15 +227,7 @@ export const useBootstrap = ({
       skipNextDayIndexRebuildRef.current = false
       return
     }
-    // Skip rebuild when there are pending sync events to prevent flicker during
-    // the brief window when an optimistic event is being replaced with the real one.
-    const hasPendingSync = pendingSyncEventIdsRef.current.size > 0
-    if (hasPendingSync) {
-      return
-    }
 
-    // Include optimistic events from cache in the rebuild to ensure they remain
-    // visible across view switches and after server re-fetches
     const eventsWithOptimistic = [...deduped]
     const existingIds = new Set(deduped.map(ev => ev.id))
     const existingTodoIds = new Set(deduped.map(ev => ev.todoId || ev.todo_id).filter(Boolean).map(String))
@@ -293,6 +286,7 @@ export const useBootstrap = ({
 
       hydrateFromSnapshot()
       loadedMonthsRef.current.clear()
+      inFlightMonthsRef.current.clear()
       hasLoadedInitialRef.current = false
       await fetchGoogleEventsRef.current(true, false)
 

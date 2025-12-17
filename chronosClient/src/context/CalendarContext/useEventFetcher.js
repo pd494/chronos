@@ -67,7 +67,7 @@ export const useEventFetcher = ({
 
     const providerToInternal = new Map()
     const calendarColorMap = new Map()
-    const idMapGlobal = {}
+    const idMapGlobal = {};
     (response.calendars || []).forEach(cal => {
       if (cal.provider_calendar_id && cal.id) providerToInternal.set(cal.provider_calendar_id, cal.id)
       if (cal.id && cal.color) calendarColorMap.set(cal.id, cal.color)
@@ -92,6 +92,7 @@ export const useEventFetcher = ({
       set.add('primary')
       return set
     })()
+
 
     const seriesInfo = new Map()
     for (const event of response.events) {
@@ -119,6 +120,7 @@ export const useEventFetcher = ({
         if (!ev.calendar_id) return true
         return allowedCalendarIds.has(ev.calendar_id)
       })
+
 
     const segmentStartMs = segStart.getTime()
     const segmentEndMs = segEnd.getTime()
@@ -204,6 +206,7 @@ export const useEventFetcher = ({
     }, { skipDayIndexRebuild: true })
 
     const toReindex = [...updatedEvents, ...newEvents, ...reinsertedOptimisticEvents, ...preservedPendingSyncEvents]
+
     const stillPendingIds = new Set(preservedPendingSyncEvents.map(ev => ev.id))
     if (toReindex.length) {
       for (const ev of toReindex) {
@@ -271,7 +274,9 @@ export const useEventFetcher = ({
       const runners = Array.from({ length: Math.min(concurrency, segments.length) }, async () => {
         while (index < segments.length) {
           const myIndex = index++
-          try { await processSegment(segments[myIndex][0], segments[myIndex][1], background) } catch (_) { }
+          try {
+            await processSegment(segments[myIndex][0], segments[myIndex][1], background)
+          } catch (_) { }
         }
       })
       await Promise.all(runners)
