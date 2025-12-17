@@ -36,6 +36,7 @@ class Todo(BaseModel):
     scheduled_end: Optional[datetime] = None
     scheduled_is_all_day: Optional[bool] = None
     
+    
 class TodoUpdate(BaseModel):
     content: Optional[str] = None
     completed: Optional[bool] = None

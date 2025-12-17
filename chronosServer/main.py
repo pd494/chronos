@@ -5,6 +5,7 @@ from endpoints.auth import router as auth_router
 from endpoints.todos import router as todo_router
 from endpoints.calendar import router as calendar_router
 from endpoints.settings import router as settings_router
+from endpoints.chat import router as chat_router
 from config import settings
 
 app = FastAPI(title="Chronos API")
@@ -13,9 +14,7 @@ frontend_origin = settings.FRONTEND_URL.rstrip("/")
 allowed_origins = sorted(
     {
         frontend_origin,
-        "http://localhost:5173",
         "http://localhost:5174",
-        "http://127.0.0.1:5173",
         "http://127.0.0.1:5174",
     }
 )
@@ -33,6 +32,8 @@ app.include_router(auth_router)
 app.include_router(todo_router)
 app.include_router(calendar_router)
 app.include_router(settings_router)
+app.include_router(chat_router)
+
 
 @app.get("/")
 async def root():

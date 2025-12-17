@@ -540,3 +540,23 @@ export const settingsApi = {
     return putJson('/settings', settings)
   }
 }
+
+export const chatApi = {
+  async getTodoSuggestions(content) {
+    const response = await fetch(`${API_URL}/chat/todo-suggestions`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: mergeHeaders({
+        Authorization: inMemoryAccessToken ? `Bearer ${inMemoryAccessToken}` : undefined
+      }),
+      body: JSON.stringify({ content })
+    })
+    if (!response.ok) {
+      const detail = await parseErrorResponse(response)
+      const error = new Error(detail)
+      error.status = response.status
+      throw error
+    }
+    return response.text()
+  }
+}
