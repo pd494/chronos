@@ -178,6 +178,25 @@ export const getColorHex = (colorValue) => {
   return colorMap[colorValue] || '#1761C7'
 }
 
+export const getLightColorHex = (colorValue) => {
+  if (!colorValue) return '#F0F7FF'
+  const colorMap = {
+    blue: '#EBF5FF',
+    green: '#F0FDF4',
+    orange: '#FFF7ED',
+    purple: '#FAF5FF',
+    red: '#FEF2F2',
+    pink: '#FFF1F2',
+    teal: '#F0FDFA',
+    cyan: '#ECFEFF',
+    amber: '#FFFBEB',
+    lime: '#F7FEE7',
+    indigo: '#EEF2FF',
+    yellow: '#FEFCE8'
+  }
+  return colorMap[colorValue] || '#F9FAFB'
+}
+
 export const generateConferenceRequestId = () => {
   const chars = 'abcdefghijklmnopqrstuvwxyz0123456789'
   return Array.from({ length: 12 }, () => chars[Math.floor(Math.random() * chars.length)]).join('')

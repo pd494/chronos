@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { FiX, FiUsers, FiClock, FiCalendar, FiChevronDown, FiCheck, FiRepeat } from 'react-icons/fi'
-import { DEFAULT_MODAL_DIMENSIONS, DESCRIPTION_LINE_HEIGHT, MAX_DESCRIPTION_PREVIEW_HEIGHT } from './constants'
+import { DEFAULT_MODAL_DIMENSIONS, DESCRIPTION_LINE_HEIGHT, MAX_DESCRIPTION_PREVIEW_HEIGHT, getColorHex, getLightColorHex } from './constants'
 import { useEventModal } from './useEventModal'
 import ParticipantChips from './ParticipantChips'
 import LocationSection from './LocationSection'
@@ -12,8 +12,8 @@ import RecurringEditPrompt from './RecurringEditPrompt'
 import RecurringDeletePrompt from './RecurringDeletePrompt'
 import ModalFooter from './ModalFooter'
 
-const EventModal = () => {
-  const modal = useEventModal()
+const EventModal = ({ event: propEvent = null, renderInline = false, readOnly: propReadOnly = false }) => {
+  const modal = useEventModal(propEvent)
   const {
     selectedEvent, user, internalVisible,
     expandedChips, participantEmail, setParticipantEmail,
@@ -33,7 +33,7 @@ const EventModal = () => {
   } = modal
 
   useEffect(() => {
-    if (!internalVisible) return
+    if (!internalVisible || renderInline) return
     const timer = setTimeout(() => {
       if (titleInputRef.current) {
         titleInputRef.current.focus()
@@ -41,7 +41,7 @@ const EventModal = () => {
       }
     }, 50)
     return () => clearTimeout(timer)
-  }, [internalVisible, selectedEvent, titleInputRef])
+  }, [internalVisible, selectedEvent, titleInputRef, renderInline])
   useEffect(() => { setIsDescriptionExpanded(false) }, [selectedEvent?.id, setIsDescriptionExpanded])
 
   useLayoutEffect(() => {
@@ -56,9 +56,10 @@ const EventModal = () => {
     if (!canExpand && isDescriptionExpanded) setIsDescriptionExpanded(false)
   }, [form.eventSubtitle, isDescriptionExpanded, setDescriptionOverflowing, setIsDescriptionExpanded, descriptionInputRef])
 
-  useEffect(() => { if (internalVisible) updateModalPosition() }, [isDescriptionExpanded, internalVisible, updateModalPosition])
+  useEffect(() => { if (internalVisible && !renderInline) updateModalPosition() }, [isDescriptionExpanded, internalVisible, updateModalPosition, renderInline])
 
   useEffect(() => {
+    if (renderInline) return
     const handleClickOutside = (event) => {
       if (event.target.closest('[data-event-id]') || event.target.closest('.event-draggable') || event.target.closest('.event-indicator')) return
       if (deletePromptRef.current?.contains(event.target)) return
@@ -72,7 +73,7 @@ const EventModal = () => {
     }
     document.addEventListener('mousedown', handleClickOutside, true)
     return () => document.removeEventListener('mousedown', handleClickOutside, true)
-  }, [closeAndAnimateOut, colorPickerDropdownRef, colorPickerTriggerRef, deletePromptRef, modalRef, recurrence.recurrencePickerRef, recurringEditPromptRef])
+  }, [closeAndAnimateOut, colorPickerDropdownRef, colorPickerTriggerRef, deletePromptRef, modalRef, recurrence.recurrencePickerRef, recurringEditPromptRef, renderInline])
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -116,22 +117,32 @@ const EventModal = () => {
 
   useEffect(() => () => { form.cleanupTemporaryEvent() }, [form])
 
-  if (typeof document === 'undefined') return null
-
-  const isReadOnly = selectedEvent?.viewerIsOrganizer === false
+  const isReadOnly = propReadOnly || selectedEvent?.viewerIsOrganizer === false
   const hasDescription = !!form.eventSubtitle?.trim()
   const shouldShowDescriptionField = !isReadOnly || hasDescription
 
-  return createPortal(
+  const content = (
     <>
-      <div key={enterAnimationKey} ref={modalRef} className={`fixed bg-white shadow-xl transition-[opacity,transform] duration-[300ms] ease-[cubic-bezier(.215,.61,.355,1)] ${internalVisible ? 'opacity-100 scale-100 modal-fade-in' : 'opacity-0 scale-95 pointer-events-none'}`}
+      <div key={enterAnimationKey} ref={modalRef}
+        className={`${renderInline ? 'relative w-full' : 'fixed shadow-xl'} transition-[opacity,transform] duration-[300ms] ease-[cubic-bezier(.215,.61,.355,1)] ${internalVisible ? 'opacity-100 scale-100 modal-fade-in' : 'opacity-0 scale-95 pointer-events-none'}`}
         style={{
-          top: `${modalPosition.top ?? 0}px`, left: `${modalPosition.left ?? 0}px`, width: `${modalPosition.width ?? DEFAULT_MODAL_DIMENSIONS.width}px`,
-          border: '1px solid #e5e7eb', borderRadius: '22px', display: 'flex', flexDirection: 'column', maxHeight: 'calc(100vh - 24px)', overflowY: 'auto', zIndex: 4000
+          backgroundColor: 'white',
+          top: renderInline ? undefined : (modalPosition.top ?? 0),
+          left: renderInline ? undefined : (modalPosition.left ?? 0),
+          width: renderInline ? '100%' : (modalPosition.width ?? DEFAULT_MODAL_DIMENSIONS.width),
+          border: '1px solid #e5e7eb',
+          borderRadius: '22px',
+          display: 'flex',
+          flexDirection: 'column',
+          maxHeight: renderInline ? undefined : 'calc(100vh - 24px)',
+          overflowY: 'auto',
+          zIndex: renderInline ? 1 : 4000
         }}>
         <form onSubmit={handleSubmit} onKeyDown={(e) => { if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA' && !(e.target instanceof HTMLInputElement && e.target.type === 'email')) { e.preventDefault(); handleSubmit() } }} className="flex flex-col">
           <div className="space-y-0">
-            <button type="button" onClick={closeAndAnimateOut} className="absolute top-3 right-3 p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors z-10"><FiX size={20} /></button>
+            {!renderInline && (
+              <button type="button" onClick={closeAndAnimateOut} className="absolute top-3 right-3 p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors z-10"><FiX size={20} /></button>
+            )}
             <div
               className={`px-4 pt-[14px] ${shouldShowDescriptionField && descriptionOverflowing ? 'pb-2' : 'pb-0'}`}
               style={{ paddingBottom: !shouldShowDescriptionField ? '5px' : undefined }}
@@ -145,7 +156,7 @@ const EventModal = () => {
                 )}
                 <div className="flex-1">
                   <input ref={titleInputRef} type="text" value={form.eventName} onChange={(e) => !isReadOnly && form.setEventName(e.target.value)} placeholder="New event"
-                    readOnly={isReadOnly} className={`w-full px-0 py-1 text-xl font-semibold text-gray-900 border-none focus:outline-none focus:ring-0 placeholder-gray-400 ${isReadOnly ? 'cursor-default' : ''}`} />
+                    readOnly={isReadOnly} className={`w-full px-0 py-1 text-xl font-semibold text-gray-900 border-none focus:outline-none focus:ring-0 placeholder-gray-400 bg-transparent ${isReadOnly ? 'cursor-default' : ''}`} />
                   {shouldShowDescriptionField && (
                     <textarea
                       ref={descriptionInputRef}
@@ -153,7 +164,7 @@ const EventModal = () => {
                       onChange={(e) => !isReadOnly && form.setEventSubtitle(e.target.value)}
                       placeholder={isReadOnly ? '' : 'Add description'}
                       readOnly={isReadOnly}
-                      className={`w-full px-0 text-sm text-gray-500 border-none focus:outline-none focus:ring-0 resize-none ${isReadOnly ? 'cursor-default' : ''}`}
+                      className={`w-full px-0 text-sm text-gray-500 border-none focus:outline-none focus:ring-0 resize-none bg-transparent ${isReadOnly ? 'cursor-default' : ''}`}
                       rows={1}
                       style={{
                         minHeight: descriptionOverflowing ? '32px' : '0px',
@@ -202,9 +213,9 @@ const EventModal = () => {
                   <div className="space-y-2">
                     {!form.isAllDay ? (
                       <div className="flex items-center gap-2 text-sm text-gray-900">
-                        <input type="time" value={form.timeStart} onChange={(e) => !isReadOnly && form.handleTimeStartChange(e.target.value)} readOnly={isReadOnly} className={`px-0 py-0.5 border-none focus:outline-none text-sm font-bold [&::-webkit-calendar-picker-indicator]:hidden ${isReadOnly ? 'cursor-default pointer-events-none' : ''}`} style={{ width: '95px' }} />
+                        <input type="time" value={form.timeStart} onChange={(e) => !isReadOnly && form.handleTimeStartChange(e.target.value)} readOnly={isReadOnly} className={`px-0 py-0.5 border-none focus:outline-none text-sm font-bold [&::-webkit-calendar-picker-indicator]:hidden bg-transparent ${isReadOnly ? 'cursor-default pointer-events-none' : ''}`} style={{ width: '95px' }} />
                         <span className="flex justify-center w-6 -ml-[10.7px] text-gray-400 font-semibold">→</span>
-                        <input type="time" value={form.timeEnd} onChange={(e) => !isReadOnly && form.handleTimeEndChange(e.target.value)} readOnly={isReadOnly} className={`px-0 border-none focus:outline-none text-sm font-bold [&::-webkit-calendar-picker-indicator]:hidden ${isReadOnly ? 'cursor-default pointer-events-none' : ''}`} style={{ width: '95px' }} />
+                        <input type="time" value={form.timeEnd} onChange={(e) => !isReadOnly && form.handleTimeEndChange(e.target.value)} readOnly={isReadOnly} className={`px-0 border-none focus:outline-none text-sm font-bold [&::-webkit-calendar-picker-indicator]:hidden bg-transparent ${isReadOnly ? 'cursor-default pointer-events-none' : ''}`} style={{ width: '95px' }} />
                         <label className={`relative inline-flex items-center ml-auto ${isReadOnly ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
                           <input type="checkbox" checked={form.isAllDay} onChange={(e) => !isReadOnly && form.handleAllDayToggle(e.target.checked)} disabled={isReadOnly} className="sr-only peer" />
                           <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600" />
@@ -224,10 +235,10 @@ const EventModal = () => {
                   </div>
                   <div className="flex items-center gap-2 text-sm text-gray-900">
                     <input type="date" value={form.eventDate} onChange={(e) => { if (isReadOnly) return; form.setEventDate(e.target.value); if (form.eventEndDate && new Date(form.eventEndDate) < new Date(e.target.value)) form.setEventEndDate(e.target.value) }}
-                      readOnly={isReadOnly} className={`border-none focus:outline-none text-sm [&::-webkit-calendar-picker-indicator]:hidden ${isReadOnly ? 'cursor-default pointer-events-none' : ''}`} style={{ width: '85px', paddingTop: '8px' }} />
+                      readOnly={isReadOnly} className={`border-none focus:outline-none text-sm [&::-webkit-calendar-picker-indicator]:hidden bg-transparent ${isReadOnly ? 'cursor-default pointer-events-none' : ''}`} style={{ width: '85px', paddingTop: '8px' }} />
                     <span className="flex justify-center w-6 mt-[6px] -ml-[1px] text-gray-400 font-semibold">→</span>
                     <input type="date" value={form.eventEndDate} min={form.eventDate} onChange={(e) => !isReadOnly && form.setEventEndDate(new Date(e.target.value) < new Date(form.eventDate) ? form.eventDate : e.target.value)}
-                      readOnly={isReadOnly} className={`border-none focus:outline-none text-sm [&::-webkit-calendar-picker-indicator]:hidden ${isReadOnly ? 'cursor-default pointer-events-none' : ''}`} style={{ width: '85px', paddingTop: '8px' }} />
+                      readOnly={isReadOnly} className={`border-none focus:outline-none text-sm [&::-webkit-calendar-picker-indicator]:hidden bg-transparent ${isReadOnly ? 'cursor-default pointer-events-none' : ''}`} style={{ width: '85px', paddingTop: '8px' }} />
                     <button type="button" onClick={() => !isReadOnly && recurrence.handleToggleRecurrencePicker()} ref={recurrence.recurrenceTriggerRef} disabled={isReadOnly} className={`flex items-center gap-2 text-xs ml-auto ${isReadOnly ? 'text-gray-400 cursor-not-allowed' : 'text-gray-600 hover:text-gray-800'}`}>
                       <FiRepeat size={14} /><span className={`text-sm ${recurrence.recurrenceState.enabled ? 'text-gray-900' : 'text-gray-500'}`}>{recurrence.recurrenceSummary}</span>{!isReadOnly && <FiChevronDown size={14} />}
                     </button>
@@ -242,7 +253,7 @@ const EventModal = () => {
             <ModalFooter color={form.color} setShowColorPicker={setShowColorPicker} showColorPicker={showColorPicker} colorPickerTriggerRef={colorPickerTriggerRef} notificationTriggerRef={notificationTriggerRef}
               notifications={form.notifications} setShowNotificationPicker={setShowNotificationPicker} showAsBusy={form.showAsBusy} setShowAsBusy={form.setShowAsBusy} isPrivateEvent={form.isPrivateEvent} setIsPrivateEvent={form.setIsPrivateEvent}
               selectedEvent={selectedEvent} user={user} currentRSVPStatus={currentRSVPStatus} showNotifyMembers={form.showNotifyMembers} setShowNotifyMembers={form.setShowNotifyMembers}
-              handleInviteResponse={handleInviteResponse} handleDelete={handleDelete} deleteButtonRef={deleteButtonRef} visibleParticipants={visibleParticipants} isReadOnly={isReadOnly} />
+              handleInviteResponse={handleInviteResponse} handleDelete={handleDelete} deleteButtonRef={deleteButtonRef} visibleParticipants={visibleParticipants} isReadOnly={isReadOnly} renderInline={renderInline} />
           </div>
         </form>
       </div>
@@ -250,9 +261,11 @@ const EventModal = () => {
       {showNotificationPicker && <NotificationDropdown notificationPickerRef={notificationPickerRef} notificationDropdownCoords={notificationDropdownCoords} notifications={form.notifications} handleAddNotification={handleAddNotification} handleRemoveNotification={handleRemoveNotification} />}
       {showRecurringEditPrompt && <RecurringEditPrompt recurringEditPromptRef={recurringEditPromptRef} recurringEditScope={recurringEditScope} setRecurringEditScope={setRecurringEditScope} setShowRecurringEditPrompt={setShowRecurringEditPrompt} setPendingEventData={setPendingEventData} executeRecurringEdit={executeRecurringEdit} />}
       {showRecurringDeletePrompt && <RecurringDeletePrompt deletePromptRef={deletePromptRef} deletePromptCoords={deletePromptCoords} executeDelete={executeDelete} setShowRecurringDeletePrompt={setShowRecurringDeletePrompt} />}
-    </>,
-    document.body
+    </>
   )
+
+  if (renderInline) return content
+  return createPortal(content, document.body)
 }
 
 export default EventModal

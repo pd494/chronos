@@ -198,7 +198,6 @@ class CalendarSyncService:
             
             if len(instances) > 200:
                 instances = instances[:200]
-                logger.warning(f"Limited recurring event {event['id']} to 200 instances")
             
             self.supabase.table("event_instances").delete().eq("event_id", str(event['id'])).execute()
             
@@ -209,7 +208,7 @@ class CalendarSyncService:
                     self.supabase.table("event_instances").insert(batch).execute()
                     
         except Exception as e:
-            logger.error(f"Failed to expand recurring event {event['id']}: {e}")
+            pass
     
     def sync_state(self, calendar_id: UUID, **updates) -> Dict[str, Any]:
         defaults = {
@@ -298,7 +297,7 @@ class CalendarSyncService:
                     self.save_event(event, calendar_id)
                     
             except Exception as e:
-                logger.warning(f"Error syncing month {current.strftime('%Y-%m')} for calendar {google_calendar_id}: {e}")
+                pass
             
             if current.month == 12:
                 current = datetime(current.year + 1, 1, 1, tzinfo=timezone.utc)
@@ -320,7 +319,6 @@ class CalendarSyncService:
             next_page_token = None
             
             if token:
-                logger.info(f"Delta sync for {google_calendar_id} using syncToken")
                 try:
                     events_result = self.google_service._execute_with_retry(
                         lambda svc: svc.events().list(
@@ -333,12 +331,10 @@ class CalendarSyncService:
                     )
                 except HttpError as e:
                     if e.resp.status == 410:
-                        logger.warning(f"SyncToken expired (410) for {google_calendar_id}, doing full resync")
                         self.sync_state(calendar_id, next_sync_token=None)
                         return _do_sync(None)
                     raise
             else:
-                logger.info(f"Full sync for {google_calendar_id} (no syncToken)")
                 now = datetime.now(timezone.utc)
                 time_min = (now - timedelta(days=365)).isoformat()
                 time_max = (now + timedelta(days=365)).isoformat()
@@ -398,7 +394,6 @@ class CalendarSyncService:
             events = result.get("events", [])
             new_sync_token = result.get("next_sync_token")
             
-            logger.info(f"Delta sync got {len(events)} events")
             
             for event in events:
                 if event.get('status') == 'cancelled':
@@ -438,7 +433,7 @@ class CalendarSyncService:
                         for iid in internal_ids:
                             self.supabase.table("event_instances").delete().eq("event_id", iid).execute()
                     except Exception as e:
-                        logger.warning(f"Failed pruning instances for cancelled event {external_id}: {e}")
+                        pass
                 else:
                     self.save_event(event, calendar_id)
             
@@ -450,7 +445,6 @@ class CalendarSyncService:
             return {"status": "completed", "events_synced": len(events)}
             
         except Exception as e:
-            logger.error(f"Delta sync failed for {google_calendar_id}: {e}")
             return {"status": "error", "events_synced": 0, "error": str(e)}
     
     def backfill_calendar(self, backfill_before_ts: Optional[str] = None, backfill_after_ts: Optional[str] = None):

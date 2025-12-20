@@ -1,4 +1,3 @@
-import logging
 import socket
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -12,7 +11,6 @@ from config import settings
 
 socket.setdefaulttimeout(30)
 
-logger = logging.getLogger(__name__)
 SCOPES = [
     "https://www.googleapis.com/auth/calendar",
     "https://www.googleapis.com/auth/calendar.events",
@@ -97,7 +95,7 @@ class GoogleCalendarService:
         try:
             request.uri = f"{uri}{separator}conferenceDataVersion=1"
         except Exception as exc:
-            logger.debug("Unable to append conferenceDataVersion: %s", exc)
+            pass
         return request
     
     def _execute_with_retry(self, action, description: str, retries: int = 3):
@@ -110,16 +108,13 @@ class GoogleCalendarService:
                 raise
             except (socket.timeout, TimeoutError, OSError) as exc:
                 last_error = exc
-                logger.warning("Timeout during %s (attempt %s/%s): %s", description, attempt, retries, exc)
                 self.service = None
                 if attempt < retries:
                     import time
                     time.sleep(1)
             except Exception as exc:
                 last_error = exc
-                logger.warning("Transient error during %s (attempt %s/%s): %s", description, attempt, retries, exc)
                 self.service = None
-        logger.error("Failed %s after %s attempts: %s", description, retries, last_error)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Google Calendar temporarily unavailable. Please try again.")
     
     def get_credentials(self) -> Credentials:
@@ -193,7 +188,6 @@ class GoogleCalendarService:
             try:
                 creds.refresh(GoogleRequest())
             except Exception as error:
-                logger.error("Failed to refresh Google token: %s", error)
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Google session expired. Please reconnect."
@@ -228,7 +222,6 @@ class GoogleCalendarService:
             calendar_list_response = service.calendarList().list().execute()
             return calendar_list_response.get('items', [])
         except HttpError as error:
-            logger.error(f"Error listing calendars: {error}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to fetch calendars"
@@ -254,13 +247,6 @@ class GoogleCalendarService:
                     f"fetch events for calendar {calendar_id}"
                 )
                 events = events_result.get('items', [])
-                logger.debug(
-                    "Fetched %s events from calendar %s (range %s - %s)",
-                    len(events),
-                    calendar_id,
-                    time_min,
-                    time_max
-                )
                 master_cache = {}
                 to_fetch_master_ids = set()
                 for event in events:
@@ -285,19 +271,8 @@ class GoogleCalendarService:
                         master_cache[recurring_id] = master
                     except HttpError as error:
                         if error.resp.status == 404:
-                            logger.info(
-                                "Master event %s not found (calendar %s), skipping enrichment",
-                                recurring_id,
-                                calendar_id
-                            )
                             master_cache[recurring_id] = None
                             continue
-                        logger.error(
-                            "Failed to fetch master event %s from calendar %s: %s",
-                            recurring_id,
-                            calendar_id,
-                            error
-                        )
                         raise
                     except HTTPException:
                         master_cache[recurring_id] = None
@@ -306,11 +281,6 @@ class GoogleCalendarService:
                 for event in events:
                     status_value = (event.get('status') or '').lower()
                     if status_value == 'cancelled':
-                        logger.debug(
-                            "Skipping cancelled event %s from calendar %s",
-                            event.get('id'),
-                            calendar_id
-                        )
                         continue
                     event['calendar_id'] = calendar_id
                     recurring_id = event.get('recurringEventId')
@@ -335,7 +305,6 @@ class GoogleCalendarService:
 
             return all_events
         except HttpError as error:
-            logger.error(f"Error fetching events: {error}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to fetch events"
@@ -343,7 +312,6 @@ class GoogleCalendarService:
         except HTTPException:
             raise
         except Exception as exc:
-            logger.error(f"Unexpected error fetching events: {exc}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to fetch events"
@@ -364,7 +332,6 @@ class GoogleCalendarService:
             return created_event
         except HttpError as error:
             error_details = error.error_details if hasattr(error, 'error_details') else str(error)
-            logger.error(f"Error creating event: {error}, Details: {error_details}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to create event: {error_details}"
@@ -428,7 +395,6 @@ class GoogleCalendarService:
             updated_event = service.events().update(**params).execute()
             return updated_event
         except HttpError as error:
-            logger.error(f"Error updating event: {error}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to update event"
@@ -453,7 +419,6 @@ class GoogleCalendarService:
             ).execute()
             return patched_event
         except HttpError as error:
-            logger.error(f"Error responding to event invite: {error}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to update event response"
@@ -473,9 +438,7 @@ class GoogleCalendarService:
             except (TypeError, ValueError):
                 status_code = None
             if status_code in (404, 410):
-                logger.info("Event %s already removed from calendar %s", event_id, calendar_id)
                 return
-            logger.error(f"Error deleting event: {error}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to delete event"

@@ -109,7 +109,7 @@ export const useBootstrap = ({
             viewerIsAttendee: Boolean(ev.viewerIsAttendee),
             viewerResponseStatus: ev.viewerResponseStatus || null
           }
-          if (todoId) linkTodoEvent(todoId, ev.id)
+          if (todoId) linkTodoEvent(todoId, ev.id, { persist: false })
           toAdd.push(e)
           if (isPendingSync) pendingSyncEventIdsRef.current.set(ev.id, Date.now())
         }
@@ -278,7 +278,7 @@ export const useBootstrap = ({
           eventIdsRef.current.add(e.id)
           indexEventByDays(e)
           const todoId = e.todoId || e.todo_id
-          if (todoId) linkTodoEvent(todoId, e.id)
+          if (todoId) linkTodoEvent(todoId, e.id, { persist: false })
         }
         hasLoadedInitialRef.current = true
         setInitialLoading(false)
@@ -300,15 +300,10 @@ export const useBootstrap = ({
       lastSyncTimestampRef.current = nowTs
       if (typeof window !== 'undefined') {
         const syncKey = 'chronos:last-sync-ts'
-        try { window.sessionStorage.setItem(syncKey, String(nowTs)) } catch (_) { }
+        window.sessionStorage.setItem(syncKey, String(nowTs))
       }
-      calendarApi.syncCalendarForeground()
-        .then(() => fetchGoogleEventsRef.current(true, false, true).catch(() => { }))
-        .catch(() => {
-          calendarApi.syncCalendar()
-            .then(() => fetchGoogleEventsRef.current(true, false, true).catch(() => { }))
-            .catch(() => { })
-        })
+      calendarApi.syncCalendar().catch(() => { })
+      fetchGoogleEventsRef.current(true, false, true).catch(() => { })
     }
     bootstrap()
   }, [authLoading, user?.id, user?.has_google_credentials, hydrateFromSnapshot, migrateLocalStorageToDB, checkAndRunBackfill, hydrateEventUserState, hydrateEventTodoLinks, indexEventByDays])

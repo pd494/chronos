@@ -171,9 +171,10 @@ export const useEventForm = ({ selectedEvent, user, isHolidayEvent, setRecurrenc
     let initialSubtitle = ''
 
     if (selectedEvent) {
-      const start = new Date(selectedEvent.start)
-      const end = new Date(selectedEvent.end)
-      initialEventName = selectedEvent.title || ''
+      const start = new Date(selectedEvent.start || selectedEvent.start_ts || selectedEvent.startTime || selectedEvent.start_time || Date.now())
+      const end = new Date(selectedEvent.end || selectedEvent.end_ts || selectedEvent.endTime || selectedEvent.end_time || Date.now())
+
+      initialEventName = selectedEvent.title || selectedEvent.summary || ''
       initialEventDate = format(start, 'yyyy-MM-dd')
       if (selectedEvent.isAllDay) {
         const inclusiveEnd = new Date(end)
@@ -186,14 +187,15 @@ export const useEventForm = ({ selectedEvent, user, isHolidayEvent, setRecurrenc
       initialTimeEnd = format(end, 'HH:mm')
       timedFallbackStart = initialTimeStart
       timedFallbackEnd = initialTimeEnd
-      initialColor = selectedEvent.color || 'blue'
-      initialIsAllDay = selectedEvent.isAllDay || false
+      initialColor = selectedEvent.color || selectedEvent.colorId || selectedEvent.backgroundColor || selectedEvent.calendarColor || 'blue'
+      initialIsAllDay = selectedEvent.isAllDay || selectedEvent.is_all_day || false
       initialLocation = selectedEvent.location || ''
       initialSubtitle = selectedEvent.description || ''
     } else if (window.prefilledEventDates) {
       const { startDate: dragStartDate, endDate: dragEndDate, title: dragTitle, color: dragColor, isAllDay: dragIsAllDay, fromDayClick } = window.prefilledEventDates
-      const startDateObj = dragStartDate instanceof Date ? dragStartDate : new Date(dragStartDate)
-      const endDateObj = dragEndDate instanceof Date ? dragEndDate : new Date(dragEndDate)
+      const startDateObj = new Date(dragStartDate || Date.now())
+      const endDateObj = new Date(dragEndDate || Date.now())
+
       initialEventName = dragTitle || ''
       initialEventDate = format(startDateObj, 'yyyy-MM-dd')
       initialColor = dragColor || 'blue'
@@ -237,8 +239,9 @@ export const useEventForm = ({ selectedEvent, user, isHolidayEvent, setRecurrenc
     }
 
     const recurrenceAnchor = (() => {
-      if (selectedEvent?.start) {
-        const existing = new Date(selectedEvent.start)
+      const anchorVal = selectedEvent?.start || selectedEvent?.start_ts || selectedEvent?.startTime || selectedEvent?.start_time
+      if (anchorVal) {
+        const existing = new Date(anchorVal)
         if (!Number.isNaN(existing.getTime())) return existing
       }
       return buildDateWithTime(initialEventDate, initialTimeStart) || new Date()
@@ -276,6 +279,10 @@ export const useEventForm = ({ selectedEvent, user, isHolidayEvent, setRecurrenc
     setNotifications(initialNotifications)
 
     let initialParticipants = selectedEvent?.participants || []
+    if (initialParticipants.length === 0 && selectedEvent?.attendees) {
+      initialParticipants = selectedEvent.attendees.map(a => typeof a === 'string' ? a : a.email).filter(Boolean)
+    }
+
     if (isHolidayEvent) {
       initialParticipants = initialParticipants.filter(p => p !== selectedEvent?.organizerEmail)
     } else if (selectedEvent?.organizerEmail === user?.email) {

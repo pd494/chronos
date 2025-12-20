@@ -7,13 +7,15 @@ from endpoints.calendar import router as calendar_router
 from endpoints.settings import router as settings_router
 from endpoints.chat import router as chat_router
 from config import settings
+import logging
+
+# Configure logging - reduce noise from httpx
+logging.basicConfig(level=logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 app = FastAPI(title="Chronos API")
-
-frontend_origin = settings.FRONTEND_URL.rstrip("/")
 allowed_origins = sorted(
     {
-        frontend_origin,
         "http://localhost:5174",
         "http://127.0.0.1:5174",
     }

@@ -29,6 +29,7 @@ export const useMonthScroll = ({
   const lastScrollTsRef = useRef(0)
   const lastHeaderMonthRef = useRef(null)
   const hasUserScrolledRef = useRef(false)
+  const userScrollIntentRef = useRef(false)
 
   useEffect(() => {
     const thisWeek = getStartOfWeekLocal(referenceDate, weekStartsOn)
@@ -129,7 +130,10 @@ export const useMonthScroll = ({
       lastScrollTopRef.current = scrollTop
       lastScrollTsRef.current = now
       const isUserScroll = Boolean(evt?.isTrusted)
-      if (isUserScroll) hasUserScrolledRef.current = true
+      if (isUserScroll) {
+        hasUserScrolledRef.current = true
+        if (Math.abs(deltaY) > 8) userScrollIntentRef.current = true
+      }
 
       if (isUserScroll && !initialLoading && weeks[startWeek] && weeks[endWeek - 1]) {
         const rangeStart = weeks[startWeek].days[0]
@@ -182,8 +186,9 @@ export const useMonthScroll = ({
   useEffect(() => {
     if (!displayMonthDate || initialLoading) return
     if (!hasUserScrolledRef.current) return
-    const yearPrefetchStart = startOfWeek(startOfMonth(subMonths(displayMonthDate, 12)), { weekStartsOn })
-    const yearPrefetchEnd = endOfWeek(endOfMonth(addMonths(displayMonthDate, 12)), { weekStartsOn })
+    if (!userScrollIntentRef.current) return
+    const yearPrefetchStart = startOfWeek(startOfMonth(subMonths(displayMonthDate, 3)), { weekStartsOn })
+    const yearPrefetchEnd = endOfWeek(endOfMonth(addMonths(displayMonthDate, 3)), { weekStartsOn })
     const key = `year_${yearPrefetchStart.getTime()}_${yearPrefetchEnd.getTime()}`
     if (!requestedRangesRef.current.has(key)) {
       requestedRangesRef.current.add(key)

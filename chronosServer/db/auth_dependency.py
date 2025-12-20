@@ -46,7 +46,6 @@ async def get_current_user(
         supabase_user = supabase.auth.get_user(access_token).user
         return _build_user(supabase_user)
     except Exception as error:
-        logger.error("Token validation failed: %s", error)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",

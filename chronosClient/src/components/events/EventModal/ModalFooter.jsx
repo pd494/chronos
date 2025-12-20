@@ -12,7 +12,8 @@ const ModalFooter = ({
   handleInviteResponse,
   handleDelete, deleteButtonRef,
   visibleParticipants,
-  isReadOnly = false
+  isReadOnly = false,
+  renderInline = false
 }) => {
   const calendarAccountLabel = (() => {
     const organizer = selectedEvent?.organizerEmail || selectedEvent?.organizer?.email || selectedEvent?.organizer
@@ -37,7 +38,7 @@ const ModalFooter = ({
   })()
 
   return (
-    <div className="z-20 bg-white border-t border-gray-100 px-4 py-3 flex flex-col gap-2">
+    <div className={`z-20 border-t border-gray-100 px-4 py-3 flex flex-col gap-2 ${renderInline ? 'bg-transparent' : 'bg-white'}`}>
       <div className="flex items-center gap-3">
         <div className="relative" ref={colorPickerTriggerRef}>
           <button

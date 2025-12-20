@@ -64,13 +64,11 @@ async def _fetch_ics_events(url: str, start_dt: datetime, end_dt: datetime, cale
             resp.raise_for_status()
             content = resp.content
     except Exception as e:
-        logger.warning("Failed to fetch ICS subscription %s: %s", url, e)
         return []
 
     try:
         cal = IcsCalendar.from_ical(content)
     except Exception as e:
-        logger.warning("Failed to parse ICS subscription %s: %s", url, e)
         return []
 
     out = []
@@ -209,7 +207,6 @@ async def save_credentials(request: Request, user: User = Depends(get_current_us
             content={"message": "Credentials saved successfully", "syncing": True}
         )
     except Exception as e:
-        logger.error("Error saving credentials: %s", e)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to save credentials")
 
 @router.get("/calendars")
@@ -267,7 +264,7 @@ async def get_calendars(user: User = Depends(get_current_user), supabase: Client
                 "source": "ics",
             })
     except Exception as e:
-        logger.warning("Failed to load calendar URL subscriptions: %s", e)
+        pass
     return {"calendars": calendars}
 
 @router.patch("/calendars/{calendar_id}")
@@ -335,7 +332,6 @@ async def list_calendar_subscriptions(
         )
         return {"subscriptions": result.data or []}
     except Exception as e:
-        logger.error("Failed to list calendar subscriptions: %s", e)
         raise HTTPException(status_code=500, detail="Failed to list subscriptions")
 
 
@@ -401,7 +397,6 @@ async def create_calendar_subscription(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Failed to create calendar subscription: %s", e)
         raise HTTPException(status_code=500, detail="Failed to create subscription")
 
 
@@ -429,7 +424,6 @@ async def delete_calendar_subscription(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Failed to delete calendar subscription %s: %s", subscription_id, e)
         raise HTTPException(status_code=500, detail="Failed to delete subscription")
 
 @router.get("/events")
@@ -454,7 +448,7 @@ async def get_events(
         subs_result = supabase.table("calendar_url_subscriptions").select("id,url,name,color,enabled").eq("user_id", str(user.id)).eq("enabled", True).execute()
         subs = subs_result.data or []
     except Exception as e:
-        logger.warning("Failed to load ICS subscriptions for events: %s", e)
+        pass
     
     if not calendars and not subs:
         return {"events": [], "coverage": {"has_before": False, "has_after": False}, "calendars": [], "last_synced_at": {}}
@@ -661,7 +655,7 @@ async def create_event(
             try:
                 sync_service.sync_date_range(calendar["id"], google_calendar_id, sync_start, sync_end)
             except Exception as e:
-                logger.warning(f"Recurring event sync refresh failed for {google_calendar_id}: {e}")
+                pass
         threading.Thread(target=_background_sync, daemon=True).start()
 
     google_event["calendar_id"] = calendar_id
@@ -755,7 +749,7 @@ async def update_event(
         try:
             sync_service.save_event(updated_event, target_calendar["id"])
         except Exception as e:
-            logger.warning(f"Failed to persist updated event {event_id}: {e}")
+            pass
     
     return {"event": updated_event}
 
@@ -845,7 +839,7 @@ async def patch_event(
         try:
             sync_service.save_event(patched_event, target_calendar["id"])
         except Exception as e:
-            logger.warning(f"Failed to persist patched event {event_id}: {e}")
+            pass
 
     return {"event": patched_event}
 
@@ -857,12 +851,10 @@ async def delete_event(
     user: User = Depends(get_current_user),
     supabase: Client = Depends(get_supabase_client)
 ):
-    logger.info(f"Deleting event {event_id} for user {user.id}")
     event_result = supabase.table("events").select("id, calendar_id, organizer_email").eq("user_id", str(user.id)).eq("external_id", event_id).execute()
     internal_event_id = event_result.data[0]["id"] if event_result.data else None
     internal_calendar_id = event_result.data[0]["calendar_id"] if event_result.data else None
     event_organizer_email = event_result.data[0].get("organizer_email") if event_result.data else None
-    logger.info(f"Found internal event: {internal_event_id}, calendar: {internal_calendar_id}, organizer: {event_organizer_email}")
 
     google_calendar_id = calendar_id
     external_account_id = None
@@ -890,7 +882,7 @@ async def delete_event(
     try:
         service.delete_event(event_id, google_calendar_id)
     except Exception as e:
-        logger.warning(f"Google delete failed for {event_id}: {e}")
+        pass
 
     all_event_ids = []
     if internal_event_id:
@@ -907,7 +899,6 @@ async def delete_event(
         if row.get("id"):
             all_event_ids.append(row["id"])
     
-    logger.info(f"Found {len(all_event_ids)} events to delete instances for: {all_event_ids}")
     
     for eid in all_event_ids:
         supabase.table("event_instances").delete().eq("event_id", eid).execute()
@@ -938,7 +929,7 @@ async def delete_event(
                 "date": None
             }).eq("user_id", str(user.id)).in_("id", todo_ids_list).execute()
     except Exception as cleanup_error:
-        logger.warning(f"Failed to clean todo links for event {event_id}: {cleanup_error}")
+        pass
     
     return {"message": "Event deleted successfully"}
 
@@ -1018,7 +1009,6 @@ async def sync_calendar(
         accounts = accounts_result.data or []
 
         if not accounts:
-            logger.warning(f"No connected accounts for user {user.id}")
             return
 
         for account in accounts:
@@ -1031,7 +1021,6 @@ async def sync_calendar(
                 calendars = sync_service.google_service.list_calendars()
 
                 if not calendars:
-                    logger.warning(f"No calendars found for account {external_account_id}")
                     continue
 
                 for calendar in calendars:
@@ -1042,13 +1031,11 @@ async def sync_calendar(
                         try:
                             calendar_id = sync_service.get_calendar_id(calendar)
                             break
-                        except Exception as e:
+                        except HttpError as e:
                             if attempt < 2 and "disconnected" in str(e).lower():
-                                logger.warning(f"Retry {attempt + 1} for get_calendar_id {google_calendar_id}")
                                 time.sleep(1)
                                 continue
-                            logger.error(f"Failed to get calendar_id for {google_calendar_id}: {e}")
-                            break
+                            raise
 
                     if not calendar_id:
                         continue
@@ -1056,18 +1043,16 @@ async def sync_calendar(
                     if initial_backfill or force_full:
                         try:
                             sync_service.backfill_calendar()
-                            logger.info(f"Full backfill completed for {google_calendar_id}")
                         except Exception as e:
-                            logger.error(f"Full backfill failed for {google_calendar_id}: {e}")
+                            pass
                         continue
 
                     try:
                         result = sync_service.delta_sync(calendar_id, google_calendar_id)
-                        logger.info(f"Delta sync completed for {google_calendar_id}: {result.get('events_synced', 0)} events")
                     except Exception as e:
-                        logger.error(f"Delta sync failed for {google_calendar_id}: {e}")
+                        pass
             except Exception as e:
-                logger.error(f"Sync failed for account {external_account_id}: {e}")
+                pass
     
     if foreground:
         _run_sync()
@@ -1125,7 +1110,7 @@ async def add_account(
             if primary_email:
                 supabase.table("calendar_accounts").update({"account_email": primary_email}).eq("user_id", str(user.id)).eq("provider", "google").eq("external_account_id", external_account_id).execute()
         except Exception as e:
-            logger.warning("Failed to infer primary account email for %s: %s", external_account_id, e)
+            pass
     
     try:
         svc = GoogleCalendarService(str(user.id), supabase, external_account_id)
@@ -1135,9 +1120,9 @@ async def add_account(
             try:
                 sync_service.get_calendar_id(cal)
             except Exception as e:
-                logger.debug("Skipping calendar during initial sync for %s: %s", external_account_id, e)
+                pass
     except Exception as e:
-        logger.warning("Failed to refresh calendars for %s: %s", external_account_id, e)
+        pass
 
     def _background_backfill():
         from db.supabase_client import get_supabase_client
@@ -1156,14 +1141,12 @@ async def add_account(
                 before_ts = min(before_list) if before_list else None
                 after_ts = max(after_list) if after_list else None
             except Exception as e:
-                logger.debug("Failed reading existing backfill range for %s: %s", external_account_id, e)
                 before_ts = None
                 after_ts = None
 
             sync_service.backfill_calendar(before_ts, after_ts)
-            logger.info(f"Initial backfill completed for account {external_account_id}")
         except Exception as e:
-            logger.error(f"Initial backfill failed for account {external_account_id}: {e}")
+            raise HTTPException(status_code=500, detail="Initial backfill failed")
     
     threading.Thread(target=_background_backfill, daemon=True).start()
     
@@ -1390,8 +1373,7 @@ async def update_todo_event_link(
         return {"link": result.data[0] if result.data else None}
     except Exception as e:
         error_msg = str(e)
-        if "invalid input syntax for type uuid" in error_msg:
-            logger.warning(f"Skipping todo-event link for non-UUID todo_id: {todo_id}")
+        if "invalid input syntax for type uuid" in error_msg and not _is_uuid(todo_id):
             return {"link": None, "skipped": True, "reason": "non-uuid todo_id"}
         raise
 
@@ -1402,7 +1384,6 @@ async def delete_todo_event_link(
     supabase: Client = Depends(get_supabase_client)
 ):
     if not _is_uuid(todo_id):
-        logger.warning(f"Skipping delete todo-event link for non-UUID todo_id: {todo_id}")
         return {"message": "Link deleted successfully", "skipped": True, "reason": "non-uuid todo_id"}
 
     try:
@@ -1410,7 +1391,6 @@ async def delete_todo_event_link(
     except Exception as e:
         error_msg = str(e)
         if "invalid input syntax for type uuid" in error_msg:
-            logger.warning(f"Failed to delete todo-event link for non-UUID todo_id {todo_id}: {e}")
             return {"message": "Link deleted successfully", "skipped": True, "reason": "invalid-uuid todo_id"}
         raise
     return {"message": "Link deleted successfully"}

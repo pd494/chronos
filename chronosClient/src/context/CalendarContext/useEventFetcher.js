@@ -369,15 +369,17 @@ export const useEventFetcher = ({
     }
 
     const isInitialLoad = !hasLoadedInitialRef.current
-    const wideStart = startOfMonth(addMonths(currentDate, -24))
-    wideStart.setHours(0, 0, 0, 0)
-    const wideEnd = endOfMonth(addMonths(currentDate, 24))
-    wideEnd.setHours(23, 59, 59, 999)
+    const initialPastMonths = 2
+    const initialFutureMonths = 2
+    const initialStart = startOfMonth(addMonths(currentDate, -initialPastMonths))
+    initialStart.setHours(0, 0, 0, 0)
+    const initialEnd = endOfMonth(addMonths(currentDate, initialFutureMonths))
+    initialEnd.setHours(23, 59, 59, 999)
 
     try {
       if (isInitialLoad) {
-        await fetchEventsForRange(wideStart, wideEnd, background, true)
-        loadedRangeRef.current = { start: wideStart, end: wideEnd }
+        await fetchEventsForRange(initialStart, initialEnd, background, true)
+        loadedRangeRef.current = { start: initialStart, end: initialEnd }
         hasLoadedInitialRef.current = true
         setInitialLoading(false)
       } else if (reset) {

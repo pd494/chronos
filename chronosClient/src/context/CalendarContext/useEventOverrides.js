@@ -104,6 +104,12 @@ export const useEventOverrides = ({ user }) => {
 
   const applyEventTimeOverrides = useCallback((eventObject) => {
     if (!eventObject || !eventObject.id) return eventObject
+    if (eventObject.viewerIsOrganizer === false) {
+      if (eventOverridesRef.current.has(eventObject.id)) {
+        removeEventOverride(eventObject.id)
+      }
+      return eventObject
+    }
     const override = eventOverridesRef.current.get(eventObject.id)
     if (!override) return eventObject
     const overrideStart = coerceDate(override.start)

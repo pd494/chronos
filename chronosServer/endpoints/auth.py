@@ -5,9 +5,7 @@ from supabase import Client
 from config import settings
 from models.user import User
 from datetime import datetime
-import logging
 
-logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 @router.post("/session")
@@ -25,7 +23,6 @@ async def create_session(request: Request, response: Response):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Session creation failed: {str(e)}")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Authentication failed")
 
 @router.post("/refresh")
@@ -50,7 +47,6 @@ async def refresh_token(request: Request, response: Response, supabase: Client =
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
         
         _set_auth_cookies(response, session.access_token, session.refresh_token)
-        logger.info("Token refreshed successfully")
         
         return {
             "message": "Token refreshed",
@@ -58,7 +54,6 @@ async def refresh_token(request: Request, response: Response, supabase: Client =
             "refresh_token": session.refresh_token,
         }
     except Exception as e:
-        logger.error(f"Token refresh failed: {str(e)}")
         _clear_auth_cookies(response)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token refresh failed")
 
@@ -78,7 +73,7 @@ async def get_me(
         )
         has_google_credentials = bool(result.data)
     except Exception as error:
-        logger.warning("Failed to check Google credentials: %s", error)
+        has_google_credentials = False
     return user.model_copy(update={"has_google_credentials": has_google_credentials})
 
 @router.post("/logout")
@@ -98,7 +93,7 @@ async def logout(response: Response, request: Request, supabase: Client = Depend
                 "last_logout_at": datetime.utcnow().isoformat()
             }).eq("id", str(user.user.id)).execute()
     except Exception as e:
-        logger.error(f"Logout error: {str(e)}")
+        pass
     
     _clear_auth_cookies(response)
     return {"message": "Logged out successfully"}

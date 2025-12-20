@@ -10,8 +10,8 @@ export const IDB_VERSION = 1;
 export const IDB_STORE = 'events-cache';
 
 // How far around the visible range we proactively load from the DB.
-export const INITIAL_PAST_MONTHS = 24;
-export const INITIAL_FUTURE_MONTHS = 24;
+export const INITIAL_PAST_MONTHS = 6;
+export const INITIAL_FUTURE_MONTHS = 6;
 export const EXPANSION_MONTHS = 2;
 export const RECENT_EVENT_SYNC_TTL_MS = 60 * 1000;
 export const MAX_FETCH_SEGMENT_MONTHS = 18;

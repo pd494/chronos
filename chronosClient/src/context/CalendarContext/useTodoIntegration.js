@@ -81,14 +81,16 @@ export const useTodoIntegration = ({
     })
   }, [setCheckedOffEventIds])
 
-  const linkTodoEvent = useCallback((todoId, eventId) => {
+  const linkTodoEvent = useCallback((todoId, eventId, options = {}) => {
     if (!todoId || !eventId) return
     const todoKey = String(todoId)
     const eventKey = String(eventId)
     if (todoToEventRef.current.get(todoKey) === eventKey) return
     todoToEventRef.current.set(todoKey, eventKey)
     eventToTodoRef.current.set(eventKey, todoKey)
-    persistEventTodoLinks(todoId, eventId)
+    if (options.persist !== false) {
+      persistEventTodoLinks(todoId, eventId)
+    }
   }, [eventToTodoRef, persistEventTodoLinks, todoToEventRef])
 
   const unlinkEvent = useCallback((eventId) => {

@@ -8,13 +8,15 @@ import { useModalPosition } from './useModalPosition'
 import { useRecurrence } from './useRecurrence'
 import { useEventForm } from './useEventForm'
 
-export const useEventModal = () => {
+export const useEventModal = (initialEvent = null) => {
   const [enterAnimationKey, setEnterAnimationKey] = useState(0)
+  const calendarProps = useCalendar()
   const {
-    selectedEvent, closeEventModal: contextCloseEventModal, createEvent, updateEvent,
+    closeEventModal: contextCloseEventModal, createEvent, updateEvent,
     respondToInvite, deleteEvent, view, currentDate, fetchEventsForRange, refreshEvents,
     toggleEventChecked, isEventChecked
-  } = useCalendar()
+  } = calendarProps
+  const selectedEvent = initialEvent || calendarProps.selectedEvent
   const { user } = useAuth()
 
   const [internalVisible, setInternalVisible] = useState(false)

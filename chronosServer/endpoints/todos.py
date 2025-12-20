@@ -175,8 +175,8 @@ async def edit_todo(
             "data": result.data[0],
         },
     )
-    
-    
+
+
 @router.patch("/{todo_id}/complete")
 async def complete(
     todo_id: str,
@@ -217,7 +217,7 @@ async def delete_todo(
     try:
         supabase.table("todo_event_links").delete().eq("user_id", str(user.id)).eq("todo_id", todo_id).execute()
     except Exception as e:
-        logger.debug("Failed deleting todo_event_links for todo %s: %s", todo_id, e)
+        pass
     
     check_result = (
         supabase.table("todos")
@@ -534,8 +534,7 @@ async def convert_todo_to_event(
             }
         
         created_event = service.create_event("primary", event_data)
-        
-     
+
         formatted_event = {
             "id": created_event.get("id"),
             "summary": created_event.get("summary"),
@@ -555,9 +554,7 @@ async def convert_todo_to_event(
                 "scheduled_is_all_day": is_all_day
             }).eq("id", todo_id).eq("user_id", str(user.id)).execute()
         except Exception as update_error:
-            logger.warning(
-                "Failed to persist scheduled date for todo %s: %s", todo_id, update_error
-            )
+            pass
         
         try:
             created_event_id = created_event.get("id")
@@ -576,9 +573,7 @@ async def convert_todo_to_event(
                 on_conflict="user_id,todo_id"
             ).execute()
         except Exception as link_error:
-            logger.warning(
-                "Failed to create todo-event link for todo %s: %s", todo_id, link_error
-            )
+            pass
         
         return JSONResponse(
             status_code=status.HTTP_200_OK,
@@ -591,7 +586,6 @@ async def convert_todo_to_event(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error converting todo to event: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to convert todo to event: {str(e)}"
